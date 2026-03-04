@@ -10,77 +10,159 @@ const VERSION = "0.1.0";
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 const SPINNER_MESSAGES = [
-  "Locking in...",
-  "Cooking...",
-  "Maxxing...",
-  "In the zone...",
-  "Yapping...",
-  "Frame mogging...",
-  "Jester gooning...",
-  "Gooning...",
-  "Doing back flips...",
-  "Jester maxxing...",
-  "Getting baked...",
-  "Blasting tren...",
-  "Pumping...",
-  "Wondering if I should actually do this...",
-  "Hacking the main frame...",
-  "Codemaxxing...",
-  "Vibe coding...",
-  "Running a marathon...",
+  "Locking in...", "Cooking...", "Maxxing...", "In the zone...",
+  "Yapping...", "Frame mogging...", "Jester gooning...", "Gooning...",
+  "Doing back flips...", "Jester maxxing...", "Getting baked...",
+  "Blasting tren...", "Pumping...", "Wondering if I should actually do this...",
+  "Hacking the main frame...", "Codemaxxing...", "Vibe coding...", "Running a marathon...",
 ];
 
+// ── Neon colors ──
+const neonPink = chalk.hex("#FF00FF");
+const neonCyan = chalk.hex("#00FFFF");
+const dimCyan = chalk.hex("#008B8B");
+const glow = chalk.bold.hex("#FF44FF");
+
+// ── TUI: alternate screen + scroll region ──
+const rows = () => process.stdout.rows || 24;
+const cols = () => process.stdout.columns || 80;
+
+// Input box height (top border + input line + bottom border)
+const INPUT_BOX_HEIGHT = 3;
+
+function enterAltScreen() {
+  process.stdout.write("\x1B[?1049h"); // enter alternate screen
+  process.stdout.write("\x1B[2J");     // clear
+  process.stdout.write("\x1B[H");      // cursor home
+}
+
+function exitAltScreen() {
+  process.stdout.write("\x1B[?1049l"); // restore original screen
+}
+
+function setScrollRegion(top: number, bottom: number) {
+  process.stdout.write(`\x1B[${top};${bottom}r`);
+}
+
+function moveTo(row: number, col: number) {
+  process.stdout.write(`\x1B[${row};${col}H`);
+}
+
+function clearLine() {
+  process.stdout.write("\x1B[2K");
+}
+
+function drawInputBox(rl?: any) {
+  const c = cols();
+  const r = rows();
+  const boxTop = r - INPUT_BOX_HEIGHT + 1;
+
+  // Draw the 3 lines of the input box at the bottom
+  moveTo(boxTop, 1);
+  clearLine();
+  process.stdout.write(neonCyan("┌" + "─".repeat(c - 2) + "┐"));
+
+  moveTo(boxTop + 1, 1);
+  clearLine();
+  process.stdout.write(neonCyan("│") + " ".repeat(c - 2) + neonCyan("│"));
+
+  moveTo(boxTop + 2, 1);
+  clearLine();
+  process.stdout.write(neonCyan("└" + "─".repeat(c - 2) + "┘"));
+
+  // Position cursor inside the box
+  moveTo(boxTop + 1, 3);
+}
+
+// Track which content row we're on (in the scroll region)
+let contentRow = 1;
+
+function writeContent(text: string) {
+  const r = rows();
+  const scrollBottom = r - INPUT_BOX_HEIGHT;
+
+  // Set scroll region to content area
+  setScrollRegion(1, scrollBottom);
+
+  const lines = text.split("\n");
+  for (const line of lines) {
+    // If we've gone past the scroll region, it'll auto-scroll
+    if (contentRow > scrollBottom) {
+      contentRow = scrollBottom;
+    }
+    moveTo(contentRow, 1);
+    clearLine();
+    process.stdout.write(line);
+    contentRow++;
+  }
+
+  // Reset scroll region to full screen so input box stays put
+  setScrollRegion(1, r);
+}
+
+function writeContentLine(text: string) {
+  writeContent(text + "\n");
+}
+
+// ── Spinner ──
 function startSpinner(msg: string): { stop: () => string } {
   let i = 0;
   const startTime = Date.now();
+  const r = rows();
+  const scrollBottom = r - INPUT_BOX_HEIGHT;
+
   const interval = setInterval(() => {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
     const frame = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
-    process.stdout.write(`\r  ${chalk.hex("#FF00FF")(frame)} ${chalk.bold.hex("#FF44FF")(msg)} ${chalk.hex("#008B8B")(`[${elapsed}s]`)}`);
+    setScrollRegion(1, scrollBottom);
+    moveTo(contentRow > scrollBottom ? scrollBottom : contentRow, 1);
+    clearLine();
+    process.stdout.write(`  ${chalk.hex("#FF00FF")(frame)} ${chalk.bold.hex("#FF44FF")(msg)} ${dimCyan(`[${elapsed}s]`)}`);
+    setScrollRegion(1, r);
+    drawInputBox();
     i++;
   }, 80);
+
   return {
     stop: () => {
       clearInterval(interval);
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      process.stdout.write("\r" + " ".repeat(100) + "\r");
+      // Clear spinner line
+      const sr = rows();
+      const sb = sr - INPUT_BOX_HEIGHT;
+      setScrollRegion(1, sb);
+      moveTo(contentRow > sb ? sb : contentRow, 1);
+      clearLine();
+      setScrollRegion(1, sr);
       return elapsed;
     },
   };
 }
 
+// ── Think tag stripper ──
 function stripThinking(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
 }
 
+// ── Response formatter ──
 function formatResponse(text: string): string {
   const lines = text.split("\n");
   const formatted: string[] = [];
   let inCodeBlock = false;
-  const bullet = chalk.hex("#00FFFF");
-  const code = chalk.hex("#BF00FF");
-  const heading = chalk.bold.hex("#FF00FF");
 
-  // Add bullet point to first line
-  formatted.push(bullet("● ") + lines[0]);
+  formatted.push(neonCyan("● ") + lines[0]);
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (line.startsWith("```")) {
       inCodeBlock = !inCodeBlock;
-      formatted.push(code(`  ${line}`));
+      formatted.push(dimCyan(`  ${line}`));
     } else if (inCodeBlock) {
-      formatted.push(chalk.hex("#00FFFF")(`  ${line}`));
-    } else if (line.startsWith("# ")) {
-      formatted.push(heading(`  ${line}`));
-    } else if (line.startsWith("## ")) {
-      formatted.push(heading(`  ${line}`));
+      formatted.push(neonCyan(`  ${line}`));
+    } else if (line.startsWith("# ") || line.startsWith("## ")) {
+      formatted.push(neonPink.bold(`  ${line}`));
     } else if (line.startsWith("- ")) {
       formatted.push(`  ${line}`);
-    } else if (line.startsWith("✅")) {
-      formatted.push(chalk.hex("#00FFFF")(`  ${line}`));
-    } else if (line.startsWith("❌")) {
-      formatted.push(chalk.red(`  ${line}`));
     } else {
       formatted.push(`  ${line}`);
     }
@@ -88,65 +170,70 @@ function formatResponse(text: string): string {
   return formatted.join("\n");
 }
 
+// ── Main ──
 async function main() {
-  // Clear screen
-  console.clear();
+  enterAltScreen();
 
-  // Neon color palette
-  const neonPink = chalk.hex("#FF00FF");
-  const neonCyan = chalk.hex("#00FFFF");
-  const dimCyan = chalk.hex("#008B8B");
-  const glow = chalk.bold.hex("#FF44FF");
+  // Cleanup on exit
+  process.on("SIGINT", () => {
+    exitAltScreen();
+    process.exit(0);
+  });
+  process.on("exit", () => {
+    exitAltScreen();
+  });
 
-  // Banner — pink to cyan gradient
-  console.log(`
-${glow("  ██████╗ ██████╗ ██████╗ ███████╗███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ")}
-${neonPink("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
-${chalk.hex("#DD00DD")("  ██║     ██║   ██║██║  ██║█████╗  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
-${chalk.hex("#AA00FF")("  ██║     ██║   ██║██║  ██║██╔══╝  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║")}
-${chalk.hex("#5500FF")("  ╚██████╗╚██████╔╝██████╔╝███████╗██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
-${neonCyan("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
-${dimCyan(`                                       v${VERSION}`)}  ${neonCyan("💪")}  ${chalk.dim("your code. your model. no excuses.")}
-`);
+  const c = cols();
 
-  // Load config
+  // Banner
+  const bannerLines = [
+    glow("  ██████╗ ██████╗ ██████╗ ███████╗███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ "),
+    neonPink("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ "),
+    chalk.hex("#DD00DD")("  ██║     ██║   ██║██║  ██║█████╗  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗"),
+    chalk.hex("#AA00FF")("  ██║     ██║   ██║██║  ██║██╔══╝  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║"),
+    chalk.hex("#5500FF")("  ╚██████╗╚██████╔╝██████╔╝███████╗██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝"),
+    neonCyan("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ "),
+    "",
+    `${dimCyan(`                                       v${VERSION}`)}  ${neonCyan("💪")}  ${chalk.dim("your code. your model. no excuses.")}`,
+    "",
+  ];
+  writeContent(bannerLines.join("\n"));
+
+  // Load config + detect provider
   const config = loadConfig();
   let provider = config.provider;
 
-  // Auto-detect local provider
   if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
-    process.stdout.write(dimCyan("  Detecting local LLM server..."));
+    writeContentLine(dimCyan("  Detecting local LLM server..."));
     const detected = await detectLocalProvider();
     if (detected) {
       provider = detected;
-      process.stdout.write(
-        `\r${neonCyan("✔")} Connected to ${neonCyan(provider.baseUrl)} → ${neonPink(provider.model)}\n`
-      );
+      writeContentLine(`${neonCyan("  ✔")} Connected to ${neonCyan(provider.baseUrl)} → ${neonPink(provider.model)}`);
     } else {
-      process.stdout.write(
-        `\r${chalk.red("✗")} No local LLM server found. Start LM Studio or Ollama.\n`
-      );
+      writeContentLine(chalk.red("  ✗ No local LLM server found. Start LM Studio or Ollama."));
+      exitAltScreen();
       process.exit(1);
     }
   } else {
-    console.log(`  ${dimCyan("Provider:")} ${neonCyan(provider.baseUrl)}`);
-    console.log(`  ${dimCyan("Model:")} ${neonPink(provider.model)}`);
+    writeContentLine(`  ${dimCyan("Provider:")} ${neonCyan(provider.baseUrl)}`);
+    writeContentLine(`  ${dimCyan("Model:")} ${neonPink(provider.model)}`);
   }
 
-  const cwd = process.cwd();
-  const cols = process.stdout.columns || 80;
-  const cwdShort = cwd.replace(process.env.HOME || "", "~");
-
-  // Tips
-  console.log();
-  console.log(neonCyan.bold("  Tips for getting started:"));
-  console.log(dimCyan("  1. Ask questions, edit files, or run commands."));
-  console.log(dimCyan("  2. Be specific for the best results."));
-  console.log(dimCyan(`  3. ${neonCyan("/help")} for more information.`));
-  console.log();
-  console.log(neonCyan("─".repeat(cols)));
+  writeContent([
+    "",
+    neonCyan.bold("  Tips for getting started:"),
+    dimCyan("  1. Ask questions, edit files, or run commands."),
+    dimCyan("  2. Be specific for the best results."),
+    dimCyan(`  3. ${neonCyan("/help")} for more information.`),
+    "",
+    neonCyan("─".repeat(c)),
+    "",
+  ].join("\n"));
 
   // Create agent
+  const cwd = process.cwd();
+  const cwdShort = cwd.replace(process.env.HOME || "", "~");
+
   const agent = new CodingAgent({
     provider,
     cwd,
@@ -159,103 +246,143 @@ ${dimCyan(`                                       v${VERSION}`)}  ${neonCyan("�
           return val.length > 60 ? val.slice(0, 60) + "..." : val;
         })
         .join(", ");
-      console.log(`\n${neonCyan("●")} ${neonPink.bold(name)}(${dimCyan(argStr)})`);
+      writeContentLine(`\n${neonCyan("●")} ${neonPink.bold(name)}(${dimCyan(argStr)})`);
     },
     onToolResult: (name, result) => {
       const lines = result.split("\n").length;
       const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-      console.log(dimCyan(`  └ ${lines} lines (${size})`));
+      writeContentLine(dimCyan(`  └ ${lines} lines (${size})`));
     },
   });
 
-  // REPL using stdin directly
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // REPL
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
 
-  function drawInputBoxBottom() {
-    console.log(neonCyan("└" + "─".repeat(cols - 2) + "┘"));
-  }
-
-  function drawInputBox() {
-    console.log();
-    console.log(neonCyan("┌" + "─".repeat(cols - 2) + "┐"));
-    // Move cursor up after printing bottom so user types inside the box
-    process.stdout.write(neonCyan("└" + "─".repeat(cols - 2) + "┘"));
-    // Move cursor up 1 line, to the input line
-    process.stdout.write(`\x1B[1A\r`);
+  // Enable raw-ish mode for keypress but handle readline manually
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(false);
   }
 
   function prompt() {
     drawInputBox();
-    rl.question(neonCyan("│ ") + neonPink.bold("> "), async (input) => {
-      input = input.trim();
 
-      if (!input) {
-        prompt();
-        return;
+    // We read a line manually
+    const chunks: string[] = [];
+    const onData = (data: Buffer) => {
+      const str = data.toString();
+      for (const ch of str) {
+        if (ch === "\r" || ch === "\n") {
+          process.stdin.removeListener("data", onData);
+          const input = chunks.join("").trim();
+          handleInput(input);
+          return;
+        } else if (ch === "\x03") {
+          // Ctrl+C
+          exitAltScreen();
+          process.exit(0);
+        } else if (ch === "\x7F" || ch === "\b") {
+          // Backspace
+          if (chunks.length > 0) {
+            chunks.pop();
+            redrawInputLine(chunks.join(""));
+          }
+        } else if (ch >= " ") {
+          chunks.push(ch);
+          redrawInputLine(chunks.join(""));
+        }
       }
+    };
 
-      // Move cursor past the pre-drawn bottom border
-      process.stdout.write("\x1B[1B\r\n");
-
-      // Commands
-      if (input === "/quit" || input === "/exit") {
-        console.log(neonPink("\n  Stay maxxed! 💪\n"));
-        rl.close();
-        process.exit(0);
-      }
-      if (input === "/help") {
-        console.log(`
-  ${neonPink.bold("Commands:")}
-    ${neonCyan("/help")}     ${dimCyan("— Show this help")}
-    ${neonCyan("/reset")}    ${dimCyan("— Clear conversation history")}
-    ${neonCyan("/context")}  ${dimCyan("— Show current context size")}
-    ${neonCyan("/quit")}     ${dimCyan("— Exit CODEMAXXING")}
-`);
-        prompt();
-        return;
-      }
-      if (input === "/reset") {
-        agent.reset();
-        console.log(neonCyan("  ✅ Conversation reset.\n"));
-        prompt();
-        return;
-      }
-      if (input === "/context") {
-        console.log(dimCyan(`  Messages in context: ${agent.getContextLength()}\n`));
-        prompt();
-        return;
-      }
-
-      // Chat with agent
-      const randomMsg = SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)];
-      const spinner = startSpinner(randomMsg);
-
-      try {
-        const response = await agent.chat(input);
-        const elapsed = spinner.stop();
-        console.log();
-        console.log(formatResponse(stripThinking(response)));
-        console.log();
-      } catch (err: any) {
-        spinner.stop();
-        console.log(chalk.red(`\n  Error: ${err.message}`));
-        console.log(chalk.red("  Check if your LLM server is running and the model is loaded.\n"));
-      }
-
-      prompt();
-    });
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.on("data", onData);
   }
 
-  // Handle Ctrl+C
-  rl.on("close", () => {
-    console.log(neonPink("\n  Stay maxxed! 💪\n"));
-    process.exit(0);
-  });
+  function redrawInputLine(text: string) {
+    const r = rows();
+    const boxTop = r - INPUT_BOX_HEIGHT + 1;
+    moveTo(boxTop + 1, 1);
+    clearLine();
+    const c2 = cols();
+    const displayText = text.length > c2 - 6 ? text.slice(text.length - c2 + 6) : text;
+    process.stdout.write(neonCyan("│ ") + neonPink("> ") + displayText + " ".repeat(Math.max(0, c2 - displayText.length - 5)) + neonCyan("│"));
+    moveTo(boxTop + 1, 5 + displayText.length);
+  }
 
+  async function handleInput(input: string) {
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+    }
+
+    if (!input) {
+      prompt();
+      return;
+    }
+
+    // Show what user typed in content area
+    writeContentLine(dimCyan(`> ${input}`));
+
+    if (input === "/quit" || input === "/exit") {
+      writeContentLine(neonPink("\n  Stay maxxed! 💪\n"));
+      exitAltScreen();
+      process.exit(0);
+    }
+    if (input === "/help") {
+      writeContent([
+        "",
+        `  ${neonPink.bold("Commands:")}`,
+        `    ${neonCyan("/help")}     ${dimCyan("— Show this help")}`,
+        `    ${neonCyan("/reset")}    ${dimCyan("— Clear conversation history")}`,
+        `    ${neonCyan("/context")}  ${dimCyan("— Show current context size")}`,
+        `    ${neonCyan("/quit")}     ${dimCyan("— Exit CODEMAXXING")}`,
+        "",
+      ].join("\n"));
+      drawInputBox();
+      prompt();
+      return;
+    }
+    if (input === "/reset") {
+      agent.reset();
+      writeContentLine(neonCyan("  ✅ Conversation reset.\n"));
+      drawInputBox();
+      prompt();
+      return;
+    }
+    if (input === "/context") {
+      writeContentLine(dimCyan(`  Messages in context: ${agent.getContextLength()}\n`));
+      drawInputBox();
+      prompt();
+      return;
+    }
+
+    // Chat
+    const randomMsg = SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)];
+    const spinner = startSpinner(randomMsg);
+
+    try {
+      const response = await agent.chat(input);
+      spinner.stop();
+      writeContentLine("");
+      writeContent(formatResponse(stripThinking(response)));
+      writeContentLine("");
+    } catch (err: any) {
+      spinner.stop();
+      writeContentLine(chalk.red(`\n  Error: ${err.message}`));
+      writeContentLine(chalk.red("  Check if your LLM server is running and the model is loaded.\n"));
+    }
+
+    drawInputBox();
+    prompt();
+  }
+
+  // Start
+  drawInputBox();
   prompt();
 }
 
 main().catch((err) => {
+  exitAltScreen();
   console.error(chalk.red(`Fatal: ${err.message}`));
   process.exit(1);
 });
