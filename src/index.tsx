@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import React, { useState, useEffect, useCallback } from "react";
-import { render, Box, Text, Static, useInput, useApp, useStdout } from "ink";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
@@ -200,82 +200,69 @@ function App() {
 
   return (
     <Box flexDirection="column">
-      {/* ═══ ALL SCROLLABLE CONTENT (banner + connection + messages) ═══ */}
-      <Static items={[
-        { id: -2, type: "banner" as const, text: "" },
-        ...(connectionInfo.length > 0 ? [{ id: -1, type: "connection" as const, text: "" }] : []),
-        ...messages,
-      ]}>
-        {(item) => {
-          // Banner
-          if (item.id === -2) {
+      {/* ═══ BANNER BOX ═══ */}
+      <Box flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
+        {codeLines.map((line, i) => (
+          <Text key={`c${i}`} color="#00FFFF">{line}</Text>
+        ))}
+        {maxxingLines.map((line, i) => (
+          <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
+        ))}
+        <Text>
+          <Text color="#008B8B">{"                            v" + VERSION}</Text>
+          {"  "}<Text color="#00FFFF">💪</Text>
+          {"  "}<Text dimColor>your code. your model. no excuses.</Text>
+        </Text>
+      </Box>
+
+      {/* ═══ CONNECTION INFO BOX ═══ */}
+      {connectionInfo.length > 0 && (
+        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
+          {connectionInfo.map((line, i) => (
+            <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+          ))}
+        </Box>
+      )}
+
+      {/* ═══ CHAT MESSAGES ═══ */}
+      {messages.map((msg) => {
+        switch (msg.type) {
+          case "user":
             return (
-              <Box key="banner" flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
-                {codeLines.map((line, i) => (
-                  <Text key={`c${i}`} color="#00FFFF">{line}</Text>
-                ))}
-                {maxxingLines.map((line, i) => (
-                  <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
-                ))}
-                <Text>
-                  <Text color="#008B8B">{"                            v" + VERSION}</Text>
-                  {"  "}<Text color="#00FFFF">💪</Text>
-                  {"  "}<Text dimColor>your code. your model. no excuses.</Text>
-                </Text>
+              <Box key={msg.id} marginTop={1}>
+                <Text color="#008B8B">{"  > "}{msg.text}</Text>
               </Box>
             );
-          }
-
-          // Connection info
-          if (item.id === -1) {
+          case "response":
             return (
-              <Box key="conn" flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
-                {connectionInfo.map((line, i) => (
-                  <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+              <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
+                {msg.text.split("\n").map((l, i) => (
+                  <Text key={i} wrap="wrap">
+                    {i === 0 ? <Text color="#00FFFF">● </Text> : <Text>  </Text>}
+                    {l.startsWith("```") ? <Text color="#008B8B">{l}</Text> :
+                     l.startsWith("# ") || l.startsWith("## ") ? <Text bold color="#FF00FF">{l}</Text> :
+                     l.startsWith("**") ? <Text bold>{l}</Text> :
+                     <Text>{l}</Text>}
+                  </Text>
                 ))}
               </Box>
             );
-          }
-
-          const msg = item as ChatMessage;
-          switch (msg.type) {
-            case "user":
-              return (
-                <Box key={msg.id} marginTop={1}>
-                  <Text color="#008B8B">{"  > "}{msg.text}</Text>
-                </Box>
-              );
-            case "response":
-              return (
-                <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
-                  {msg.text.split("\n").map((l, i) => (
-                    <Text key={i} wrap="wrap">
-                      {i === 0 ? <Text color="#00FFFF">● </Text> : <Text>  </Text>}
-                      {l.startsWith("```") ? <Text color="#008B8B">{l}</Text> :
-                       l.startsWith("# ") || l.startsWith("## ") ? <Text bold color="#FF00FF">{l}</Text> :
-                       l.startsWith("**") ? <Text bold>{l}</Text> :
-                       <Text>{l}</Text>}
-                    </Text>
-                  ))}
-                </Box>
-              );
-            case "tool":
-              return (
-                <Box key={msg.id}>
-                  <Text><Text color="#00FFFF">  ● </Text><Text bold color="#FF00FF">{msg.text}</Text></Text>
-                </Box>
-              );
-            case "tool-result":
-              return <Text key={msg.id} color="#008B8B">    {msg.text}</Text>;
-            case "error":
-              return <Text key={msg.id} color="red">  {msg.text}</Text>;
-            case "info":
-              return <Text key={msg.id} color="#008B8B">  {msg.text}</Text>;
-            default:
-              return <Text key={msg.id}>{msg.text}</Text>;
-          }
-        }}
-      </Static>
+          case "tool":
+            return (
+              <Box key={msg.id}>
+                <Text><Text color="#00FFFF">  ● </Text><Text bold color="#FF00FF">{msg.text}</Text></Text>
+              </Box>
+            );
+          case "tool-result":
+            return <Text key={msg.id} color="#008B8B">    {msg.text}</Text>;
+          case "error":
+            return <Text key={msg.id} color="red">  {msg.text}</Text>;
+          case "info":
+            return <Text key={msg.id} color="#008B8B">  {msg.text}</Text>;
+          default:
+            return <Text key={msg.id}>{msg.text}</Text>;
+        }
+      })}
 
       {/* ═══ SPINNER ═══ */}
       {loading && <NeonSpinner message={spinnerMsg} />}

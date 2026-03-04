@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useEffect, useCallback } from "react";
-import { render, Box, Text, Static, useInput, useApp, useStdout } from "ink";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
@@ -166,40 +166,27 @@ function App() {
         "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
         "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
     ];
-    return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Static, { items: [
-                    { id: -2, type: "banner", text: "" },
-                    ...(connectionInfo.length > 0 ? [{ id: -1, type: "connection", text: "" }] : []),
-                    ...messages,
-                ], children: (item) => {
-                    // Banner
-                    if (item.id === -2) {
-                        return (_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "#00FFFF", paddingX: 1, children: [codeLines.map((line, i) => (_jsx(Text, { color: "#00FFFF", children: line }, `c${i}`))), maxxingLines.map((line, i) => (_jsx(Text, { color: i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF", children: line }, `m${i}`))), _jsxs(Text, { children: [_jsx(Text, { color: "#008B8B", children: "                            v" + VERSION }), "  ", _jsx(Text, { color: "#00FFFF", children: "\uD83D\uDCAA" }), "  ", _jsx(Text, { dimColor: true, children: "your code. your model. no excuses." })] })] }, "banner"));
-                    }
-                    // Connection info
-                    if (item.id === -1) {
-                        return (_jsx(Box, { flexDirection: "column", borderStyle: "single", borderColor: "#008B8B", paddingX: 1, marginBottom: 1, children: connectionInfo.map((line, i) => (_jsx(Text, { color: line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B", children: line }, i))) }, "conn"));
-                    }
-                    const msg = item;
-                    switch (msg.type) {
-                        case "user":
-                            return (_jsx(Box, { marginTop: 1, children: _jsxs(Text, { color: "#008B8B", children: ["  > ", msg.text] }) }, msg.id));
-                        case "response":
-                            return (_jsx(Box, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: msg.text.split("\n").map((l, i) => (_jsxs(Text, { wrap: "wrap", children: [i === 0 ? _jsx(Text, { color: "#00FFFF", children: "\u25CF " }) : _jsx(Text, { children: "  " }), l.startsWith("```") ? _jsx(Text, { color: "#008B8B", children: l }) :
-                                            l.startsWith("# ") || l.startsWith("## ") ? _jsx(Text, { bold: true, color: "#FF00FF", children: l }) :
-                                                l.startsWith("**") ? _jsx(Text, { bold: true, children: l }) :
-                                                    _jsx(Text, { children: l })] }, i))) }, msg.id));
-                        case "tool":
-                            return (_jsx(Box, { children: _jsxs(Text, { children: [_jsx(Text, { color: "#00FFFF", children: "  \u25CF " }), _jsx(Text, { bold: true, color: "#FF00FF", children: msg.text })] }) }, msg.id));
-                        case "tool-result":
-                            return _jsxs(Text, { color: "#008B8B", children: ["    ", msg.text] }, msg.id);
-                        case "error":
-                            return _jsxs(Text, { color: "red", children: ["  ", msg.text] }, msg.id);
-                        case "info":
-                            return _jsxs(Text, { color: "#008B8B", children: ["  ", msg.text] }, msg.id);
-                        default:
-                            return _jsx(Text, { children: msg.text }, msg.id);
-                    }
-                } }), loading && _jsx(NeonSpinner, { message: spinnerMsg }), _jsxs(Box, { borderStyle: "single", borderColor: "#00FFFF", paddingX: 1, children: [_jsx(Text, { color: "#FF00FF", bold: true, children: "> " }), ready && !loading ? (_jsx(TextInput, { value: input, onChange: setInput, onSubmit: handleSubmit })) : (_jsx(Text, { dimColor: true, children: loading ? "waiting for response..." : "initializing..." }))] })] }));
+    return (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "#00FFFF", paddingX: 1, children: [codeLines.map((line, i) => (_jsx(Text, { color: "#00FFFF", children: line }, `c${i}`))), maxxingLines.map((line, i) => (_jsx(Text, { color: i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF", children: line }, `m${i}`))), _jsxs(Text, { children: [_jsx(Text, { color: "#008B8B", children: "                            v" + VERSION }), "  ", _jsx(Text, { color: "#00FFFF", children: "\uD83D\uDCAA" }), "  ", _jsx(Text, { dimColor: true, children: "your code. your model. no excuses." })] })] }), connectionInfo.length > 0 && (_jsx(Box, { flexDirection: "column", borderStyle: "single", borderColor: "#008B8B", paddingX: 1, marginBottom: 1, children: connectionInfo.map((line, i) => (_jsx(Text, { color: line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B", children: line }, i))) })), messages.map((msg) => {
+                switch (msg.type) {
+                    case "user":
+                        return (_jsx(Box, { marginTop: 1, children: _jsxs(Text, { color: "#008B8B", children: ["  > ", msg.text] }) }, msg.id));
+                    case "response":
+                        return (_jsx(Box, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: msg.text.split("\n").map((l, i) => (_jsxs(Text, { wrap: "wrap", children: [i === 0 ? _jsx(Text, { color: "#00FFFF", children: "\u25CF " }) : _jsx(Text, { children: "  " }), l.startsWith("```") ? _jsx(Text, { color: "#008B8B", children: l }) :
+                                        l.startsWith("# ") || l.startsWith("## ") ? _jsx(Text, { bold: true, color: "#FF00FF", children: l }) :
+                                            l.startsWith("**") ? _jsx(Text, { bold: true, children: l }) :
+                                                _jsx(Text, { children: l })] }, i))) }, msg.id));
+                    case "tool":
+                        return (_jsx(Box, { children: _jsxs(Text, { children: [_jsx(Text, { color: "#00FFFF", children: "  \u25CF " }), _jsx(Text, { bold: true, color: "#FF00FF", children: msg.text })] }) }, msg.id));
+                    case "tool-result":
+                        return _jsxs(Text, { color: "#008B8B", children: ["    ", msg.text] }, msg.id);
+                    case "error":
+                        return _jsxs(Text, { color: "red", children: ["  ", msg.text] }, msg.id);
+                    case "info":
+                        return _jsxs(Text, { color: "#008B8B", children: ["  ", msg.text] }, msg.id);
+                    default:
+                        return _jsx(Text, { children: msg.text }, msg.id);
+                }
+            }), loading && _jsx(NeonSpinner, { message: spinnerMsg }), _jsxs(Box, { borderStyle: "single", borderColor: "#00FFFF", paddingX: 1, children: [_jsx(Text, { color: "#FF00FF", bold: true, children: "> " }), ready && !loading ? (_jsx(TextInput, { value: input, onChange: setInput, onSubmit: handleSubmit })) : (_jsx(Text, { dimColor: true, children: loading ? "waiting for response..." : "initializing..." }))] })] }));
 }
 // Clear screen before render
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
