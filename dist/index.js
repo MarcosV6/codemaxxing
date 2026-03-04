@@ -203,4 +203,8 @@ function App() {
 }
 // Clear screen before render
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
+// Handle terminal resize — clear ghost artifacts
+process.stdout.on("resize", () => {
+    process.stdout.write("\x1B[2J\x1B[H");
+});
 render(_jsx(App, {}), { exitOnCtrlC: false });
