@@ -44,24 +44,31 @@ ${chalk.gray(`                                              v${VERSION}`)}
         console.log(`  ${chalk.gray("Model:")} ${chalk.yellow(provider.model)}`);
     }
     const cwd = process.cwd();
+    const cols = process.stdout.columns || 80;
+    const cwdShort = cwd.replace(process.env.HOME || "", "~");
     // Tips
+    console.log();
     console.log(chalk.white.bold("  Tips for getting started:"));
     console.log(chalk.gray("  1. Ask questions, edit files, or run commands."));
     console.log(chalk.gray("  2. Be specific for the best results."));
     console.log(chalk.gray(`  3. ${chalk.white("/help")} for more information.`));
     console.log();
-    // Status bar
-    const cols = process.stdout.columns || 80;
-    const line = chalk.dim("─".repeat(cols));
-    console.log(line);
-    const cwdShort = cwd.replace(process.env.HOME || "", "~");
-    const statusLeft = chalk.cyan(cwdShort);
-    const statusCenter = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.yellow("manual approve");
-    const statusRight = chalk.magenta(`${provider.model}`);
-    const padding = Math.max(1, Math.floor((cols - cwdShort.length - 14 - provider.model.length) / 2));
-    console.log(`  ${statusLeft}${" ".repeat(padding)}${statusCenter}${" ".repeat(padding)}${statusRight}`);
-    console.log(line);
-    console.log();
+    // Input box
+    function drawInputBox() {
+        const topLine = chalk.cyan("─".repeat(cols));
+        console.log(topLine);
+    }
+    // Status bar (below input)
+    function drawStatusBar() {
+        const bottomLine = chalk.cyan("─".repeat(cols));
+        console.log(bottomLine);
+        const sandbox = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.red("no sandbox");
+        const modelStr = chalk.magenta(`${provider.model}`);
+        const gap1 = Math.max(1, Math.floor((cols - cwdShort.length - 12 - provider.model.length) / 2));
+        const gap2 = Math.max(1, cols - cwdShort.length - 12 - provider.model.length - gap1);
+        console.log(`${chalk.cyan(cwdShort)}${" ".repeat(gap1)}${sandbox}${" ".repeat(gap2)}${modelStr}`);
+    }
+    drawInputBox();
     // Create agent
     const agent = new CodingAgent({
         provider,
@@ -86,7 +93,7 @@ ${chalk.gray(`                                              v${VERSION}`)}
     const rl = createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: chalk.bold.magenta("  > "),
+        prompt: chalk.bold.white("> "),
     });
     rl.prompt();
     rl.on("line", async (line) => {
@@ -130,11 +137,15 @@ ${chalk.gray(`                                              v${VERSION}`)}
             console.log();
             console.log(formatResponse(response));
             console.log();
+            drawStatusBar();
+            console.log();
+            drawInputBox();
         }
         catch (err) {
             spinner.fail(`Error: ${err.message}`);
             console.log(chalk.red(`  Check if your LLM server is running and the model is loaded.`));
             console.log();
+            drawInputBox();
         }
         rl.prompt();
     });
