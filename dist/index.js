@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-import { createInterface } from "readline";
-import chalk from "chalk";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { useState, useEffect, useCallback } from "react";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
+import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
 const VERSION = "0.1.0";
@@ -12,154 +14,23 @@ const SPINNER_MESSAGES = [
     "Blasting tren...", "Pumping...", "Wondering if I should actually do this...",
     "Hacking the main frame...", "Codemaxxing...", "Vibe coding...", "Running a marathon...",
 ];
-// ── Neon colors ──
-const neonPink = chalk.hex("#FF00FF");
-const neonCyan = chalk.hex("#00FFFF");
-const dimCyan = chalk.hex("#008B8B");
-const glow = chalk.bold.hex("#FF44FF");
-// ── TUI: alternate screen + scroll region ──
-const rows = () => process.stdout.rows || 24;
-const cols = () => process.stdout.columns || 80;
-// Input box height (top border + input line + bottom border)
-const INPUT_BOX_HEIGHT = 3;
-function enterAltScreen() {
-    process.stdout.write("\x1B[?1049h"); // enter alternate screen
-    process.stdout.write("\x1B[2J"); // clear visible
-    process.stdout.write("\x1B[3J"); // clear scrollback buffer
-    process.stdout.write("\x1B[H"); // cursor home
+// ── Neon Spinner Component ──
+function NeonSpinner({ message }) {
+    const [frame, setFrame] = useState(0);
+    const [elapsed, setElapsed] = useState(0);
+    useEffect(() => {
+        const start = Date.now();
+        const interval = setInterval(() => {
+            setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+            setElapsed(Math.floor((Date.now() - start) / 1000));
+        }, 80);
+        return () => clearInterval(interval);
+    }, []);
+    return (_jsxs(Text, { children: ["  ", _jsx(Text, { color: "#00FFFF", children: SPINNER_FRAMES[frame] }), " ", _jsx(Text, { bold: true, color: "#FF00FF", children: message }), " ", _jsxs(Text, { color: "#008B8B", children: ["[", elapsed, "s]"] })] }));
 }
-function clearScrollback() {
-    process.stdout.write("\x1B[3J"); // clear scrollback buffer
-}
-function exitAltScreen() {
-    process.stdout.write("\x1B[?1049l"); // restore original screen
-}
-function setScrollRegion(top, bottom) {
-    process.stdout.write(`\x1B[${top};${bottom}r`);
-}
-function moveTo(row, col) {
-    process.stdout.write(`\x1B[${row};${col}H`);
-}
-function clearLine() {
-    process.stdout.write("\x1B[2K");
-}
-function drawInputBox(rl) {
-    const c = cols();
-    const r = rows();
-    const boxTop = r - INPUT_BOX_HEIGHT + 1;
-    // Draw the 3 lines of the input box at the bottom
-    moveTo(boxTop, 1);
-    clearLine();
-    process.stdout.write(neonCyan("┌" + "─".repeat(c - 2) + "┐"));
-    moveTo(boxTop + 1, 1);
-    clearLine();
-    process.stdout.write(neonCyan("│") + " ".repeat(c - 2) + neonCyan("│"));
-    moveTo(boxTop + 2, 1);
-    clearLine();
-    process.stdout.write(neonCyan("└" + "─".repeat(c - 2) + "┘"));
-    // Position cursor inside the box
-    moveTo(boxTop + 1, 3);
-}
-// Track which content row we're on (in the scroll region)
-let contentRow = 1;
-function writeContent(text) {
-    const r = rows();
-    const scrollBottom = r - INPUT_BOX_HEIGHT;
-    // Set scroll region to content area
-    setScrollRegion(1, scrollBottom);
-    const lines = text.split("\n");
-    for (const line of lines) {
-        // If we've gone past the scroll region, it'll auto-scroll
-        if (contentRow > scrollBottom) {
-            contentRow = scrollBottom;
-        }
-        moveTo(contentRow, 1);
-        clearLine();
-        process.stdout.write(line);
-        contentRow++;
-    }
-    // Reset scroll region to full screen so input box stays put
-    setScrollRegion(1, r);
-}
-function writeContentLine(text) {
-    writeContent(text + "\n");
-}
-// ── Spinner ──
-function startSpinner(msg) {
-    let i = 0;
-    const startTime = Date.now();
-    const r = rows();
-    const scrollBottom = r - INPUT_BOX_HEIGHT;
-    const interval = setInterval(() => {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-        const frame = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
-        setScrollRegion(1, scrollBottom);
-        moveTo(contentRow > scrollBottom ? scrollBottom : contentRow, 1);
-        clearLine();
-        process.stdout.write(`  ${neonCyan(frame)} ${chalk.bold.hex("#FF00FF")(msg)} ${dimCyan(`[${elapsed}s]`)}`);
-        setScrollRegion(1, r);
-        drawInputBox();
-        i++;
-    }, 80);
-    return {
-        stop: () => {
-            clearInterval(interval);
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            // Clear spinner line
-            const sr = rows();
-            const sb = sr - INPUT_BOX_HEIGHT;
-            setScrollRegion(1, sb);
-            moveTo(contentRow > sb ? sb : contentRow, 1);
-            clearLine();
-            setScrollRegion(1, sr);
-            return elapsed;
-        },
-    };
-}
-// ── Think tag stripper ──
-function stripThinking(text) {
-    return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-}
-// ── Response formatter ──
-function formatResponse(text) {
-    const lines = text.split("\n");
-    const formatted = [];
-    let inCodeBlock = false;
-    formatted.push(neonCyan("● ") + lines[0]);
-    for (let i = 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.startsWith("```")) {
-            inCodeBlock = !inCodeBlock;
-            formatted.push(dimCyan(`  ${line}`));
-        }
-        else if (inCodeBlock) {
-            formatted.push(neonCyan(`  ${line}`));
-        }
-        else if (line.startsWith("# ") || line.startsWith("## ")) {
-            formatted.push(neonPink.bold(`  ${line}`));
-        }
-        else if (line.startsWith("- ")) {
-            formatted.push(`  ${line}`);
-        }
-        else {
-            formatted.push(`  ${line}`);
-        }
-    }
-    return formatted.join("\n");
-}
-// ── Main ──
-async function main() {
-    enterAltScreen();
-    // Cleanup on exit
-    process.on("SIGINT", () => {
-        exitAltScreen();
-        process.exit(0);
-    });
-    process.on("exit", () => {
-        exitAltScreen();
-    });
-    const c = cols();
-    const codeBanner = [
+// ── Banner Component ──
+function Banner() {
+    const codeLines = [
         "                     _(`-')    (`-')  _ ",
         " _             .->  ( (OO ).-> ( OO).-/ ",
         " \\-,-----.(`-')----. \\    .'_ (,------. ",
@@ -168,8 +39,8 @@ async function main() {
         " ||  |OO ) \\|  |)|  ||  |  / : |  .--'  ",
         "(_'  '--'\\  '  '-'  '|  '-'  / |  `---. ",
         "   `-----'   `-----' `------'  `------' ",
-    ].join("\n");
-    const maxxingBanner = [
+    ];
+    const maxxingLines = [
         "<-. (`-')   (`-')  _  (`-')      (`-')      _     <-. (`-')_            ",
         "   \\(OO )_  (OO ).-/  (OO )_.->  (OO )_.-> (_)       \\( OO) )    .->    ",
         ",--./  ,-.) / ,---.   (_| \\_)--. (_| \\_)--.,-(`-'),--./ ,--/  ,---(`-') ",
@@ -178,191 +49,149 @@ async function main() {
         "|  |   |  |(|  .-.  |  .'    \\    .'    \\ (|  |_/ |  |\\    | |  | '.(_/ ",
         "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
         "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
-    ].join("\n");
-    // Banner
-    const bannerLines = [
-        ...codeBanner.split("\n").map(l => neonCyan(l)),
-        ...maxxingBanner.split("\n").map((l, i, arr) => i === arr.length - 1 ? chalk.hex("#CC00CC")(l) : neonPink(l)),
-        "",
-        `${dimCyan(`                            v${VERSION}`)}  ${neonCyan("💪")}  ${chalk.dim("your code. your model. no excuses.")}`,
-        "",
     ];
-    writeContent(bannerLines.join("\n"));
-    // Load config + detect provider
-    const config = loadConfig();
-    let provider = config.provider;
-    if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
-        writeContentLine(dimCyan("  Detecting local LLM server..."));
-        const detected = await detectLocalProvider();
-        if (detected) {
-            provider = detected;
-            writeContentLine(`${neonCyan("  ✔")} Connected to ${neonCyan(provider.baseUrl)} → ${neonPink(provider.model)}`);
-        }
-        else {
-            writeContentLine(chalk.red("  ✗ No local LLM server found. Start LM Studio or Ollama."));
-            exitAltScreen();
-            process.exit(1);
-        }
-    }
-    else {
-        writeContentLine(`  ${dimCyan("Provider:")} ${neonCyan(provider.baseUrl)}`);
-        writeContentLine(`  ${dimCyan("Model:")} ${neonPink(provider.model)}`);
-    }
-    writeContent([
-        "",
-        neonCyan.bold("  Tips for getting started:"),
-        dimCyan("  1. Ask questions, edit files, or run commands."),
-        dimCyan("  2. Be specific for the best results."),
-        dimCyan(`  3. ${neonCyan("/help")} for more information.`),
-        "",
-        neonCyan("─".repeat(c)),
-        "",
-    ].join("\n"));
-    // Create agent
-    const cwd = process.cwd();
-    const cwdShort = cwd.replace(process.env.HOME || "", "~");
-    const agent = new CodingAgent({
-        provider,
-        cwd,
-        maxTokens: config.defaults.maxTokens,
-        autoApprove: config.defaults.autoApprove,
-        onToolCall: (name, args) => {
-            const argStr = Object.entries(args)
-                .map(([k, v]) => {
-                const val = String(v);
-                return val.length > 60 ? val.slice(0, 60) + "..." : val;
-            })
-                .join(", ");
-            writeContentLine(`\n${neonCyan("●")} ${neonPink.bold(name)}(${dimCyan(argStr)})`);
-        },
-        onToolResult: (name, result) => {
-            const lines = result.split("\n").length;
-            const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-            writeContentLine(dimCyan(`  └ ${lines} lines (${size})`));
-        },
-    });
-    // REPL
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
-    // Enable raw-ish mode for keypress but handle readline manually
-    if (process.stdin.isTTY) {
-        process.stdin.setRawMode(false);
-    }
-    function prompt() {
-        drawInputBox();
-        // Draw the prompt inside the box immediately
-        redrawInputLine("");
-        // We read a line manually
-        const chunks = [];
-        const onData = (data) => {
-            const str = data.toString();
-            for (const ch of str) {
-                if (ch === "\r" || ch === "\n") {
-                    process.stdin.removeListener("data", onData);
-                    const input = chunks.join("").trim();
-                    handleInput(input);
+    return (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [codeLines.map((line, i) => (_jsx(Text, { color: "#00FFFF", children: line }, `c${i}`))), maxxingLines.map((line, i) => (_jsx(Text, { color: i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF", children: line }, `m${i}`))), _jsxs(Text, { children: [_jsx(Text, { color: "#008B8B", children: "                            v" + VERSION }), "  ", _jsx(Text, { color: "#00FFFF", children: "\uD83D\uDCAA" }), "  ", _jsx(Text, { dimColor: true, children: "your code. your model. no excuses." })] })] }));
+}
+let lineId = 0;
+// ── Main App Component ──
+function App() {
+    const { exit } = useApp();
+    const { stdout } = useStdout();
+    const termHeight = stdout?.rows ?? 24;
+    const termWidth = stdout?.columns ?? 80;
+    const [input, setInput] = useState("");
+    const [lines, setLines] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [spinnerMsg, setSpinnerMsg] = useState("");
+    const [agent, setAgent] = useState(null);
+    const [providerInfo, setProviderInfo] = useState({ url: "", model: "" });
+    const [ready, setReady] = useState(false);
+    // Initialize agent
+    useEffect(() => {
+        (async () => {
+            const config = loadConfig();
+            let provider = config.provider;
+            if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
+                addLine("info", "Detecting local LLM server...");
+                const detected = await detectLocalProvider();
+                if (detected) {
+                    provider = detected;
+                    addLine("info", `✔ Connected to ${provider.baseUrl} → ${provider.model}`);
+                }
+                else {
+                    addLine("error", "✗ No local LLM server found. Start LM Studio or Ollama.");
                     return;
                 }
-                else if (ch === "\x03") {
-                    // Ctrl+C
-                    exitAltScreen();
-                    process.exit(0);
-                }
-                else if (ch === "\x7F" || ch === "\b") {
-                    // Backspace
-                    if (chunks.length > 0) {
-                        chunks.pop();
-                        redrawInputLine(chunks.join(""));
-                    }
-                }
-                else if (ch >= " ") {
-                    chunks.push(ch);
-                    redrawInputLine(chunks.join(""));
-                }
             }
-        };
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
-        }
-        process.stdin.on("data", onData);
+            else {
+                addLine("info", `Provider: ${provider.baseUrl}`);
+                addLine("info", `Model: ${provider.model}`);
+            }
+            setProviderInfo({ url: provider.baseUrl, model: provider.model });
+            const cwd = process.cwd();
+            const a = new CodingAgent({
+                provider,
+                cwd,
+                maxTokens: config.defaults.maxTokens,
+                autoApprove: config.defaults.autoApprove,
+                onToolCall: (name, args) => {
+                    const argStr = Object.entries(args)
+                        .map(([k, v]) => {
+                        const val = String(v);
+                        return val.length > 60 ? val.slice(0, 60) + "..." : val;
+                    })
+                        .join(", ");
+                    addLine("tool", `${name}(${argStr})`);
+                },
+                onToolResult: (name, result) => {
+                    const numLines = result.split("\n").length;
+                    const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
+                    addLine("tool-result", `└ ${numLines} lines (${size})`);
+                },
+            });
+            setAgent(a);
+            setReady(true);
+        })();
+    }, []);
+    function addLine(type, text) {
+        setLines((prev) => [...prev, { id: lineId++, type, text }]);
     }
-    function redrawInputLine(text) {
-        const r = rows();
-        const boxTop = r - INPUT_BOX_HEIGHT + 1;
-        moveTo(boxTop + 1, 1);
-        clearLine();
-        const c2 = cols();
-        const displayText = text.length > c2 - 6 ? text.slice(text.length - c2 + 6) : text;
-        process.stdout.write(neonCyan("│ ") + neonPink("> ") + displayText + " ".repeat(Math.max(0, c2 - displayText.length - 5)) + neonCyan("│"));
-        moveTo(boxTop + 1, 5 + displayText.length);
+    function stripThinking(text) {
+        return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
     }
-    async function handleInput(input) {
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(false);
-        }
-        // Ensure stdin is flowing for async operations (HTTP requests)
-        process.stdin.resume();
-        if (!input) {
-            prompt();
+    // Handle submit
+    const handleSubmit = useCallback(async (value) => {
+        const trimmed = value.trim();
+        setInput("");
+        if (!trimmed || !agent)
+            return;
+        addLine("user", trimmed);
+        // Commands
+        if (trimmed === "/quit" || trimmed === "/exit") {
+            exit();
             return;
         }
-        // Show what user typed in content area
-        writeContentLine(dimCyan(`> ${input}`));
-        if (input === "/quit" || input === "/exit") {
-            writeContentLine(neonPink("\n  Stay maxxed! 💪\n"));
-            exitAltScreen();
-            process.exit(0);
-        }
-        if (input === "/help") {
-            writeContent([
-                "",
-                `  ${neonPink.bold("Commands:")}`,
-                `    ${neonCyan("/help")}     ${dimCyan("— Show this help")}`,
-                `    ${neonCyan("/reset")}    ${dimCyan("— Clear conversation history")}`,
-                `    ${neonCyan("/context")}  ${dimCyan("— Show current context size")}`,
-                `    ${neonCyan("/quit")}     ${dimCyan("— Exit CODEMAXXING")}`,
-                "",
-            ].join("\n"));
-            drawInputBox();
-            prompt();
+        if (trimmed === "/help") {
+            addLine("info", "Commands: /help, /reset, /context, /quit");
             return;
         }
-        if (input === "/reset") {
+        if (trimmed === "/reset") {
             agent.reset();
-            writeContentLine(neonCyan("  ✅ Conversation reset.\n"));
-            drawInputBox();
-            prompt();
+            addLine("info", "✅ Conversation reset.");
             return;
         }
-        if (input === "/context") {
-            writeContentLine(dimCyan(`  Messages in context: ${agent.getContextLength()}\n`));
-            drawInputBox();
-            prompt();
+        if (trimmed === "/context") {
+            addLine("info", `Messages in context: ${agent.getContextLength()}`);
             return;
         }
         // Chat
-        const randomMsg = SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)];
-        const spinner = startSpinner(randomMsg);
+        setLoading(true);
+        setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
         try {
-            const response = await agent.chat(input);
-            spinner.stop();
-            writeContentLine("");
-            writeContent(formatResponse(stripThinking(response)));
-            writeContentLine("");
+            const response = await agent.chat(trimmed);
+            addLine("response", stripThinking(response));
         }
         catch (err) {
-            spinner.stop();
-            writeContentLine(chalk.red(`\n  Error: ${err.message}`));
-            writeContentLine(chalk.red("  Check if your LLM server is running and the model is loaded.\n"));
+            addLine("error", `Error: ${err.message}`);
         }
-        drawInputBox();
-        prompt();
-    }
-    // Start
-    drawInputBox();
-    prompt();
+        setLoading(false);
+    }, [agent, exit]);
+    // Ctrl+C handler
+    useInput((input, key) => {
+        if (key.ctrl && input === "c") {
+            exit();
+        }
+    });
+    // Calculate visible content area
+    // Reserve: banner (~18 lines) + input box (3 lines) + some padding
+    const inputBoxHeight = 3;
+    const contentHeight = Math.max(5, termHeight - inputBoxHeight - 1);
+    // Get visible lines (last N that fit)
+    const visibleLines = lines.slice(-contentHeight);
+    return (_jsxs(Box, { flexDirection: "column", height: termHeight, children: [_jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [lines.length === 0 && (_jsxs(_Fragment, { children: [_jsx(Banner, {}), _jsx(Text, { color: "#00FFFF", bold: true, children: "  Tips for getting started:" }), _jsx(Text, { color: "#008B8B", children: "  1. Ask questions, edit files, or run commands." }), _jsx(Text, { color: "#008B8B", children: "  2. Be specific for the best results." }), _jsxs(Text, { color: "#008B8B", children: ["  3. ", _jsx(Text, { color: "#00FFFF", children: "/help" }), " for more information."] }), _jsx(Text, { children: "" })] })), visibleLines.map((line) => {
+                        switch (line.type) {
+                            case "user":
+                                return _jsxs(Text, { color: "#008B8B", children: ["  > ", line.text] }, line.id);
+                            case "response":
+                                return (_jsx(Box, { flexDirection: "column", marginTop: 1, marginBottom: 1, children: line.text.split("\n").map((l, i) => (_jsxs(Text, { children: [i === 0 ? _jsx(Text, { color: "#00FFFF", children: "\u25CF " }) : "  ", l.startsWith("```") ? _jsx(Text, { color: "#008B8B", children: l }) :
+                                                l.startsWith("# ") || l.startsWith("## ") ? _jsx(Text, { bold: true, color: "#FF00FF", children: l }) :
+                                                    _jsx(Text, { children: l })] }, i))) }, line.id));
+                            case "tool":
+                                return (_jsxs(Text, { children: [_jsx(Text, { color: "#00FFFF", children: "\u25CF " }), _jsx(Text, { bold: true, color: "#FF00FF", children: line.text })] }, line.id));
+                            case "tool-result":
+                                return _jsxs(Text, { color: "#008B8B", children: ["  ", line.text] }, line.id);
+                            case "error":
+                                return _jsxs(Text, { color: "red", children: ["  ", line.text] }, line.id);
+                            case "info":
+                                return _jsxs(Text, { color: "#008B8B", children: ["  ", line.text] }, line.id);
+                            default:
+                                return _jsx(Text, { children: line.text }, line.id);
+                        }
+                    }), loading && _jsx(NeonSpinner, { message: spinnerMsg })] }), _jsx(Box, { flexDirection: "column", borderStyle: "single", borderColor: "#00FFFF", width: termWidth, children: _jsxs(Box, { children: [_jsx(Text, { color: "#FF00FF", bold: true, children: "> " }), ready && !loading ? (_jsx(TextInput, { value: input, onChange: setInput, onSubmit: handleSubmit, placeholder: "" })) : (_jsx(Text, { dimColor: true, children: loading ? "waiting for response..." : "initializing..." }))] }) })] }));
 }
-main().catch((err) => {
-    exitAltScreen();
-    console.error(chalk.red(`Fatal: ${err.message}`));
-    process.exit(1);
+// ── Entry point ──
+// Clear screen before rendering
+process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
+render(_jsx(App, {}), {
+    exitOnCtrlC: true,
 });
