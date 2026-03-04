@@ -229,14 +229,13 @@ function App() {
     <Box flexDirection="column" height={termHeight}>
       {/* Content area */}
       <Box flexDirection="column" flexGrow={1}>
+        <Banner />
         {lines.length === 0 && (
           <>
-            <Banner />
             <Text color="#00FFFF" bold>  Tips for getting started:</Text>
             <Text color="#008B8B">  1. Ask questions, edit files, or run commands.</Text>
             <Text color="#008B8B">  2. Be specific for the best results.</Text>
             <Text color="#008B8B">  3. <Text color="#00FFFF">/help</Text> for more information.</Text>
-            <Text>{""}</Text>
           </>
         )}
 

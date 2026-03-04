@@ -168,7 +168,7 @@ function App() {
     const contentHeight = Math.max(5, termHeight - inputBoxHeight - 1);
     // Get visible lines (last N that fit)
     const visibleLines = lines.slice(-contentHeight);
-    return (_jsxs(Box, { flexDirection: "column", height: termHeight, children: [_jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [lines.length === 0 && (_jsxs(_Fragment, { children: [_jsx(Banner, {}), _jsx(Text, { color: "#00FFFF", bold: true, children: "  Tips for getting started:" }), _jsx(Text, { color: "#008B8B", children: "  1. Ask questions, edit files, or run commands." }), _jsx(Text, { color: "#008B8B", children: "  2. Be specific for the best results." }), _jsxs(Text, { color: "#008B8B", children: ["  3. ", _jsx(Text, { color: "#00FFFF", children: "/help" }), " for more information."] }), _jsx(Text, { children: "" })] })), visibleLines.map((line) => {
+    return (_jsxs(Box, { flexDirection: "column", height: termHeight, children: [_jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [_jsx(Banner, {}), lines.length === 0 && (_jsxs(_Fragment, { children: [_jsx(Text, { color: "#00FFFF", bold: true, children: "  Tips for getting started:" }), _jsx(Text, { color: "#008B8B", children: "  1. Ask questions, edit files, or run commands." }), _jsx(Text, { color: "#008B8B", children: "  2. Be specific for the best results." }), _jsxs(Text, { color: "#008B8B", children: ["  3. ", _jsx(Text, { color: "#00FFFF", children: "/help" }), " for more information."] })] })), visibleLines.map((line) => {
                         switch (line.type) {
                             case "user":
                                 return _jsxs(Text, { color: "#008B8B", children: ["  > ", line.text] }, line.id);
