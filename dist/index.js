@@ -77,7 +77,28 @@ async function main() {
             return;
         }
         // Send to agent
-        const spinner = ora({ text: "Thinking...", color: "cyan" }).start();
+        const spinnerMessages = [
+            "Locking in...",
+            "Cooking...",
+            "Maxxing...",
+            "In the zone...",
+            "Yapping...",
+            "Frame mogging...",
+            "Jester gooning...",
+            "Gooning...",
+            "Doing back flips...",
+            "Jester maxxing...",
+            "Getting baked...",
+            "Blasting tren...",
+            "Pumping...",
+            "Wondering if I should actually do this...",
+            "Hacking the main frame...",
+            "Codemaxxing...",
+            "Vibe coding...",
+            "Running a marathon...",
+        ];
+        const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
+        const spinner = ora({ text: randomMsg, color: "cyan" }).start();
         try {
             const response = await agent.chat(input);
             spinner.stop();
