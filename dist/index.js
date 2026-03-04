@@ -166,7 +166,20 @@ function App() {
         "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
         "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
     ];
-    return (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "#00FFFF", paddingX: 1, children: [codeLines.map((line, i) => (_jsx(Text, { color: "#00FFFF", children: line }, `c${i}`))), maxxingLines.map((line, i) => (_jsx(Text, { color: i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF", children: line }, `m${i}`))), _jsxs(Text, { children: [_jsx(Text, { color: "#008B8B", children: "                            v" + VERSION }), "  ", _jsx(Text, { color: "#00FFFF", children: "\uD83D\uDCAA" }), "  ", _jsx(Text, { dimColor: true, children: "your code. your model. no excuses." })] })] }), connectionInfo.length > 0 && (_jsx(Box, { flexDirection: "column", borderStyle: "single", borderColor: "#008B8B", paddingX: 1, marginBottom: 1, children: connectionInfo.map((line, i) => (_jsx(Text, { color: line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B", children: line }, i))) })), _jsx(Static, { items: messages, children: (msg) => {
+    return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Static, { items: [
+                    { id: -2, type: "banner", text: "" },
+                    ...(connectionInfo.length > 0 ? [{ id: -1, type: "connection", text: "" }] : []),
+                    ...messages,
+                ], children: (item) => {
+                    // Banner
+                    if (item.id === -2) {
+                        return (_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "#00FFFF", paddingX: 1, children: [codeLines.map((line, i) => (_jsx(Text, { color: "#00FFFF", children: line }, `c${i}`))), maxxingLines.map((line, i) => (_jsx(Text, { color: i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF", children: line }, `m${i}`))), _jsxs(Text, { children: [_jsx(Text, { color: "#008B8B", children: "                            v" + VERSION }), "  ", _jsx(Text, { color: "#00FFFF", children: "\uD83D\uDCAA" }), "  ", _jsx(Text, { dimColor: true, children: "your code. your model. no excuses." })] })] }, "banner"));
+                    }
+                    // Connection info
+                    if (item.id === -1) {
+                        return (_jsx(Box, { flexDirection: "column", borderStyle: "single", borderColor: "#008B8B", paddingX: 1, marginBottom: 1, children: connectionInfo.map((line, i) => (_jsx(Text, { color: line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B", children: line }, i))) }, "conn"));
+                    }
+                    const msg = item;
                     switch (msg.type) {
                         case "user":
                             return (_jsx(Box, { marginTop: 1, children: _jsxs(Text, { color: "#008B8B", children: ["  > ", msg.text] }) }, msg.id));
