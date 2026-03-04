@@ -9,6 +9,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js"
   },
@@ -23,8 +24,14 @@
     "conf": "^13.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
-  }
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "bundleDependencies": false,
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "README.md"
+  ]
 }
