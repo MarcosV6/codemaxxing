@@ -31,7 +31,7 @@ function startSpinner(msg) {
     const interval = setInterval(() => {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const frame = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
-        process.stdout.write(`\r  ${chalk.hex("#FF00FF")(frame)} ${chalk.bold.hex("#FF44FF")(msg)} ${chalk.hex("#7B2FBE")(`[${elapsed}s]`)}`);
+        process.stdout.write(`\r  ${chalk.hex("#FF00FF")(frame)} ${chalk.bold.hex("#FF44FF")(msg)} ${chalk.hex("#008B8B")(`[${elapsed}s]`)}`);
         i++;
     }, 80);
     return {
@@ -91,26 +91,24 @@ async function main() {
     // Neon color palette
     const neonPink = chalk.hex("#FF00FF");
     const neonCyan = chalk.hex("#00FFFF");
-    const neonPurple = chalk.hex("#BF00FF");
-    const dimPurple = chalk.hex("#7B2FBE");
+    const dimCyan = chalk.hex("#008B8B");
     const glow = chalk.bold.hex("#FF44FF");
-    const shadow = chalk.hex("#660066");
-    // Banner
+    // Banner — pink to cyan gradient
     console.log(`
 ${glow("  ██████╗ ██████╗ ██████╗ ███████╗███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ")}
-${glow("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
-${neonPink("  ██║     ██║   ██║██║  ██║█████╗  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
-${neonPink("  ██║     ██║   ██║██║  ██║██╔══╝  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║")}
-${neonPurple("  ╚██████╗╚██████╔╝██████╔╝███████╗██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
-${shadow("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
-${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("💪")}  ${chalk.dim("your code. your model. no excuses.")}
+${neonPink("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
+${chalk.hex("#DD00DD")("  ██║     ██║   ██║██║  ██║█████╗  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
+${chalk.hex("#AA00FF")("  ██║     ██║   ██║██║  ██║██╔══╝  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║")}
+${chalk.hex("#5500FF")("  ╚██████╗╚██████╔╝██████╔╝███████╗██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
+${neonCyan("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
+${dimCyan(`                                       v${VERSION}`)}  ${neonCyan("💪")}  ${chalk.dim("your code. your model. no excuses.")}
 `);
     // Load config
     const config = loadConfig();
     let provider = config.provider;
     // Auto-detect local provider
     if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
-        process.stdout.write(dimPurple("  Detecting local LLM server..."));
+        process.stdout.write(dimCyan("  Detecting local LLM server..."));
         const detected = await detectLocalProvider();
         if (detected) {
             provider = detected;
@@ -122,8 +120,8 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
         }
     }
     else {
-        console.log(`  ${dimPurple("Provider:")} ${neonCyan(provider.baseUrl)}`);
-        console.log(`  ${dimPurple("Model:")} ${neonPink(provider.model)}`);
+        console.log(`  ${dimCyan("Provider:")} ${neonCyan(provider.baseUrl)}`);
+        console.log(`  ${dimCyan("Model:")} ${neonPink(provider.model)}`);
     }
     const cwd = process.cwd();
     const cols = process.stdout.columns || 80;
@@ -131,11 +129,11 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
     // Tips
     console.log();
     console.log(neonCyan.bold("  Tips for getting started:"));
-    console.log(dimPurple("  1. Ask questions, edit files, or run commands."));
-    console.log(dimPurple("  2. Be specific for the best results."));
-    console.log(dimPurple(`  3. ${neonCyan("/help")} for more information.`));
+    console.log(dimCyan("  1. Ask questions, edit files, or run commands."));
+    console.log(dimCyan("  2. Be specific for the best results."));
+    console.log(dimCyan(`  3. ${neonCyan("/help")} for more information.`));
     console.log();
-    console.log(neonPurple("─".repeat(cols)));
+    console.log(neonCyan("─".repeat(cols)));
     // Create agent
     const agent = new CodingAgent({
         provider,
@@ -149,22 +147,26 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
                 return val.length > 60 ? val.slice(0, 60) + "..." : val;
             })
                 .join(", ");
-            console.log(`\n${neonPurple("●")} ${neonPink.bold(name)}(${dimPurple(argStr)})`);
+            console.log(`\n${neonCyan("●")} ${neonPink.bold(name)}(${dimCyan(argStr)})`);
         },
         onToolResult: (name, result) => {
             const lines = result.split("\n").length;
             const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-            console.log(dimPurple(`  └ ${lines} lines (${size})`));
+            console.log(dimCyan(`  └ ${lines} lines (${size})`));
         },
     });
     // REPL using stdin directly
     const rl = createInterface({ input: process.stdin, output: process.stdout });
+    function drawInputBoxBottom() {
+        console.log(neonCyan("└" + "─".repeat(cols - 2) + "┘"));
+    }
     function drawInputBox() {
         console.log();
         console.log(neonCyan("┌" + "─".repeat(cols - 2) + "┐"));
-    }
-    function drawInputBoxBottom() {
-        console.log(neonCyan("└" + "─".repeat(cols - 2) + "┘"));
+        // Move cursor up after printing bottom so user types inside the box
+        process.stdout.write(neonCyan("└" + "─".repeat(cols - 2) + "┘"));
+        // Move cursor up 1 line, to the input line
+        process.stdout.write(`\x1B[1A\r`);
     }
     function prompt() {
         drawInputBox();
@@ -174,7 +176,8 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
                 prompt();
                 return;
             }
-            drawInputBoxBottom();
+            // Move cursor past the pre-drawn bottom border
+            process.stdout.write("\x1B[1B\r\n");
             // Commands
             if (input === "/quit" || input === "/exit") {
                 console.log(neonPink("\n  Stay maxxed! 💪\n"));
@@ -184,10 +187,10 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
             if (input === "/help") {
                 console.log(`
   ${neonPink.bold("Commands:")}
-    ${neonCyan("/help")}     ${dimPurple("— Show this help")}
-    ${neonCyan("/reset")}    ${dimPurple("— Clear conversation history")}
-    ${neonCyan("/context")}  ${dimPurple("— Show current context size")}
-    ${neonCyan("/quit")}     ${dimPurple("— Exit CODEMAXXING")}
+    ${neonCyan("/help")}     ${dimCyan("— Show this help")}
+    ${neonCyan("/reset")}    ${dimCyan("— Clear conversation history")}
+    ${neonCyan("/context")}  ${dimCyan("— Show current context size")}
+    ${neonCyan("/quit")}     ${dimCyan("— Exit CODEMAXXING")}
 `);
                 prompt();
                 return;
@@ -199,7 +202,7 @@ ${dimPurple(`                                       v${VERSION}`)}  ${neonCyan("
                 return;
             }
             if (input === "/context") {
-                console.log(dimPurple(`  Messages in context: ${agent.getContextLength()}\n`));
+                console.log(dimCyan(`  Messages in context: ${agent.getContextLength()}\n`));
                 prompt();
                 return;
             }
