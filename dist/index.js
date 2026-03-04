@@ -95,7 +95,28 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
         prompt: chalk.bold.white("> "),
     });
     rl.prompt();
-    rl.on("line", async (line) => {
+    const spinnerMessages = [
+        "Locking in...",
+        "Cooking...",
+        "Maxxing...",
+        "In the zone...",
+        "Yapping...",
+        "Frame mogging...",
+        "Jester gooning...",
+        "Gooning...",
+        "Doing back flips...",
+        "Jester maxxing...",
+        "Getting baked...",
+        "Blasting tren...",
+        "Pumping...",
+        "Wondering if I should actually do this...",
+        "Hacking the main frame...",
+        "Codemaxxing...",
+        "Vibe coding...",
+        "Running a marathon...",
+    ];
+    let processing = false;
+    rl.on("line", (line) => {
         const input = line.trim();
         if (!input) {
             rl.prompt();
@@ -107,53 +128,51 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
             rl.prompt();
             return;
         }
-        // Send to agent
-        const spinnerMessages = [
-            "Locking in...",
-            "Cooking...",
-            "Maxxing...",
-            "In the zone...",
-            "Yapping...",
-            "Frame mogging...",
-            "Jester gooning...",
-            "Gooning...",
-            "Doing back flips...",
-            "Jester maxxing...",
-            "Getting baked...",
-            "Blasting tren...",
-            "Pumping...",
-            "Wondering if I should actually do this...",
-            "Hacking the main frame...",
-            "Codemaxxing...",
-            "Vibe coding...",
-            "Running a marathon...",
-        ];
+        // Prevent concurrent requests
+        if (processing)
+            return;
+        processing = true;
         const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
         const spinner = ora({ text: randomMsg, color: "cyan" }).start();
-        try {
-            const response = await agent.chat(input);
+        agent.chat(input)
+            .then((response) => {
             spinner.stop();
             console.log();
-            console.log(formatResponse(response));
+            console.log(formatResponse(stripThinking(response)));
             console.log();
             drawStatusBar();
             console.log();
             drawInputBox();
-        }
-        catch (err) {
+        })
+            .catch((err) => {
             spinner.fail(`Error: ${err.message}`);
             console.log(chalk.red(`  Check if your LLM server is running and the model is loaded.`));
             console.log();
             drawInputBox();
-        }
-        rl.prompt();
+        })
+            .finally(() => {
+            processing = false;
+            rl.prompt();
+        });
+    });
+    // Handle Ctrl+C gracefully
+    process.on("SIGINT", () => {
+        cleanup();
     });
     rl.on("close", () => {
-        console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
-        // Restore original terminal screen buffer
-        process.stdout.write("\x1B[?1049l");
-        process.exit(0);
+        cleanup();
     });
+}
+function cleanup() {
+    console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
+    process.stdout.write("\x1B[?1049l");
+    process.exit(0);
+}
+/**
+ * Strip <think>...</think> tags from model responses (Qwen reasoning mode)
+ */
+function stripThinking(text) {
+    return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
 }
 function handleCommand(input, agent) {
     const cmd = input.toLowerCase();
@@ -176,9 +195,7 @@ function handleCommand(input, agent) {
             break;
         case "/quit":
         case "/exit":
-            console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
-            process.stdout.write("\x1B[?1049l");
-            process.exit(0);
+            cleanup();
         default:
             console.log(chalk.yellow(`  Unknown command: ${input}\n`));
     }
