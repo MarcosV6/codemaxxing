@@ -4,7 +4,7 @@ import chalk from "chalk";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
 const VERSION = "0.1.0";
-const SPINNER_FRAMES = ["💪", "🔥", "💪", "⚡", "💪", "🔥", "💪", "⚡"];
+const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 const SPINNER_MESSAGES = [
     "Locking in...",
     "Cooking...",
@@ -31,9 +31,9 @@ function startSpinner(msg) {
     const interval = setInterval(() => {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const frame = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
-        process.stdout.write(`\r  ${frame} ${chalk.bold.white(msg)} ${chalk.dim(`[${elapsed}s]`)}`);
+        process.stdout.write(`\r  ${chalk.cyan(frame)} ${chalk.bold.white(msg)} ${chalk.dim(`[${elapsed}s]`)}`);
         i++;
-    }, 300);
+    }, 80);
     return {
         stop: () => {
             clearInterval(interval);
