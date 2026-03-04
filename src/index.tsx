@@ -63,6 +63,7 @@ function App() {
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [ready, setReady] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState<string[]>([]);
+  const [ctrlCPressed, setCtrlCPressed] = useState(false);
 
   // Initialize agent
   useEffect(() => {
@@ -163,9 +164,15 @@ function App() {
     setLoading(false);
   }, [agent, exit]);
 
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      exit();
+  useInput((inputChar, key) => {
+    if (key.ctrl && inputChar === "c") {
+      if (ctrlCPressed) {
+        exit();
+      } else {
+        setCtrlCPressed(true);
+        addMsg("info", "Press Ctrl+C again to exit.");
+        setTimeout(() => setCtrlCPressed(false), 3000);
+      }
     }
   });
 
@@ -282,4 +289,4 @@ function App() {
 // Clear screen before render
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
 
-render(<App />);
+render(<App />, { exitOnCtrlC: false });
