@@ -59,7 +59,6 @@ function drawInputBox(rl) {
     process.stdout.write(neonCyan("└" + "─".repeat(c - 2) + "┘"));
     // Position cursor inside the box
     moveTo(boxTop + 1, 3);
-    clearScrollback();
 }
 // Track which content row we're on (in the scroll region)
 let contentRow = 1;

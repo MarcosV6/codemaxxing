@@ -77,8 +77,6 @@ function drawInputBox(rl?: any) {
 
   // Position cursor inside the box
   moveTo(boxTop + 1, 3);
-
-  clearScrollback();
 }
 
 // Track which content row we're on (in the scroll region)
