@@ -118,7 +118,7 @@ function startSpinner(msg: string): { stop: () => string } {
     setScrollRegion(1, scrollBottom);
     moveTo(contentRow > scrollBottom ? scrollBottom : contentRow, 1);
     clearLine();
-    process.stdout.write(`  ${neonCyan(frame)} ${chalk.bold.hex("#00FFFF")(msg)} ${dimCyan(`[${elapsed}s]`)}`);
+    process.stdout.write(`  ${neonCyan(frame)} ${chalk.bold.hex("#FF00FF")(msg)} ${dimCyan(`[${elapsed}s]`)}`);
     setScrollRegion(1, r);
     drawInputBox();
     i++;
@@ -333,6 +333,8 @@ async function main() {
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
+    // Ensure stdin is flowing for async operations (HTTP requests)
+    process.stdin.resume();
 
     if (!input) {
       prompt();
