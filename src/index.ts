@@ -11,19 +11,17 @@ const VERSION = "0.1.0";
 async function main() {
   // Banner
   const banner = `
-${chalk.bold.magenta("   ██████╗ ██████╗ ██████╗ ███████╗")}
-${chalk.bold.magenta("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝")}
-${chalk.bold.cyan("  ██║     ██║   ██║██║  ██║█████╗  ")}
-${chalk.bold.cyan("  ██║     ██║   ██║██║  ██║██╔══╝  ")}
-${chalk.bold.blue("  ╚██████╗╚██████╔╝██████╔╝███████╗")}
-${chalk.bold.blue("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝")}
-${chalk.bold.magenta("  ███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ")}
-${chalk.bold.magenta("  ████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
-${chalk.bold.cyan("  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
-${chalk.bold.cyan("  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║")}
-${chalk.bold.blue("  ██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
-${chalk.bold.blue("  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
-${chalk.gray(`                                              v${VERSION}`)}
+${chalk.hex("#FF6B6B")("        ╔══════════════════════════════════════════════╗")}
+${chalk.hex("#FF6B6B")("        ║")}  ${chalk.bold.hex("#FF4444")("░█████╗░░█████╗░██████╗░███████╗")}  ${chalk.hex("#FF6B6B")("║")}
+${chalk.hex("#FF8E53")("        ║")}  ${chalk.bold.hex("#FF6644")("██╔══██╗██╔══██╗██╔══██╗██╔════╝")}  ${chalk.hex("#FF8E53")("║")}
+${chalk.hex("#FFB347")("        ║")}  ${chalk.bold.hex("#FF8844")("██║░░╚═╝██║░░██║██║░░██║█████╗░░")}  ${chalk.hex("#FFB347")("║")}
+${chalk.hex("#FFD93D")("        ║")}  ${chalk.bold.hex("#FFAA44")("██║░░██╗██║░░██║██║░░██║██╔══╝░░")}  ${chalk.hex("#FFD93D")("║")}
+${chalk.hex("#6BCB77")("        ║")}  ${chalk.bold.hex("#44CC66")("╚█████╔╝╚█████╔╝██████╔╝███████╗")}  ${chalk.hex("#6BCB77")("║")}
+${chalk.hex("#4D96FF")("        ║")}  ${chalk.bold.hex("#4488FF")("░╚════╝░░╚════╝░╚═════╝░╚══════╝")}  ${chalk.hex("#4D96FF")("║")}
+${chalk.hex("#4D96FF")("        ╠══════════════════════════════════════════════╣")}
+${chalk.hex("#9B59B6")("        ║")}  ${chalk.bold.hex("#E74C3C")("M")}${chalk.bold.hex("#E67E22")("A")}${chalk.bold.hex("#F1C40F")("X")}${chalk.bold.hex("#2ECC71")("X")}${chalk.bold.hex("#3498DB")("I")}${chalk.bold.hex("#9B59B6")("N")}${chalk.bold.hex("#E74C3C")("G")}  ${chalk.dim("your code. your model. no excuses.")}  ${chalk.hex("#9B59B6")("║")}
+${chalk.hex("#9B59B6")("        ╚══════════════════════════════════════════════╝")}
+${chalk.gray(`                                                    v${VERSION}`)}
 `;
   console.log(banner);
 
