@@ -84,7 +84,7 @@ export function buildProjectContext(cwd: string): string {
  * Get the system prompt for the coding agent
  */
 export function getSystemPrompt(projectContext: string): string {
-  return `You are Pierre Code, an AI coding assistant running in the terminal.
+  return `You are CODEMAXXING, an AI coding assistant running in the terminal.
 
 You help developers understand, write, debug, and refactor code. You have access to tools that let you read files, write files, list directories, search code, and run shell commands.
 

@@ -1,10 +1,10 @@
 {
-  "name": "pierre-code",
+  "name": "codemaxxing",
   "version": "0.1.0",
-  "description": "Open-source terminal coding agent. Connect any LLM, code anywhere.",
+  "description": "Open-source terminal coding agent. Connect any LLM. Max your code.",
   "main": "dist/index.js",
   "bin": {
-    "pierre": "./dist/index.js"
+    "codemaxxing": "./dist/index.js"
   },
   "type": "module",
   "scripts": {

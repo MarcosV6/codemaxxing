@@ -12,10 +12,10 @@ async function main() {
   // Banner
   console.log(
     chalk.bold.cyan(`
-  ╔═══════════════════════════════╗
-  ║   ${chalk.white("Pierre Code")} 🎩  v${VERSION}        ║
-  ║   ${chalk.gray("Your code. Your model.")}        ║
-  ╚═══════════════════════════════╝
+  ╔═══════════════════════════════════╗
+  ║   ${chalk.white("CODEMAXXING")} 💪  v${VERSION}          ║
+  ║   ${chalk.gray("Your code. Your model. Max it.")}   ║
+  ╚═══════════════════════════════════╝
 `)
   );
 
@@ -81,7 +81,7 @@ async function main() {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.cyan("pierre > "),
+    prompt: chalk.cyan("codemaxxing > "),
   });
 
   rl.prompt();
@@ -123,7 +123,7 @@ async function main() {
   });
 
   rl.on("close", () => {
-    console.log(chalk.gray("\n  Bye! 🎩\n"));
+    console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
     process.exit(0);
   });
 }
@@ -157,7 +157,7 @@ function handleCommand(input: string, agent: CodingAgent) {
 
     case "/quit":
     case "/exit":
-      console.log(chalk.gray("\n  Bye! 🎩\n"));
+      console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
       process.exit(0);
 
     default:

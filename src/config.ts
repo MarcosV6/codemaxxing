@@ -17,7 +17,7 @@ export interface PierreConfig {
   };
 }
 
-const CONFIG_DIR = join(homedir(), ".pierre");
+const CONFIG_DIR = join(homedir(), ".codemaxxing");
 const CONFIG_FILE = join(CONFIG_DIR, "settings.json");
 
 const DEFAULT_CONFIG: PierreConfig = {

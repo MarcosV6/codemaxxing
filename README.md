@@ -1,10 +1,10 @@
-# Pierre Code 🎩
+# CODEMAXXING 💪
 
-An open-source terminal coding agent. Connect any LLM, code anywhere.
+An open-source terminal coding agent. Connect any LLM. Max your code.
 
 ## What is this?
 
-Pierre Code is a terminal-based AI coding assistant that works with **any OpenAI-compatible API** — local models via LM Studio, Ollama, or cloud providers like OpenAI, Anthropic, and more.
+CODEMAXXING is a terminal-based AI coding assistant that works with **any OpenAI-compatible API** — local models via LM Studio, Ollama, or cloud providers like OpenAI, Anthropic, and more.
 
 No vendor lock-in. No subscriptions required. Your model, your rules.
 
@@ -12,16 +12,16 @@ No vendor lock-in. No subscriptions required. Your model, your rules.
 
 ```bash
 # Install globally
-npm install -g pierre-code
+npm install -g codemaxxing
 
 # Run with local LM Studio
-pierre --provider http://localhost:1234/v1
+codemaxxing --provider http://localhost:1234/v1
 
 # Run with OpenAI
-pierre --provider openai --api-key sk-...
+codemaxxing --provider openai --api-key sk-...
 
 # Auto-detect local LM Studio
-pierre --local
+codemaxxing --local
 ```
 
 ## Features
@@ -46,14 +46,14 @@ pierre --local
 
 ## How It Works
 
-1. Pierre Code connects to your chosen LLM endpoint
+1. CODEMAXXING connects to your chosen LLM endpoint
 2. It scans your project structure for context
 3. You describe what you want in natural language
 4. It reads relevant files, proposes changes, and applies them with your approval
 
 ## Configuration
 
-Create `~/.pierre/settings.json`:
+Create `~/.codemaxxing/settings.json`:
 
 ```json
 {
@@ -85,4 +85,4 @@ MIT — do whatever you want with it.
 
 ---
 
-Built by [Marcos Vallejo](https://github.com/MarcosV6) 🎩
+Built by [Marcos Vallejo](https://github.com/MarcosV6) 💪
