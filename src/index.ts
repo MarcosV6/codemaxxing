@@ -30,16 +30,20 @@ const SPINNER_MESSAGES = [
   "Running a marathon...",
 ];
 
-function startSpinner(msg: string): { stop: () => void } {
+function startSpinner(msg: string): { stop: () => string } {
   let i = 0;
+  const startTime = Date.now();
   const interval = setInterval(() => {
-    process.stdout.write(`\r${chalk.cyan(SPINNER_FRAMES[i % SPINNER_FRAMES.length])} ${msg}`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+    process.stdout.write(`\r${chalk.red("✱")} ${chalk.dim(msg)} ${chalk.dim(`(${elapsed}s · esc to interrupt)`)}`);
     i++;
-  }, 80);
+  }, 100);
   return {
     stop: () => {
       clearInterval(interval);
-      process.stdout.write("\r" + " ".repeat(msg.length + 4) + "\r");
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      process.stdout.write("\r" + " ".repeat(80) + "\r");
+      return elapsed;
     },
   };
 }
@@ -49,18 +53,35 @@ function stripThinking(text: string): string {
 }
 
 function formatResponse(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("```")) return chalk.dim(line);
-      if (line.startsWith("# ")) return chalk.bold.white(line);
-      if (line.startsWith("## ")) return chalk.bold.white(line);
-      if (line.startsWith("- ")) return `  ${line}`;
-      if (line.startsWith("✅")) return chalk.green(line);
-      if (line.startsWith("❌")) return chalk.red(line);
-      return `  ${line}`;
-    })
-    .join("\n");
+  const lines = text.split("\n");
+  const formatted: string[] = [];
+  let inCodeBlock = false;
+
+  // Add bullet point to first line
+  formatted.push(chalk.white("● ") + lines[0]);
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      formatted.push(chalk.dim(`  ${line}`));
+    } else if (inCodeBlock) {
+      formatted.push(chalk.cyan(`  ${line}`));
+    } else if (line.startsWith("# ")) {
+      formatted.push(chalk.bold.white(`  ${line}`));
+    } else if (line.startsWith("## ")) {
+      formatted.push(chalk.bold.white(`  ${line}`));
+    } else if (line.startsWith("- ")) {
+      formatted.push(`  ${line}`);
+    } else if (line.startsWith("✅")) {
+      formatted.push(chalk.green(`  ${line}`));
+    } else if (line.startsWith("❌")) {
+      formatted.push(chalk.red(`  ${line}`));
+    } else {
+      formatted.push(`  ${line}`);
+    }
+  }
+  return formatted.join("\n");
 }
 
 async function main() {
@@ -127,22 +148,37 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
       const argStr = Object.entries(args)
         .map(([k, v]) => {
           const val = String(v);
-          return `${k}=${val.length > 50 ? val.slice(0, 50) + "..." : val}`;
+          return val.length > 60 ? val.slice(0, 60) + "..." : val;
         })
         .join(", ");
-      console.log(chalk.dim(`  🔧 ${name}(${argStr})`));
+      console.log(`\n${chalk.green("●")} ${chalk.bold(name)}(${chalk.dim(argStr)})`);
     },
     onToolResult: (name, result) => {
-      const preview = result.length > 200 ? result.slice(0, 200) + "..." : result;
-      console.log(chalk.dim(`  ✅ ${name} → ${preview.split("\n")[0]}`));
+      const lines = result.split("\n").length;
+      const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
+      console.log(chalk.dim(`  └ ${lines} lines (${size})`));
     },
   });
 
   // REPL using stdin directly
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  function drawInputBox() {
+    const boxWidth = Math.min(cols, 80);
+    console.log();
+    console.log(chalk.dim("┌" + "─".repeat(boxWidth - 2) + "┐"));
+  }
+
+  function drawInputEnd() {
+    const boxWidth = Math.min(cols, 80);
+    console.log(chalk.dim("└" + "─".repeat(boxWidth - 2) + "┘"));
+    const approveMode = config.defaults.autoApprove ? chalk.green("auto-approve on") : chalk.dim("manual approve");
+    console.log(chalk.dim(`  ►► ${approveMode} (shift+tab to cycle)`));
+  }
+
   function prompt() {
-    rl.question(chalk.bold.white("\n> "), async (input) => {
+    drawInputBox();
+    rl.question(chalk.bold.white("│ > "), async (input) => {
       input = input.trim();
 
       if (!input) {
@@ -185,20 +221,10 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
 
       try {
         const response = await agent.chat(input);
-        spinner.stop();
+        const elapsed = spinner.stop();
         console.log();
         console.log(formatResponse(stripThinking(response)));
         console.log();
-
-        // Status bar
-        const statusLine = chalk.cyan("─".repeat(cols));
-        console.log(statusLine);
-        const modelStr = provider.model;
-        const gap1 = Math.max(1, Math.floor((cols - cwdShort.length - 12 - modelStr.length) / 2));
-        const gap2 = Math.max(1, cols - cwdShort.length - 12 - modelStr.length - gap1);
-        const sandbox = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.red("no sandbox");
-        console.log(`${chalk.cyan(cwdShort)}${" ".repeat(gap1)}${sandbox}${" ".repeat(gap2)}${chalk.magenta(modelStr)}`);
-        console.log(statusLine);
       } catch (err: any) {
         spinner.stop();
         console.log(chalk.red(`\n  Error: ${err.message}`));
