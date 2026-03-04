@@ -32,7 +32,8 @@ const INPUT_BOX_HEIGHT = 3;
 
 function enterAltScreen() {
   process.stdout.write("\x1B[?1049h"); // enter alternate screen
-  process.stdout.write("\x1B[2J");     // clear
+  process.stdout.write("\x1B[2J");     // clear visible
+  process.stdout.write("\x1B[3J");     // clear scrollback buffer
   process.stdout.write("\x1B[H");      // cursor home
 }
 
