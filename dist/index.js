@@ -154,6 +154,10 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
     function drawInputBox() {
         console.log();
         console.log(chalk.dim("┌" + "─".repeat(cols - 2) + "┐"));
+        // The bottom of the box gets drawn after the user types and hits enter
+    }
+    function drawInputBoxBottom() {
+        console.log(chalk.dim("└" + "─".repeat(cols - 2) + "┘"));
     }
     function prompt() {
         drawInputBox();
@@ -163,6 +167,7 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
                 prompt();
                 return;
             }
+            drawInputBoxBottom();
             // Commands
             if (input === "/quit" || input === "/exit") {
                 console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
