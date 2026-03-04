@@ -10,14 +10,22 @@ const VERSION = "0.1.0";
 
 async function main() {
   // Banner
-  console.log(
-    chalk.bold.cyan(`
-  ╔═══════════════════════════════════╗
-  ║   ${chalk.white("CODEMAXXING")} 💪  v${VERSION}          ║
-  ║   ${chalk.gray("Your code. Your model. Max it.")}   ║
-  ╚═══════════════════════════════════╝
-`)
-  );
+  const banner = `
+${chalk.bold.magenta("   ██████╗ ██████╗ ██████╗ ███████╗")}
+${chalk.bold.magenta("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝")}
+${chalk.bold.cyan("  ██║     ██║   ██║██║  ██║█████╗  ")}
+${chalk.bold.cyan("  ██║     ██║   ██║██║  ██║██╔══╝  ")}
+${chalk.bold.blue("  ╚██████╗╚██████╔╝██████╔╝███████╗")}
+${chalk.bold.blue("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝")}
+${chalk.bold.magenta("  ███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ")}
+${chalk.bold.magenta("  ████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
+${chalk.bold.cyan("  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
+${chalk.bold.cyan("  ██║╚██╔╝██║██╔══██║ ██╔██╗  ██╔██╗ ██║██║╚██╗██║██║   ██║")}
+${chalk.bold.blue("  ██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
+${chalk.bold.blue("  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
+${chalk.gray(`                                              v${VERSION}`)}
+`;
+  console.log(banner);
 
   // Load config
   const config = loadConfig();
@@ -48,13 +56,26 @@ async function main() {
   }
 
   const cwd = process.cwd();
-  console.log(`  ${chalk.gray("Working dir:")} ${chalk.blue(cwd)}`);
+
+  // Tips
+  console.log(chalk.white.bold("  Tips for getting started:"));
+  console.log(chalk.gray("  1. Ask questions, edit files, or run commands."));
+  console.log(chalk.gray("  2. Be specific for the best results."));
+  console.log(chalk.gray(`  3. ${chalk.white("/help")} for more information.`));
   console.log();
-  console.log(
-    chalk.gray(
-      "  Type your request. /help for commands. Ctrl+C to exit.\n"
-    )
-  );
+
+  // Status bar
+  const cols = process.stdout.columns || 80;
+  const line = chalk.dim("─".repeat(cols));
+  console.log(line);
+  const cwdShort = cwd.replace(process.env.HOME || "", "~");
+  const statusLeft = chalk.cyan(cwdShort);
+  const statusCenter = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.yellow("manual approve");
+  const statusRight = chalk.magenta(`${provider.model}`);
+  const padding = Math.max(1, Math.floor((cols - cwdShort.length - 14 - provider.model.length) / 2));
+  console.log(`  ${statusLeft}${" ".repeat(padding)}${statusCenter}${" ".repeat(padding)}${statusRight}`);
+  console.log(line);
+  console.log();
 
   // Create agent
   const agent = new CodingAgent({
@@ -81,7 +102,7 @@ async function main() {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.cyan("codemaxxing > "),
+    prompt: chalk.bold.magenta("  > "),
   });
 
   rl.prompt();
