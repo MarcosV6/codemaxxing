@@ -28,6 +28,9 @@ function enterAltScreen() {
     process.stdout.write("\x1B[3J"); // clear scrollback buffer
     process.stdout.write("\x1B[H"); // cursor home
 }
+function clearScrollback() {
+    process.stdout.write("\x1B[3J"); // clear scrollback buffer
+}
 function exitAltScreen() {
     process.stdout.write("\x1B[?1049l"); // restore original screen
 }
@@ -56,6 +59,7 @@ function drawInputBox(rl) {
     process.stdout.write(neonCyan("└" + "─".repeat(c - 2) + "┘"));
     // Position cursor inside the box
     moveTo(boxTop + 1, 3);
+    clearScrollback();
 }
 // Track which content row we're on (in the scroll region)
 let contentRow = 1;
@@ -246,6 +250,8 @@ async function main() {
     }
     function prompt() {
         drawInputBox();
+        // Draw the prompt inside the box immediately
+        redrawInputLine("");
         // We read a line manually
         const chunks = [];
         const onData = (data) => {
