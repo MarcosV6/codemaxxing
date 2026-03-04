@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import React, { useState, useEffect, useCallback } from "react";
-import { render, Box, Text, useInput, useApp, useStdout } from "ink";
+import { render, Box, Text, Static, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
@@ -18,7 +18,7 @@ const SPINNER_MESSAGES = [
   "Hacking the main frame...", "Codemaxxing...", "Vibe coding...", "Running a marathon...",
 ];
 
-// ── Neon Spinner Component ──
+// ── Neon Spinner ──
 function NeonSpinner({ message }: { message: string }) {
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -34,105 +34,61 @@ function NeonSpinner({ message }: { message: string }) {
 
   return (
     <Text>
-      {"  "}
-      <Text color="#00FFFF">{SPINNER_FRAMES[frame]}</Text>
-      {" "}
-      <Text bold color="#FF00FF">{message}</Text>
-      {" "}
-      <Text color="#008B8B">[{elapsed}s]</Text>
+      {"  "}<Text color="#00FFFF">{SPINNER_FRAMES[frame]}</Text>
+      {" "}<Text bold color="#FF00FF">{message}</Text>
+      {" "}<Text color="#008B8B">[{elapsed}s]</Text>
     </Text>
   );
 }
 
-// ── Banner Component ──
-function Banner() {
-  const codeLines = [
-    "                     _(`-')    (`-')  _ ",
-    " _             .->  ( (OO ).-> ( OO).-/ ",
-    " \\-,-----.(`-')----. \\    .'_ (,------. ",
-    "  |  .--./( OO).-.  ''`'-..__) |  .---' ",
-    " /_) (`-')( _) | |  ||  |  ' |(|  '--.  ",
-    " ||  |OO ) \\|  |)|  ||  |  / : |  .--'  ",
-    "(_'  '--'\\  '  '-'  '|  '-'  / |  `---. ",
-    "   `-----'   `-----' `------'  `------' ",
-  ];
-
-  const maxxingLines = [
-    "<-. (`-')   (`-')  _  (`-')      (`-')      _     <-. (`-')_            ",
-    "   \\(OO )_  (OO ).-/  (OO )_.->  (OO )_.-> (_)       \\( OO) )    .->    ",
-    ",--./  ,-.) / ,---.   (_| \\_)--. (_| \\_)--.,-(`-'),--./ ,--/  ,---(`-') ",
-    "|   `.'   | | \\ /`.\\  \\  `.'  /  \\  `.'  / | ( OO)|   \\ |  | '  .-(OO ) ",
-    "|  |'.'|  | '-'|_.' |  \\    .')   \\    .') |  |  )|  . '|  |)|  | .-, \\ ",
-    "|  |   |  |(|  .-.  |  .'    \\    .'    \\ (|  |_/ |  |\\    | |  | '.(_/ ",
-    "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
-    "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
-  ];
-
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      {codeLines.map((line, i) => (
-        <Text key={`c${i}`} color="#00FFFF">{line}</Text>
-      ))}
-      {maxxingLines.map((line, i) => (
-        <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
-      ))}
-      <Text>
-        <Text color="#008B8B">{"                            v" + VERSION}</Text>
-        {"  "}
-        <Text color="#00FFFF">💪</Text>
-        {"  "}
-        <Text dimColor>your code. your model. no excuses.</Text>
-      </Text>
-    </Box>
-  );
-}
-
 // ── Message Types ──
-interface ContentLine {
+interface ChatMessage {
   id: number;
-  type: "text" | "user" | "response" | "tool" | "tool-result" | "error" | "info";
+  type: "user" | "response" | "tool" | "tool-result" | "error" | "info";
   text: string;
 }
 
-let lineId = 0;
+let msgId = 0;
 
-// ── Main App Component ──
+// ── Main App ──
 function App() {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const termHeight = stdout?.rows ?? 24;
   const termWidth = stdout?.columns ?? 80;
 
   const [input, setInput] = useState("");
-  const [lines, setLines] = useState<ContentLine[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [spinnerMsg, setSpinnerMsg] = useState("");
   const [agent, setAgent] = useState<CodingAgent | null>(null);
-  const [providerInfo, setProviderInfo] = useState({ url: "", model: "" });
   const [ready, setReady] = useState(false);
+  const [connectionInfo, setConnectionInfo] = useState<string[]>([]);
 
   // Initialize agent
   useEffect(() => {
     (async () => {
       const config = loadConfig();
       let provider = config.provider;
+      const info: string[] = [];
 
       if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
-        addLine("info", "Detecting local LLM server...");
+        info.push("Detecting local LLM server...");
+        setConnectionInfo([...info]);
         const detected = await detectLocalProvider();
         if (detected) {
           provider = detected;
-          addLine("info", `✔ Connected to ${provider.baseUrl} → ${provider.model}`);
+          info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
+          setConnectionInfo([...info]);
         } else {
-          addLine("error", "✗ No local LLM server found. Start LM Studio or Ollama.");
+          info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
+          setConnectionInfo([...info]);
           return;
         }
       } else {
-        addLine("info", `Provider: ${provider.baseUrl}`);
-        addLine("info", `Model: ${provider.model}`);
+        info.push(`Provider: ${provider.baseUrl}`);
+        info.push(`Model: ${provider.model}`);
+        setConnectionInfo([...info]);
       }
-
-      setProviderInfo({ url: provider.baseUrl, model: provider.model });
 
       const cwd = process.cwd();
       const a = new CodingAgent({
@@ -147,12 +103,12 @@ function App() {
               return val.length > 60 ? val.slice(0, 60) + "..." : val;
             })
             .join(", ");
-          addLine("tool", `${name}(${argStr})`);
+          addMsg("tool", `${name}(${argStr})`);
         },
-        onToolResult: (name, result) => {
+        onToolResult: (_name, result) => {
           const numLines = result.split("\n").length;
           const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-          addLine("tool-result", `└ ${numLines} lines (${size})`);
+          addMsg("tool-result", `└ ${numLines} lines (${size})`);
         },
       });
 
@@ -161,96 +117,133 @@ function App() {
     })();
   }, []);
 
-  function addLine(type: ContentLine["type"], text: string) {
-    setLines((prev) => [...prev, { id: lineId++, type, text }]);
+  function addMsg(type: ChatMessage["type"], text: string) {
+    setMessages((prev) => [...prev, { id: msgId++, type, text }]);
   }
 
   function stripThinking(text: string): string {
     return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
   }
 
-  // Handle submit
   const handleSubmit = useCallback(async (value: string) => {
     const trimmed = value.trim();
     setInput("");
     if (!trimmed || !agent) return;
 
-    addLine("user", trimmed);
+    addMsg("user", trimmed);
 
-    // Commands
     if (trimmed === "/quit" || trimmed === "/exit") {
       exit();
       return;
     }
     if (trimmed === "/help") {
-      addLine("info", "Commands: /help, /reset, /context, /quit");
+      addMsg("info", "Commands: /help · /reset · /context · /quit");
       return;
     }
     if (trimmed === "/reset") {
       agent.reset();
-      addLine("info", "✅ Conversation reset.");
+      addMsg("info", "✅ Conversation reset.");
       return;
     }
     if (trimmed === "/context") {
-      addLine("info", `Messages in context: ${agent.getContextLength()}`);
+      addMsg("info", `Messages in context: ${agent.getContextLength()}`);
       return;
     }
 
-    // Chat
     setLoading(true);
     setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
 
     try {
       const response = await agent.chat(trimmed);
-      addLine("response", stripThinking(response));
+      addMsg("response", stripThinking(response));
     } catch (err: any) {
-      addLine("error", `Error: ${err.message}`);
+      addMsg("error", `Error: ${err.message}`);
     }
 
     setLoading(false);
   }, [agent, exit]);
 
-  // Ctrl+C handler
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       exit();
     }
   });
 
-  // Calculate visible content area
-  // Reserve: banner (~18 lines) + input box (3 lines) + some padding
-  const inputBoxHeight = 3;
-  const contentHeight = Math.max(5, termHeight - inputBoxHeight - 1);
-
-  // Get visible lines (last N that fit)
-  const visibleLines = lines.slice(-contentHeight);
+  // CODE banner lines
+  const codeLines = [
+    "                     _(`-')    (`-')  _ ",
+    " _             .->  ( (OO ).-> ( OO).-/ ",
+    " \\-,-----.(`-')----. \\    .'_ (,------. ",
+    "  |  .--./( OO).-.  ''`'-..__) |  .---' ",
+    " /_) (`-')( _) | |  ||  |  ' |(|  '--.  ",
+    " ||  |OO ) \\|  |)|  ||  |  / : |  .--'  ",
+    "(_'  '--'\\  '  '-'  '|  '-'  / |  `---. ",
+    "   `-----'   `-----' `------'  `------' ",
+  ];
+  const maxxingLines = [
+    "<-. (`-')   (`-')  _  (`-')      (`-')      _     <-. (`-')_            ",
+    "   \\(OO )_  (OO ).-/  (OO )_.->  (OO )_.-> (_)       \\( OO) )    .->    ",
+    ",--./  ,-.) / ,---.   (_| \\_)--. (_| \\_)--.,-(`-'),--./ ,--/  ,---(`-') ",
+    "|   `.'   | | \\ /`.\\  \\  `.'  /  \\  `.'  / | ( OO)|   \\ |  | '  .-(OO ) ",
+    "|  |'.'|  | '-'|_.' |  \\    .')   \\    .') |  |  )|  . '|  |)|  | .-, \\ ",
+    "|  |   |  |(|  .-.  |  .'    \\    .'    \\ (|  |_/ |  |\\    | |  | '.(_/ ",
+    "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
+    "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
+  ];
 
   return (
-    <Box flexDirection="column" height={termHeight}>
-      {/* Content area */}
-      <Box flexDirection="column" flexGrow={1}>
-        <Banner />
-        {lines.length === 0 && (
-          <>
-            <Text color="#00FFFF" bold>  Tips for getting started:</Text>
-            <Text color="#008B8B">  1. Ask questions, edit files, or run commands.</Text>
-            <Text color="#008B8B">  2. Be specific for the best results.</Text>
-            <Text color="#008B8B">  3. <Text color="#00FFFF">/help</Text> for more information.</Text>
-          </>
+    <Box flexDirection="column">
+      {/* ═══ BANNER BOX (rendered once via Static) ═══ */}
+      <Static items={["banner"]}>
+        {() => (
+          <Box key="banner" flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
+            {codeLines.map((line, i) => (
+              <Text key={`c${i}`} color="#00FFFF">{line}</Text>
+            ))}
+            {maxxingLines.map((line, i) => (
+              <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
+            ))}
+            <Text>
+              <Text color="#008B8B">{"                            v" + VERSION}</Text>
+              {"  "}<Text color="#00FFFF">💪</Text>
+              {"  "}<Text dimColor>your code. your model. no excuses.</Text>
+            </Text>
+          </Box>
         )}
+      </Static>
 
-        {visibleLines.map((line) => {
-          switch (line.type) {
+      {/* ═══ CONNECTION INFO BOX ═══ */}
+      {connectionInfo.length > 0 && (
+        <Static items={["conn"]}>
+          {() => (
+            <Box key="conn" flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
+              {connectionInfo.map((line, i) => (
+                <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+              ))}
+            </Box>
+          )}
+        </Static>
+      )}
+
+      {/* ═══ CHAT MESSAGES (each rendered once via Static) ═══ */}
+      <Static items={messages}>
+        {(msg) => {
+          switch (msg.type) {
             case "user":
-              return <Text key={line.id} color="#008B8B">{"  > "}{line.text}</Text>;
+              return (
+                <Box key={msg.id} marginTop={1}>
+                  <Text color="#008B8B">{"  > "}{msg.text}</Text>
+                </Box>
+              );
             case "response":
               return (
-                <Box key={line.id} flexDirection="column" marginTop={1} marginBottom={1}>
-                  {line.text.split("\n").map((l, i) => (
-                    <Text key={i}>
-                      {i === 0 ? <Text color="#00FFFF">● </Text> : "  "}
+                <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
+                  {msg.text.split("\n").map((l, i) => (
+                    <Text key={i} wrap="wrap">
+                      {i === 0 ? <Text color="#00FFFF">● </Text> : <Text>  </Text>}
                       {l.startsWith("```") ? <Text color="#008B8B">{l}</Text> :
                        l.startsWith("# ") || l.startsWith("## ") ? <Text bold color="#FF00FF">{l}</Text> :
+                       l.startsWith("**") ? <Text bold>{l}</Text> :
                        <Text>{l}</Text>}
                     </Text>
                   ))}
@@ -258,54 +251,43 @@ function App() {
               );
             case "tool":
               return (
-                <Text key={line.id}>
-                  <Text color="#00FFFF">● </Text>
-                  <Text bold color="#FF00FF">{line.text}</Text>
-                </Text>
+                <Box key={msg.id}>
+                  <Text><Text color="#00FFFF">  ● </Text><Text bold color="#FF00FF">{msg.text}</Text></Text>
+                </Box>
               );
             case "tool-result":
-              return <Text key={line.id} color="#008B8B">  {line.text}</Text>;
+              return <Text key={msg.id} color="#008B8B">    {msg.text}</Text>;
             case "error":
-              return <Text key={line.id} color="red">  {line.text}</Text>;
+              return <Text key={msg.id} color="red">  {msg.text}</Text>;
             case "info":
-              return <Text key={line.id} color="#008B8B">  {line.text}</Text>;
+              return <Text key={msg.id} color="#008B8B">  {msg.text}</Text>;
             default:
-              return <Text key={line.id}>{line.text}</Text>;
+              return <Text key={msg.id}>{msg.text}</Text>;
           }
-        })}
+        }}
+      </Static>
 
-        {loading && <NeonSpinner message={spinnerMsg} />}
-      </Box>
+      {/* ═══ SPINNER ═══ */}
+      {loading && <NeonSpinner message={spinnerMsg} />}
 
-      {/* Input box - pinned to bottom */}
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderColor="#00FFFF"
-        width={termWidth}
-      >
-        <Box>
-          <Text color="#FF00FF" bold>{"> "}</Text>
-          {ready && !loading ? (
-            <TextInput
-              value={input}
-              onChange={setInput}
-              onSubmit={handleSubmit}
-              placeholder=""
-            />
-          ) : (
-            <Text dimColor>{loading ? "waiting for response..." : "initializing..."}</Text>
-          )}
-        </Box>
+      {/* ═══ INPUT BOX (always at bottom) ═══ */}
+      <Box borderStyle="single" borderColor="#00FFFF" paddingX={1}>
+        <Text color="#FF00FF" bold>{"> "}</Text>
+        {ready && !loading ? (
+          <TextInput
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
+          />
+        ) : (
+          <Text dimColor>{loading ? "waiting for response..." : "initializing..."}</Text>
+        )}
       </Box>
     </Box>
   );
 }
 
-// ── Entry point ──
-// Clear screen before rendering
+// Clear screen before render
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
 
-render(<App />, {
-  exitOnCtrlC: true,
-});
+render(<App />);
