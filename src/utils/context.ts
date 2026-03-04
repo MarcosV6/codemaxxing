@@ -17,7 +17,7 @@ export function buildProjectContext(cwd: string): string {
     "Makefile",
     "Dockerfile",
     "README.md",
-    "PIERRE.md",
+    "CODEMAXXING.md",
   ];
 
   const found: string[] = [];
@@ -30,12 +30,12 @@ export function buildProjectContext(cwd: string): string {
   }
 
   // Read PIERRE.md if it exists (like QWEN.md — project context file)
-  const pierreMd = join(cwd, "PIERRE.md");
-  if (existsSync(pierreMd)) {
-    const content = readFileSync(pierreMd, "utf-8");
-    lines.push("\n--- PIERRE.md (project context) ---");
+  const contextMd = join(cwd, "CODEMAXXING.md");
+  if (existsSync(contextMd)) {
+    const content = readFileSync(contextMd, "utf-8");
+    lines.push("\n--- CODEMAXXING.md (project context) ---");
     lines.push(content.slice(0, 4000));
-    lines.push("--- end PIERRE.md ---");
+    lines.push("--- end CODEMAXXING.md ---");
   }
 
   // Read package.json for project info

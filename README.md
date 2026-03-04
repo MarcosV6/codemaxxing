@@ -2,58 +2,39 @@
 
 An open-source terminal coding agent. Connect any LLM. Max your code.
 
-## What is this?
+## Install
 
-CODEMAXXING is a terminal-based AI coding assistant that works with **any OpenAI-compatible API** — local models via LM Studio, Ollama, or cloud providers like OpenAI, Anthropic, and more.
+```bash
+npm install -g codemaxxing
+```
 
-No vendor lock-in. No subscriptions required. Your model, your rules.
+Or via source:
+
+```bash
+git clone https://github.com/MarcosV6/codemaxxing.git
+cd codemaxxing
+npm install
+npm install -g .
+```
 
 ## Quick Start
 
 ```bash
-# Install globally
-npm install -g codemaxxing
-
-# Run with local LM Studio
-codemaxxing --provider http://localhost:1234/v1
-
-# Run with OpenAI
-codemaxxing --provider openai --api-key sk-...
-
-# Auto-detect local LM Studio
-codemaxxing --local
+# Start CODEMAXXING (auto-detects local LLM servers)
+codemaxxing
 ```
 
-## Features
+On first run, you'll be prompted to connect a model.
 
-- 🔌 **Any model** — works with any OpenAI-compatible endpoint
-- 🏠 **Local first** — auto-detects LM Studio and Ollama
-- 🛠️ **Tool use** — reads, writes, and edits files in your codebase
-- 🧠 **Context aware** — understands your project structure
-- 🎯 **Smart routing** — suggests better models for complex tasks
-- 💻 **Terminal native** — built for developers who live in the CLI
-- 🔓 **Open source** — MIT licensed, fork it, extend it, make it yours
+## Connect Your LLM
 
-## Supported Providers
+### Local Models (LM Studio / Ollama)
 
-| Provider | Endpoint | Local? |
-|----------|----------|--------|
-| LM Studio | `http://localhost:1234/v1` | ✅ |
-| Ollama | `http://localhost:11434/v1` | ✅ |
-| OpenAI | `https://api.openai.com/v1` | ❌ |
-| Anthropic | Via OpenRouter | ❌ |
-| Any OpenAI-compatible | Custom URL | Depends |
+1. Start your local server (LM Studio, Ollama, vLLM, etc.)
+2. Run `codemaxxing` — it auto-detects servers on common ports
+3. That's it. No API key needed.
 
-## How It Works
-
-1. CODEMAXXING connects to your chosen LLM endpoint
-2. It scans your project structure for context
-3. You describe what you want in natural language
-4. It reads relevant files, proposes changes, and applies them with your approval
-
-## Configuration
-
-Create `~/.codemaxxing/settings.json`:
+Or configure manually in `~/.codemaxxing/settings.json`:
 
 ```json
 {
@@ -61,14 +42,47 @@ Create `~/.codemaxxing/settings.json`:
     "baseUrl": "http://localhost:1234/v1",
     "apiKey": "not-needed",
     "model": "qwen3.5-27b"
-  },
-  "defaults": {
-    "autoApprove": false,
-    "contextFiles": 20,
-    "maxTokens": 8192
   }
 }
 ```
+
+### Cloud Providers (OpenAI, Anthropic, etc.)
+
+Any OpenAI-compatible API works:
+
+```json
+{
+  "provider": {
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "sk-...",
+    "model": "gpt-4o"
+  }
+}
+```
+
+Works with OpenAI, Anthropic (via OpenRouter), Google Gemini, Groq, Together AI, and any OpenAI-compatible endpoint.
+
+## Features
+
+- 🔌 **Any model** — works with any OpenAI-compatible endpoint
+- 🏠 **Local first** — auto-detects LM Studio, Ollama, and vLLM
+- 🛠️ **Tool use** — reads, writes, searches, and runs commands in your codebase
+- 🧠 **Context aware** — scans your project structure automatically
+- 💻 **Terminal native** — built for developers who live in the CLI
+- 🔓 **Open source** — MIT licensed
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/reset` | Clear conversation history |
+| `/context` | Show current context size |
+| `/quit` | Exit |
+
+## Project Context
+
+Drop a `CODEMAXXING.md` file in your project root to give the agent persistent context about your codebase — architecture, conventions, key files, etc.
 
 ## Requirements
 
@@ -77,12 +91,8 @@ Create `~/.codemaxxing/settings.json`:
 
 ## Contributing
 
-PRs welcome. This is a community project.
+PRs welcome. Open an issue or just send it.
 
 ## License
 
-MIT — do whatever you want with it.
-
----
-
-Built by [Marcos Vallejo](https://github.com/MarcosV6) 💪
+MIT
