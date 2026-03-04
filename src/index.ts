@@ -2,20 +2,75 @@
 
 import { createInterface } from "readline";
 import chalk from "chalk";
-import ora from "ora";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
 
 const VERSION = "0.1.0";
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const SPINNER_MESSAGES = [
+  "Locking in...",
+  "Cooking...",
+  "Maxxing...",
+  "In the zone...",
+  "Yapping...",
+  "Frame mogging...",
+  "Jester gooning...",
+  "Gooning...",
+  "Doing back flips...",
+  "Jester maxxing...",
+  "Getting baked...",
+  "Blasting tren...",
+  "Pumping...",
+  "Wondering if I should actually do this...",
+  "Hacking the main frame...",
+  "Codemaxxing...",
+  "Vibe coding...",
+  "Running a marathon...",
+];
+
+function startSpinner(msg: string): { stop: () => void } {
+  let i = 0;
+  const interval = setInterval(() => {
+    process.stdout.write(`\r${chalk.cyan(SPINNER_FRAMES[i % SPINNER_FRAMES.length])} ${msg}`);
+    i++;
+  }, 80);
+  return {
+    stop: () => {
+      clearInterval(interval);
+      process.stdout.write("\r" + " ".repeat(msg.length + 4) + "\r");
+    },
+  };
+}
+
+function stripThinking(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
+function formatResponse(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("```")) return chalk.dim(line);
+      if (line.startsWith("# ")) return chalk.bold.white(line);
+      if (line.startsWith("## ")) return chalk.bold.white(line);
+      if (line.startsWith("- ")) return `  ${line}`;
+      if (line.startsWith("✅")) return chalk.green(line);
+      if (line.startsWith("❌")) return chalk.red(line);
+      return `  ${line}`;
+    })
+    .join("\n");
+}
+
 async function main() {
-  // Clear screen for fresh start
+  // Clear screen
   console.clear();
 
   // Banner
   const c1 = chalk.bold.white;
   const c2 = chalk.dim.white;
-  const banner = `
+  console.log(`
 ${c1("  ██████╗ ██████╗ ██████╗ ███████╗███╗   ███╗ █████╗ ██╗  ██╗██╗  ██╗██╗███╗   ██╗ ██████╗ ")}
 ${c1("  ██╔════╝██╔═══██╗██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗██╔╝╚██╗██╔╝██║████╗  ██║██╔════╝ ")}
 ${c1("  ██║     ██║   ██║██║  ██║█████╗  ██╔████╔██║███████║ ╚███╔╝  ╚███╔╝ ██║██╔██╗ ██║██║  ███╗")}
@@ -23,35 +78,30 @@ ${c1("  ██║     ██║   ██║██║  ██║██╔══�
 ${c1("  ╚██████╗╚██████╔╝██████╔╝███████╗██║ ╚═╝ ██║██║  ██║██╔╝ ██╗██╔╝ ██╗██║██║ ╚████║╚██████╔╝")}
 ${c2("   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ")}
 ${chalk.gray(`                                       v${VERSION}  💪  your code. your model. no excuses.`)}
-`;
-  console.log(banner);
+`);
 
   // Load config
   const config = loadConfig();
   let provider = config.provider;
 
-  // Auto-detect local provider if model is "auto"
+  // Auto-detect local provider
   if (provider.model === "auto" || provider.baseUrl === "http://localhost:1234/v1") {
-    const spinner = ora("Detecting local LLM server...").start();
+    process.stdout.write(chalk.gray("  Detecting local LLM server..."));
     const detected = await detectLocalProvider();
     if (detected) {
       provider = detected;
-      spinner.succeed(
-        `Connected to ${chalk.green(provider.baseUrl)} → ${chalk.yellow(provider.model)}`
+      process.stdout.write(
+        `\r${chalk.green("✔")} Connected to ${chalk.green(provider.baseUrl)} → ${chalk.yellow(provider.model)}\n`
       );
     } else {
-      spinner.fail(
-        "No local LLM server found. Start LM Studio or Ollama, or configure a provider in ~/.pierre/settings.json"
+      process.stdout.write(
+        `\r${chalk.red("✗")} No local LLM server found. Start LM Studio or Ollama.\n`
       );
       process.exit(1);
     }
   } else {
-    console.log(
-      `  ${chalk.gray("Provider:")} ${chalk.green(provider.baseUrl)}`
-    );
-    console.log(
-      `  ${chalk.gray("Model:")} ${chalk.yellow(provider.model)}`
-    );
+    console.log(`  ${chalk.gray("Provider:")} ${chalk.green(provider.baseUrl)}`);
+    console.log(`  ${chalk.gray("Model:")} ${chalk.yellow(provider.model)}`);
   }
 
   const cwd = process.cwd();
@@ -65,25 +115,7 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
   console.log(chalk.gray("  2. Be specific for the best results."));
   console.log(chalk.gray(`  3. ${chalk.white("/help")} for more information.`));
   console.log();
-
-  // Input box
-  function drawInputBox() {
-    const topLine = chalk.cyan("─".repeat(cols));
-    console.log(topLine);
-  }
-
-  // Status bar (below input)
-  function drawStatusBar() {
-    const bottomLine = chalk.cyan("─".repeat(cols));
-    console.log(bottomLine);
-    const sandbox = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.red("no sandbox");
-    const modelStr = chalk.magenta(`${provider.model}`);
-    const gap1 = Math.max(1, Math.floor((cols - cwdShort.length - 12 - provider.model.length) / 2));
-    const gap2 = Math.max(1, cols - cwdShort.length - 12 - provider.model.length - gap1);
-    console.log(`${chalk.cyan(cwdShort)}${" ".repeat(gap1)}${sandbox}${" ".repeat(gap2)}${modelStr}`);
-  }
-
-  drawInputBox();
+  console.log(chalk.cyan("─".repeat(cols)));
 
   // Create agent
   const agent = new CodingAgent({
@@ -106,57 +138,50 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
     },
   });
 
-  // REPL loop
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  // REPL using stdin directly
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  const spinnerMessages = [
-    "Locking in...",
-    "Cooking...",
-    "Maxxing...",
-    "In the zone...",
-    "Yapping...",
-    "Frame mogging...",
-    "Jester gooning...",
-    "Gooning...",
-    "Doing back flips...",
-    "Jester maxxing...",
-    "Getting baked...",
-    "Blasting tren...",
-    "Pumping...",
-    "Wondering if I should actually do this...",
-    "Hacking the main frame...",
-    "Codemaxxing...",
-    "Vibe coding...",
-    "Running a marathon...",
-  ];
+  function prompt() {
+    rl.question(chalk.bold.white("\n> "), async (input) => {
+      input = input.trim();
 
-  // Handle Ctrl+C gracefully
-  process.on("SIGINT", () => {
-    cleanup();
-  });
-
-  // Main REPL loop
-  async function repl() {
-    while (true) {
-      const input = await new Promise<string>((resolve) => {
-        rl.question(chalk.bold.white("> "), (answer) => {
-          resolve(answer.trim());
-        });
-      });
-
-      if (!input) continue;
-
-      // Handle commands
-      if (input.startsWith("/")) {
-        handleCommand(input, agent);
-        continue;
+      if (!input) {
+        prompt();
+        return;
       }
 
-      const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
-      const spinner = ora({ text: randomMsg, color: "cyan" }).start();
+      // Commands
+      if (input === "/quit" || input === "/exit") {
+        console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
+        rl.close();
+        process.exit(0);
+      }
+      if (input === "/help") {
+        console.log(`
+  ${chalk.bold("Commands:")}
+    ${chalk.cyan("/help")}     — Show this help
+    ${chalk.cyan("/reset")}    — Clear conversation history
+    ${chalk.cyan("/context")}  — Show current context size
+    ${chalk.cyan("/quit")}     — Exit CODEMAXXING
+`);
+        prompt();
+        return;
+      }
+      if (input === "/reset") {
+        agent.reset();
+        console.log(chalk.green("  ✅ Conversation reset.\n"));
+        prompt();
+        return;
+      }
+      if (input === "/context") {
+        console.log(chalk.gray(`  Messages in context: ${agent.getContextLength()}\n`));
+        prompt();
+        return;
+      }
+
+      // Chat with agent
+      const randomMsg = SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)];
+      const spinner = startSpinner(randomMsg);
 
       try {
         const response = await agent.chat(input);
@@ -164,87 +189,33 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
         console.log();
         console.log(formatResponse(stripThinking(response)));
         console.log();
-        drawStatusBar();
-        console.log();
-        drawInputBox();
+
+        // Status bar
+        const statusLine = chalk.cyan("─".repeat(cols));
+        console.log(statusLine);
+        const modelStr = provider.model;
+        const gap1 = Math.max(1, Math.floor((cols - cwdShort.length - 12 - modelStr.length) / 2));
+        const gap2 = Math.max(1, cols - cwdShort.length - 12 - modelStr.length - gap1);
+        const sandbox = config.defaults.autoApprove ? chalk.green("auto-approve") : chalk.red("no sandbox");
+        console.log(`${chalk.cyan(cwdShort)}${" ".repeat(gap1)}${sandbox}${" ".repeat(gap2)}${chalk.magenta(modelStr)}`);
+        console.log(statusLine);
       } catch (err: any) {
-        spinner.fail(`Error: ${err.message}`);
-        console.log(
-          chalk.red(
-            `  Check if your LLM server is running and the model is loaded.`
-          )
-        );
-        console.log();
-        drawInputBox();
+        spinner.stop();
+        console.log(chalk.red(`\n  Error: ${err.message}`));
+        console.log(chalk.red("  Check if your LLM server is running and the model is loaded.\n"));
       }
-    }
+
+      prompt();
+    });
   }
 
-  repl().catch(() => cleanup());
-}
+  // Handle Ctrl+C
+  rl.on("close", () => {
+    console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
+    process.exit(0);
+  });
 
-function cleanup() {
-  console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
-  process.exit(0);
-}
-
-/**
- * Strip <think>...</think> tags from model responses (Qwen reasoning mode)
- */
-function stripThinking(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-}
-
-function handleCommand(input: string, agent: CodingAgent) {
-  const cmd = input.toLowerCase();
-
-  switch (cmd) {
-    case "/help":
-      console.log(`
-  ${chalk.bold("Commands:")}
-    ${chalk.cyan("/help")}     — Show this help
-    ${chalk.cyan("/reset")}    — Clear conversation history
-    ${chalk.cyan("/context")} — Show current context size
-    ${chalk.cyan("/quit")}     — Exit Pierre Code
-`);
-      break;
-
-    case "/reset":
-      agent.reset();
-      console.log(chalk.green("  ✅ Conversation reset.\n"));
-      break;
-
-    case "/context":
-      console.log(
-        chalk.gray(
-          `  Messages in context: ${agent.getContextLength()}\n`
-        )
-      );
-      break;
-
-    case "/quit":
-    case "/exit":
-      cleanup();
-
-    default:
-      console.log(chalk.yellow(`  Unknown command: ${input}\n`));
-  }
-}
-
-function formatResponse(text: string): string {
-  // Basic formatting — highlight code blocks
-  return text
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("```")) return chalk.dim(line);
-      if (line.startsWith("# ")) return chalk.bold.white(line);
-      if (line.startsWith("## ")) return chalk.bold.white(line);
-      if (line.startsWith("- ")) return `  ${line}`;
-      if (line.startsWith("✅")) return chalk.green(line);
-      if (line.startsWith("❌")) return chalk.red(line);
-      return `  ${line}`;
-    })
-    .join("\n");
+  prompt();
 }
 
 main().catch((err) => {
