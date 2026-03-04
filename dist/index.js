@@ -6,9 +6,8 @@ import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider } from "./config.js";
 const VERSION = "0.1.0";
 async function main() {
-    // Enter alternate screen buffer (hides all previous terminal output)
-    process.stdout.write("\x1B[?1049h");
-    process.stdout.write("\x1B[2J\x1B[H");
+    // Clear screen for fresh start
+    console.clear();
     // Banner
     const c1 = chalk.bold.white;
     const c2 = chalk.dim.white;
@@ -92,9 +91,7 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
     const rl = createInterface({
         input: process.stdin,
         output: process.stdout,
-        prompt: chalk.bold.white("> "),
     });
-    rl.prompt();
     const spinnerMessages = [
         "Locking in...",
         "Cooking...",
@@ -115,57 +112,49 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
         "Vibe coding...",
         "Running a marathon...",
     ];
-    let processing = false;
-    rl.on("line", (line) => {
-        const input = line.trim();
-        if (!input) {
-            rl.prompt();
-            return;
-        }
-        // Handle commands
-        if (input.startsWith("/")) {
-            handleCommand(input, agent);
-            rl.prompt();
-            return;
-        }
-        // Prevent concurrent requests
-        if (processing)
-            return;
-        processing = true;
-        const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
-        const spinner = ora({ text: randomMsg, color: "cyan" }).start();
-        agent.chat(input)
-            .then((response) => {
-            spinner.stop();
-            console.log();
-            console.log(formatResponse(stripThinking(response)));
-            console.log();
-            drawStatusBar();
-            console.log();
-            drawInputBox();
-        })
-            .catch((err) => {
-            spinner.fail(`Error: ${err.message}`);
-            console.log(chalk.red(`  Check if your LLM server is running and the model is loaded.`));
-            console.log();
-            drawInputBox();
-        })
-            .finally(() => {
-            processing = false;
-            rl.prompt();
-        });
-    });
     // Handle Ctrl+C gracefully
     process.on("SIGINT", () => {
         cleanup();
     });
-    rl.on("close", () => {
-        cleanup();
-    });
+    // Main REPL loop
+    async function repl() {
+        while (true) {
+            const input = await new Promise((resolve) => {
+                rl.question(chalk.bold.white("> "), (answer) => {
+                    resolve(answer.trim());
+                });
+            });
+            if (!input)
+                continue;
+            // Handle commands
+            if (input.startsWith("/")) {
+                handleCommand(input, agent);
+                continue;
+            }
+            const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
+            const spinner = ora({ text: randomMsg, color: "cyan" }).start();
+            try {
+                const response = await agent.chat(input);
+                spinner.stop();
+                console.log();
+                console.log(formatResponse(stripThinking(response)));
+                console.log();
+                drawStatusBar();
+                console.log();
+                drawInputBox();
+            }
+            catch (err) {
+                spinner.fail(`Error: ${err.message}`);
+                console.log(chalk.red(`  Check if your LLM server is running and the model is loaded.`));
+                console.log();
+                drawInputBox();
+            }
+        }
+    }
+    repl().catch(() => cleanup());
 }
 function cleanup() {
     console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
-    process.stdout.write("\x1B[?1049l");
     process.exit(0);
 }
 /**

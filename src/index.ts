@@ -9,9 +9,8 @@ import { loadConfig, detectLocalProvider } from "./config.js";
 const VERSION = "0.1.0";
 
 async function main() {
-  // Enter alternate screen buffer (hides all previous terminal output)
-  process.stdout.write("\x1B[?1049h");
-  process.stdout.write("\x1B[2J\x1B[H");
+  // Clear screen for fresh start
+  console.clear();
 
   // Banner
   const c1 = chalk.bold.white;
@@ -111,10 +110,7 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: chalk.bold.white("> "),
   });
-
-  rl.prompt();
 
   const spinnerMessages = [
     "Locking in...",
@@ -137,31 +133,33 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
     "Running a marathon...",
   ];
 
-  let processing = false;
+  // Handle Ctrl+C gracefully
+  process.on("SIGINT", () => {
+    cleanup();
+  });
 
-  rl.on("line", (line) => {
-    const input = line.trim();
-    if (!input) {
-      rl.prompt();
-      return;
-    }
+  // Main REPL loop
+  async function repl() {
+    while (true) {
+      const input = await new Promise<string>((resolve) => {
+        rl.question(chalk.bold.white("> "), (answer) => {
+          resolve(answer.trim());
+        });
+      });
 
-    // Handle commands
-    if (input.startsWith("/")) {
-      handleCommand(input, agent);
-      rl.prompt();
-      return;
-    }
+      if (!input) continue;
 
-    // Prevent concurrent requests
-    if (processing) return;
-    processing = true;
+      // Handle commands
+      if (input.startsWith("/")) {
+        handleCommand(input, agent);
+        continue;
+      }
 
-    const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
-    const spinner = ora({ text: randomMsg, color: "cyan" }).start();
+      const randomMsg = spinnerMessages[Math.floor(Math.random() * spinnerMessages.length)];
+      const spinner = ora({ text: randomMsg, color: "cyan" }).start();
 
-    agent.chat(input)
-      .then((response) => {
+      try {
+        const response = await agent.chat(input);
         spinner.stop();
         console.log();
         console.log(formatResponse(stripThinking(response)));
@@ -169,8 +167,7 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
         drawStatusBar();
         console.log();
         drawInputBox();
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         spinner.fail(`Error: ${err.message}`);
         console.log(
           chalk.red(
@@ -179,26 +176,15 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
         );
         console.log();
         drawInputBox();
-      })
-      .finally(() => {
-        processing = false;
-        rl.prompt();
-      });
-  });
+      }
+    }
+  }
 
-  // Handle Ctrl+C gracefully
-  process.on("SIGINT", () => {
-    cleanup();
-  });
-
-  rl.on("close", () => {
-    cleanup();
-  });
+  repl().catch(() => cleanup());
 }
 
 function cleanup() {
   console.log(chalk.gray("\n  Stay maxxed! 💪\n"));
-  process.stdout.write("\x1B[?1049l");
   process.exit(0);
 }
 
