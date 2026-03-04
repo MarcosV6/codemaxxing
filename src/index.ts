@@ -7,7 +7,7 @@ import { loadConfig, detectLocalProvider } from "./config.js";
 
 const VERSION = "0.1.0";
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES = ["💪", "🔥", "💪", "⚡", "💪", "🔥", "💪", "⚡"];
 
 const SPINNER_MESSAGES = [
   "Locking in...",
@@ -35,14 +35,15 @@ function startSpinner(msg: string): { stop: () => string } {
   const startTime = Date.now();
   const interval = setInterval(() => {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    process.stdout.write(`\r${chalk.red("✱")} ${chalk.dim(msg)} ${chalk.dim(`(${elapsed}s · esc to interrupt)`)}`);
+    const frame = SPINNER_FRAMES[i % SPINNER_FRAMES.length];
+    process.stdout.write(`\r  ${frame} ${chalk.bold.white(msg)} ${chalk.dim(`[${elapsed}s]`)}`);
     i++;
-  }, 100);
+  }, 300);
   return {
     stop: () => {
       clearInterval(interval);
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      process.stdout.write("\r" + " ".repeat(80) + "\r");
+      process.stdout.write("\r" + " ".repeat(100) + "\r");
       return elapsed;
     },
   };
@@ -164,16 +165,8 @@ ${chalk.gray(`                                       v${VERSION}  💪  your cod
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   function drawInputBox() {
-    const boxWidth = Math.min(cols, 80);
     console.log();
-    console.log(chalk.dim("┌" + "─".repeat(boxWidth - 2) + "┐"));
-  }
-
-  function drawInputEnd() {
-    const boxWidth = Math.min(cols, 80);
-    console.log(chalk.dim("└" + "─".repeat(boxWidth - 2) + "┘"));
-    const approveMode = config.defaults.autoApprove ? chalk.green("auto-approve on") : chalk.dim("manual approve");
-    console.log(chalk.dim(`  ►► ${approveMode} (shift+tab to cycle)`));
+    console.log(chalk.dim("┌" + "─".repeat(cols - 2) + "┐"));
   }
 
   function prompt() {
