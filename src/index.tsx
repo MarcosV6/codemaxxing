@@ -193,36 +193,28 @@ function App() {
 
   return (
     <Box flexDirection="column">
-      {/* ═══ BANNER BOX (rendered once via Static) ═══ */}
-      <Static items={["banner"]}>
-        {() => (
-          <Box key="banner" flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
-            {codeLines.map((line, i) => (
-              <Text key={`c${i}`} color="#00FFFF">{line}</Text>
-            ))}
-            {maxxingLines.map((line, i) => (
-              <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
-            ))}
-            <Text>
-              <Text color="#008B8B">{"                            v" + VERSION}</Text>
-              {"  "}<Text color="#00FFFF">💪</Text>
-              {"  "}<Text dimColor>your code. your model. no excuses.</Text>
-            </Text>
-          </Box>
-        )}
-      </Static>
+      {/* ═══ BANNER BOX ═══ */}
+      <Box flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
+        {codeLines.map((line, i) => (
+          <Text key={`c${i}`} color="#00FFFF">{line}</Text>
+        ))}
+        {maxxingLines.map((line, i) => (
+          <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
+        ))}
+        <Text>
+          <Text color="#008B8B">{"                            v" + VERSION}</Text>
+          {"  "}<Text color="#00FFFF">💪</Text>
+          {"  "}<Text dimColor>your code. your model. no excuses.</Text>
+        </Text>
+      </Box>
 
       {/* ═══ CONNECTION INFO BOX ═══ */}
       {connectionInfo.length > 0 && (
-        <Static items={["conn"]}>
-          {() => (
-            <Box key="conn" flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
-              {connectionInfo.map((line, i) => (
-                <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
-              ))}
-            </Box>
-          )}
-        </Static>
+        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
+          {connectionInfo.map((line, i) => (
+            <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+          ))}
+        </Box>
       )}
 
       {/* ═══ CHAT MESSAGES (each rendered once via Static) ═══ */}
