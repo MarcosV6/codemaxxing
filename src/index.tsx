@@ -137,6 +137,8 @@ function App() {
   const [themePickerIndex, setThemePickerIndex] = useState(0);
   const [loginPicker, setLoginPicker] = useState(false);
   const [loginPickerIndex, setLoginPickerIndex] = useState(0);
+  const [loginMethodPicker, setLoginMethodPicker] = useState<{ provider: string; methods: string[] } | null>(null);
+  const [loginMethodIndex, setLoginMethodIndex] = useState(0);
   const [approval, setApproval] = useState<{
     tool: string;
     args: Record<string, unknown>;
@@ -543,7 +545,69 @@ function App() {
       }
     }
 
-    // Login picker navigation
+    // Login method picker navigation (second level — pick auth method)
+    if (loginMethodPicker) {
+      const methods = loginMethodPicker.methods;
+      if (key.upArrow) {
+        setLoginMethodIndex((prev: number) => (prev - 1 + methods.length) % methods.length);
+        return;
+      }
+      if (key.downArrow) {
+        setLoginMethodIndex((prev: number) => (prev + 1) % methods.length);
+        return;
+      }
+      if (key.escape) {
+        setLoginMethodPicker(null);
+        setLoginPicker(true); // go back to provider picker
+        return;
+      }
+      if (key.return) {
+        const method = methods[loginMethodIndex];
+        const providerId = loginMethodPicker.provider;
+        setLoginMethodPicker(null);
+
+        if (method === "oauth" && providerId === "openrouter") {
+          addMsg("info", "Starting OpenRouter OAuth — opening browser...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for authorization...");
+          openRouterOAuth((msg: string) => addMsg("info", msg))
+            .then(() => {
+              addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`);
+              setLoading(false);
+            })
+            .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
+        } else if (method === "setup-token") {
+          addMsg("info", "Starting setup-token flow — browser will open...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for Claude Code auth...");
+          anthropicSetupToken((msg: string) => addMsg("info", msg))
+            .then((cred) => { addMsg("info", `✅ Anthropic authenticated! (${cred.label})`); setLoading(false); })
+            .catch((err: any) => { addMsg("error", `Auth failed: ${err.message}`); setLoading(false); });
+        } else if (method === "cached-token" && providerId === "openai") {
+          const imported = importCodexToken((msg: string) => addMsg("info", msg));
+          if (imported) { addMsg("info", `✅ Imported Codex credentials! (${imported.label})`); }
+          else { addMsg("info", "No Codex CLI found. Install Codex CLI and sign in first."); }
+        } else if (method === "cached-token" && providerId === "qwen") {
+          const imported = importQwenToken((msg: string) => addMsg("info", msg));
+          if (imported) { addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`); }
+          else { addMsg("info", "No Qwen CLI found. Install Qwen CLI and sign in first."); }
+        } else if (method === "device-flow") {
+          addMsg("info", "Starting GitHub Copilot device flow...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for GitHub authorization...");
+          copilotDeviceFlow((msg: string) => addMsg("info", msg))
+            .then(() => { addMsg("info", `✅ GitHub Copilot authenticated!`); setLoading(false); })
+            .catch((err: any) => { addMsg("error", `Copilot auth failed: ${err.message}`); setLoading(false); });
+        } else if (method === "api-key") {
+          const provider = PROVIDERS.find((p) => p.id === providerId);
+          addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${providerId} <your-key>\n  Get key at: ${provider?.consoleUrl ?? "your provider's dashboard"}`);
+        }
+        return;
+      }
+      return;
+    }
+
+    // Login picker navigation (first level — pick provider)
     if (loginPicker) {
       const loginProviders = PROVIDERS.filter((p) => p.id !== "local");
       if (key.upArrow) {
@@ -558,62 +622,38 @@ function App() {
         const selected = loginProviders[loginPickerIndex];
         setLoginPicker(false);
 
-        if (selected.id === "openrouter") {
-          addMsg("info", "Starting OpenRouter OAuth — opening browser...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for authorization...");
-          openRouterOAuth((msg: string) => addMsg("info", msg))
-            .then((cred) => {
-              addMsg("info", `✅ OpenRouter authenticated! You now have access to 200+ models.`);
-              addMsg("info", `Switch with: /model anthropic/claude-sonnet-4`);
-              setLoading(false);
-            })
-            .catch((err: any) => {
-              addMsg("error", `OAuth failed: ${err.message}`);
-              setLoading(false);
-            });
-        } else if (selected.id === "anthropic") {
-          addMsg("info", "Starting Anthropic setup-token flow...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for Claude Code auth...");
-          anthropicSetupToken((msg: string) => addMsg("info", msg))
-            .then((cred) => {
-              addMsg("info", `✅ Anthropic authenticated! (${cred.label})`);
-              setLoading(false);
-            })
-            .catch((err: any) => {
-              addMsg("error", `Anthropic auth failed: ${err.message}`);
-              setLoading(false);
-            });
-        } else if (selected.id === "openai") {
-          const imported = importCodexToken((msg: string) => addMsg("info", msg));
-          if (imported) {
-            addMsg("info", `✅ Imported Codex credentials! (${imported.label})`);
-          } else {
-            addMsg("info", "No Codex CLI found. Run: codemaxxing auth api-key openai <your-key>");
+        // Get available methods for this provider (filter out 'none')
+        const methods = selected.methods.filter((m) => m !== "none");
+
+        if (methods.length === 1) {
+          // Only one method — execute it directly
+          setLoginMethodPicker({ provider: selected.id, methods });
+          setLoginMethodIndex(0);
+          // Simulate Enter press on the single method
+          if (methods[0] === "oauth" && selected.id === "openrouter") {
+            setLoginMethodPicker(null);
+            addMsg("info", "Starting OpenRouter OAuth — opening browser...");
+            setLoading(true);
+            setSpinnerMsg("Waiting for authorization...");
+            openRouterOAuth((msg: string) => addMsg("info", msg))
+              .then(() => { addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`); setLoading(false); })
+              .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
+          } else if (methods[0] === "device-flow") {
+            setLoginMethodPicker(null);
+            addMsg("info", "Starting GitHub Copilot device flow...");
+            setLoading(true);
+            setSpinnerMsg("Waiting for GitHub authorization...");
+            copilotDeviceFlow((msg: string) => addMsg("info", msg))
+              .then(() => { addMsg("info", `✅ GitHub Copilot authenticated!`); setLoading(false); })
+              .catch((err: any) => { addMsg("error", `Copilot auth failed: ${err.message}`); setLoading(false); });
+          } else if (methods[0] === "api-key") {
+            setLoginMethodPicker(null);
+            addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${selected.id} <your-key>\n  Get key at: ${selected.consoleUrl ?? "your provider's dashboard"}`);
           }
-        } else if (selected.id === "qwen") {
-          const imported = importQwenToken((msg: string) => addMsg("info", msg));
-          if (imported) {
-            addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
-          } else {
-            addMsg("info", "No Qwen CLI found. Run: codemaxxing auth api-key qwen <your-key>");
-          }
-        } else if (selected.id === "copilot") {
-          addMsg("info", "Starting GitHub Copilot device flow...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for GitHub authorization...");
-          copilotDeviceFlow((msg: string) => addMsg("info", msg))
-            .then(() => {
-              addMsg("info", `✅ GitHub Copilot authenticated!`);
-              setLoading(false);
-            })
-            .catch((err: any) => {
-              addMsg("error", `Copilot auth failed: ${err.message}`);
-              setLoading(false);
-            });
         } else {
-          addMsg("info", `Run: codemaxxing auth api-key ${selected.id} <your-key>\n  Get key at: ${selected.consoleUrl ?? selected.baseUrl}`);
+          // Multiple methods — show submenu
+          setLoginMethodPicker({ provider: selected.id, methods });
+          setLoginMethodIndex(0);
         }
         return;
       }
@@ -852,6 +892,45 @@ function App() {
             <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
             <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* ═══ LOGIN PICKER ═══ */}
+      {loginPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>💪 Choose a provider:</Text>
+          {PROVIDERS.filter((p) => p.id !== "local").map((p, i) => (
+            <Text key={p.id}>
+              {i === loginPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === loginPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{p.name}</Text>
+              <Text color={theme.colors.muted}>{" — "}{p.description}</Text>
+              {getCredentials().some((c) => c.provider === p.id) ? <Text color={theme.colors.success}> ✓</Text> : null}
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+        </Box>
+      )}
+
+      {/* ═══ LOGIN METHOD PICKER ═══ */}
+      {loginMethodPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>How do you want to authenticate?</Text>
+          {loginMethodPicker.methods.map((method, i) => {
+            const labels: Record<string, string> = {
+              "oauth": "🌐 Browser login (OAuth)",
+              "setup-token": "🔑 Link subscription (via Claude Code CLI)",
+              "cached-token": "📦 Import from existing CLI",
+              "api-key": "🔒 Enter API key manually",
+              "device-flow": "📱 Device flow (GitHub)",
+            };
+            return (
+              <Text key={method}>
+                {i === loginMethodIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+                <Text color={i === loginMethodIndex ? theme.colors.suggestion : theme.colors.primary} bold>{labels[method] ?? method}</Text>
+              </Text>
+            );
+          })}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc back"}</Text>
         </Box>
       )}
 
