@@ -15,7 +15,12 @@ Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.sh)"
 ```
 
-**Windows (Run as Administrator CMD):**
+**Windows (PowerShell as Administrator):**
+```powershell
+curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.bat; & $env:TEMP\install-codemaxxing.bat
+```
+
+**Windows (CMD as Administrator):**
 ```
 curl -fsSL -o %TEMP%\install-codemaxxing.bat https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.bat && %TEMP%\install-codemaxxing.bat
 ```
