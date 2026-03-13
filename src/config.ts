@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { getCredential, type AuthCredential } from "./utils/auth.js";
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -208,4 +209,36 @@ export async function listModels(baseUrl: string, apiKey: string): Promise<strin
     }
   } catch { /* ignore */ }
   return [];
+}
+
+/**
+ * Resolve provider configuration from auth store or config file
+ * Priority: CLI args > auth store > config file > auto-detect
+ */
+export function resolveProvider(
+  providerId: string,
+  cliArgs: CLIArgs
+): { baseUrl: string; apiKey: string; model: string } | null {
+  // Check auth store first
+  const authCred = getCredential(providerId);
+  if (authCred) {
+    return {
+      baseUrl: authCred.baseUrl,
+      apiKey: authCred.apiKey,
+      model: cliArgs.model || "auto",
+    };
+  }
+
+  // Fall back to config file
+  const config = loadConfig();
+  const provider = config.providers?.[providerId];
+  if (provider) {
+    return {
+      baseUrl: provider.baseUrl,
+      apiKey: cliArgs.apiKey || provider.apiKey,
+      model: cliArgs.model || provider.model,
+    };
+  }
+
+  return null;
 }

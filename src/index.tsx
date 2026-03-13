@@ -28,6 +28,7 @@ function formatTimeAgo(date: Date): string {
 // ── Slash Commands ──
 const SLASH_COMMANDS = [
   { cmd: "/help", desc: "show commands" },
+  { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
   { cmd: "/context", desc: "show message count" },
@@ -323,10 +324,33 @@ function App() {
       exit();
       return;
     }
+    if (trimmed === "/login" || trimmed === "/auth") {
+      addMsg("info", [
+        "💪 Authentication Setup",
+        "",
+        "Run 'codemaxxing login' in a new terminal to set up:",
+        "  • OpenRouter OAuth (browser login, 200+ models)",
+        "  • Anthropic via Claude Code (your Pro/Max subscription)",
+        "  • ChatGPT via Codex CLI (your Plus/Pro subscription)",
+        "  • Qwen CLI (your Qwen access)",
+        "  • GitHub Copilot (device flow)",
+        "  • Manual API keys for any provider",
+        "",
+        "Commands:",
+        "  codemaxxing login              — interactive setup",
+        "  codemaxxing auth list          — see saved credentials",
+        "  codemaxxing auth openrouter    — OpenRouter OAuth",
+        "  codemaxxing auth anthropic     — Anthropic subscription",
+        "  codemaxxing auth openai        — ChatGPT subscription",
+        "  codemaxxing auth copilot       — GitHub Copilot",
+      ].join("\n"));
+      return;
+    }
     if (trimmed === "/help") {
       addMsg("info", [
         "Commands:",
         "  /help      — show this",
+        "  /login     — authentication setup (run codemaxxing login in terminal)",
         "  /model     — switch model mid-session",
         "  /models    — list available models",
         "  /map       — show repository map",

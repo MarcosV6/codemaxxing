@@ -4,7 +4,8 @@
   "description": "Open-source terminal coding agent. Connect any LLM. Max your code.",
   "main": "dist/index.js",
   "bin": {
-    "codemaxxing": "./dist/index.js"
+    "codemaxxing": "./dist/index.js",
+    "codemaxxing-auth": "./dist/auth-cli.js"
   },
   "type": "module",
   "scripts": {
