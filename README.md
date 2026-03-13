@@ -2,6 +2,10 @@
 
 > your code. your model. no excuses.
 
+<p align="center">
+  <img src="assets/screenshot.jpg" alt="codemaxxing terminal UI" width="700">
+</p>
+
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
 ## Why?
