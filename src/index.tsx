@@ -1,0 +1,858 @@
+#!/usr/bin/env node
+
+import React, { useState, useEffect, useCallback } from "react";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
+import { EventEmitter } from "events";
+import TextInput from "ink-text-input";
+import { CodingAgent } from "./agent.js";
+import { loadConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listModels } from "./config.js";
+import { listSessions, getSession, loadMessages } from "./utils/sessions.js";
+import { execSync } from "child_process";
+import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
+
+const VERSION = "0.1.0";
+
+// ── Helpers ──
+function formatTimeAgo(date: Date): string {
+  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+// ── Slash Commands ──
+const SLASH_COMMANDS = [
+  { cmd: "/help", desc: "show commands" },
+  { cmd: "/map", desc: "show repository map" },
+  { cmd: "/reset", desc: "clear conversation" },
+  { cmd: "/context", desc: "show message count" },
+  { cmd: "/diff", desc: "show git changes" },
+  { cmd: "/undo", desc: "revert last codemaxxing commit" },
+  { cmd: "/commit", desc: "commit all changes" },
+  { cmd: "/push", desc: "push to remote" },
+  { cmd: "/git on", desc: "enable auto-commits" },
+  { cmd: "/git off", desc: "disable auto-commits" },
+  { cmd: "/models", desc: "list available models" },
+  { cmd: "/model", desc: "switch model mid-session" },
+  { cmd: "/sessions", desc: "list past sessions" },
+  { cmd: "/resume", desc: "resume a past session" },
+  { cmd: "/quit", desc: "exit" },
+];
+
+const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+const SPINNER_MESSAGES = [
+  "Locking in...", "Cooking...", "Maxxing...", "In the zone...",
+  "Yapping...", "Frame mogging...", "Jester gooning...", "Gooning...",
+  "Doing back flips...", "Jester maxxing...", "Getting baked...",
+  "Blasting tren...", "Pumping...", "Wondering if I should actually do this...",
+  "Hacking the main frame...", "Codemaxxing...", "Vibe coding...", "Running a marathon...",
+];
+
+// ── Neon Spinner ──
+function NeonSpinner({ message }: { message: string }) {
+  const [frame, setFrame] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 80);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <Text>
+      {"  "}<Text color="#00FFFF">{SPINNER_FRAMES[frame]}</Text>
+      {" "}<Text bold color="#FF00FF">{message}</Text>
+      {" "}<Text color="#008B8B">[{elapsed}s]</Text>
+    </Text>
+  );
+}
+
+// ── Streaming Indicator (subtle, shows model is still working) ──
+const STREAM_DOTS = ["·  ", "·· ", "···", " ··", "  ·", "   "];
+function StreamingIndicator() {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFrame((f) => (f + 1) % STREAM_DOTS.length);
+    }, 300);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <Text dimColor>
+      {"  "}<Text color="#008B8B">{STREAM_DOTS[frame]}</Text>
+      {" "}<Text color="#008B8B">streaming</Text>
+    </Text>
+  );
+}
+
+// ── Message Types ──
+interface ChatMessage {
+  id: number;
+  type: "user" | "response" | "tool" | "tool-result" | "error" | "info";
+  text: string;
+}
+
+let msgId = 0;
+
+// ── Main App ──
+function App() {
+  const { exit } = useApp();
+  const { stdout } = useStdout();
+  const termWidth = stdout?.columns ?? 80;
+
+  const [input, setInput] = useState("");
+  const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
+  const [pasteCount, setPasteCount] = useState(0);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [spinnerMsg, setSpinnerMsg] = useState("");
+  const [agent, setAgent] = useState<CodingAgent | null>(null);
+  const [modelName, setModelName] = useState("");
+  const providerRef = React.useRef<{ baseUrl: string; apiKey: string }>({ baseUrl: "", apiKey: "" });
+  const [ready, setReady] = useState(false);
+  const [connectionInfo, setConnectionInfo] = useState<string[]>([]);
+  const [ctrlCPressed, setCtrlCPressed] = useState(false);
+  const [cmdIndex, setCmdIndex] = useState(0);
+  const [inputKey, setInputKey] = useState(0);
+  const [sessionPicker, setSessionPicker] = useState<Array<{ id: string; display: string }> | null>(null);
+  const [sessionPickerIndex, setSessionPickerIndex] = useState(0);
+  const [approval, setApproval] = useState<{
+    tool: string;
+    args: Record<string, unknown>;
+    resolve: (decision: "yes" | "no" | "always") => void;
+  } | null>(null);
+
+  // Listen for paste events from stdin interceptor
+  useEffect(() => {
+    const handler = ({ content, lines }: { content: string; lines: number }) => {
+      setPasteCount((c) => {
+        const newId = c + 1;
+        setPastedChunks((prev) => [...prev, { id: newId, lines, content }]);
+        return newId;
+      });
+    };
+    pasteEvents.on("paste", handler);
+    return () => { pasteEvents.off("paste", handler); };
+  }, []);
+
+  // Initialize agent
+  useEffect(() => {
+    (async () => {
+      const cliArgs = parseCLIArgs();
+      const rawConfig = loadConfig();
+      const config = applyOverrides(rawConfig, cliArgs);
+      let provider = config.provider;
+      const info: string[] = [];
+
+      if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
+        info.push("Detecting local LLM server...");
+        setConnectionInfo([...info]);
+        const detected = await detectLocalProvider();
+        if (detected) {
+          // Keep CLI model override if specified
+          if (cliArgs.model) detected.model = cliArgs.model;
+          provider = detected;
+          info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
+          setConnectionInfo([...info]);
+        } else {
+          info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
+          info.push("  Use --base-url and --api-key to connect to a remote provider.");
+          setConnectionInfo([...info]);
+          return;
+        }
+      } else {
+        info.push(`Provider: ${provider.baseUrl}`);
+        info.push(`Model: ${provider.model}`);
+        setConnectionInfo([...info]);
+      }
+
+      const cwd = process.cwd();
+
+      // Git info
+      if (isGitRepo(cwd)) {
+        const branch = getBranch(cwd);
+        const status = getStatus(cwd);
+        info.push(`Git: ${branch} (${status})`);
+        setConnectionInfo([...info]);
+      }
+
+      const a = new CodingAgent({
+        provider,
+        cwd,
+        maxTokens: config.defaults.maxTokens,
+        autoApprove: config.defaults.autoApprove,
+        onToken: (token) => {
+          // Switch from big spinner to streaming mode
+          setLoading(false);
+          setStreaming(true);
+
+          // Update the current streaming response in-place
+          setMessages((prev) => {
+            const lastIdx = prev.length - 1;
+            const last = prev[lastIdx];
+
+            if (last && last.type === "response" && (last as any)._streaming) {
+              return [
+                ...prev.slice(0, lastIdx),
+                { ...last, text: last.text + token },
+              ];
+            }
+
+            // First token of a new response
+            return [...prev, { id: msgId++, type: "response" as const, text: token, _streaming: true } as any];
+          });
+        },
+        onToolCall: (name, args) => {
+          setLoading(true);
+          setSpinnerMsg("Executing tools...");
+          const argStr = Object.entries(args)
+            .map(([k, v]) => {
+              const val = String(v);
+              return val.length > 60 ? val.slice(0, 60) + "..." : val;
+            })
+            .join(", ");
+          addMsg("tool", `${name}(${argStr})`);
+        },
+        onToolResult: (_name, result) => {
+          const numLines = result.split("\n").length;
+          const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
+          addMsg("tool-result", `└ ${numLines} lines (${size})`);
+        },
+        onThinking: (text) => {
+          if (text.length > 0) {
+            addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
+          }
+        },
+        onGitCommit: (message) => {
+          addMsg("info", `📝 Auto-committed: ${message}`);
+        },
+        onToolApproval: (name, args) => {
+          return new Promise((resolve) => {
+            setApproval({ tool: name, args, resolve });
+            setLoading(false);
+          });
+        },
+      });
+
+      // Initialize async context (repo map)
+      await a.init();
+
+      setAgent(a);
+      setModelName(provider.model);
+      providerRef.current = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
+      setReady(true);
+    })();
+  }, []);
+
+  function addMsg(type: ChatMessage["type"], text: string) {
+    setMessages((prev) => [...prev, { id: msgId++, type, text }]);
+  }
+
+  // Compute matching commands for suggestions
+  const cmdMatches = input.startsWith("/")
+    ? SLASH_COMMANDS.filter(c => c.cmd.startsWith(input.toLowerCase()))
+    : [];
+  const showSuggestions = cmdMatches.length > 0 && !loading && !approval && input !== cmdMatches[0]?.cmd;
+
+  // Refs to avoid stale closures in handleSubmit
+  const cmdIndexRef = React.useRef(cmdIndex);
+  cmdIndexRef.current = cmdIndex;
+  const cmdMatchesRef = React.useRef(cmdMatches);
+  cmdMatchesRef.current = cmdMatches;
+  const showSuggestionsRef = React.useRef(showSuggestions);
+  showSuggestionsRef.current = showSuggestions;
+  const pastedChunksRef = React.useRef(pastedChunks);
+  pastedChunksRef.current = pastedChunks;
+
+  const handleSubmit = useCallback(async (value: string) => {
+    // Skip autocomplete if input exactly matches a command (e.g. /models vs /model)
+    const isExactCommand = SLASH_COMMANDS.some(c => c.cmd === value.trim());
+
+    // If suggestions are showing and input isn't already an exact command, use autocomplete
+    if (showSuggestionsRef.current && !isExactCommand) {
+      const matches = cmdMatchesRef.current;
+      const idx = cmdIndexRef.current;
+      const selected = matches[idx];
+      if (selected) {
+        // Commands that need args (like /commit, /model) — fill input instead of executing
+        if (selected.cmd === "/commit" || selected.cmd === "/model") {
+          setInput(selected.cmd + " ");
+          setCmdIndex(0);
+          setInputKey((k) => k + 1);
+          return;
+        }
+        // Execute the selected command directly
+        value = selected.cmd;
+        setCmdIndex(0);
+      }
+    }
+
+    // Combine typed text with any pasted chunks
+    const chunks = pastedChunksRef.current;
+    let fullValue = value;
+    if (chunks.length > 0) {
+      const pasteText = chunks.map(p => p.content).join("\n\n");
+      fullValue = value ? `${value}\n\n${pasteText}` : pasteText;
+    }
+    const trimmed = fullValue.trim();
+    setInput("");
+    setPastedChunks([]);
+    setPasteCount(0);
+    if (!trimmed || !agent) return;
+
+    addMsg("user", trimmed);
+
+    if (trimmed === "/quit" || trimmed === "/exit") {
+      exit();
+      return;
+    }
+    if (trimmed === "/help") {
+      addMsg("info", [
+        "Commands:",
+        "  /help      — show this",
+        "  /model     — switch model mid-session",
+        "  /models    — list available models",
+        "  /map       — show repository map",
+        "  /sessions  — list past sessions",
+        "  /resume    — resume a past session",
+        "  /reset     — clear conversation",
+        "  /context   — show message count",
+        "  /diff      — show git changes",
+        "  /undo      — revert last codemaxxing commit",
+        "  /commit    — commit all changes",
+        "  /push      — push to remote",
+        "  /git on    — enable auto-commits",
+        "  /git off   — disable auto-commits",
+        "  /quit      — exit",
+      ].join("\n"));
+      return;
+    }
+    if (trimmed === "/reset") {
+      agent.reset();
+      addMsg("info", "✅ Conversation reset.");
+      return;
+    }
+    if (trimmed === "/context") {
+      addMsg("info", `Messages in context: ${agent.getContextLength()}`);
+      return;
+    }
+    if (trimmed === "/models") {
+      addMsg("info", "Fetching available models...");
+      const { baseUrl, apiKey } = providerRef.current;
+      const models = await listModels(baseUrl, apiKey);
+      if (models.length === 0) {
+        addMsg("info", "No models found or couldn't reach provider.");
+      } else {
+        addMsg("info", "Available models:\n" + models.map(m => `  ${m}`).join("\n"));
+      }
+      return;
+    }
+    if (trimmed.startsWith("/model")) {
+      const newModel = trimmed.replace("/model", "").trim();
+      if (!newModel) {
+        addMsg("info", `Current model: ${agent.getModel()}\n  Usage: /model <model-name>`);
+        return;
+      }
+      agent.switchModel(newModel);
+      setModelName(newModel);
+      addMsg("info", `✅ Switched to model: ${newModel}`);
+      return;
+    }
+    if (trimmed === "/map") {
+      const map = agent.getRepoMap();
+      if (map) {
+        addMsg("info", map);
+      } else {
+        // Map hasn't been built yet, refresh it
+        setLoading(true);
+        const newMap = await agent.refreshRepoMap();
+        addMsg("info", newMap || "No repository map available.");
+        setLoading(false);
+      }
+      return;
+    }
+    if (trimmed === "/diff") {
+      const diff = getDiff(process.cwd());
+      addMsg("info", diff);
+      return;
+    }
+    if (trimmed === "/undo") {
+      const result = undoLastCommit(process.cwd());
+      addMsg("info", result.success ? `✅ ${result.message}` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed === "/git on") {
+      if (!agent.isGitEnabled()) {
+        addMsg("info", "✗ Not a git repository");
+      } else {
+        agent.setAutoCommit(true);
+        addMsg("info", "✅ Auto-commits enabled for this session");
+      }
+      return;
+    }
+    if (trimmed === "/git off") {
+      agent.setAutoCommit(false);
+      addMsg("info", "✅ Auto-commits disabled");
+      return;
+    }
+    if (trimmed === "/sessions") {
+      const sessions = listSessions(10);
+      if (sessions.length === 0) {
+        addMsg("info", "No past sessions found.");
+      } else {
+        const lines = sessions.map((s, i) => {
+          const date = new Date(s.updated_at + "Z");
+          const ago = formatTimeAgo(date);
+          const dir = s.cwd.split("/").pop() || s.cwd;
+          const tokens = s.token_estimate >= 1000
+            ? `${(s.token_estimate / 1000).toFixed(1)}k`
+            : String(s.token_estimate);
+          return `  ${s.id}  ${dir}/  ${s.message_count} msgs  ~${tokens} tok  ${ago}  ${s.model}`;
+        });
+        addMsg("info", "Recent sessions:\n" + lines.join("\n") + "\n\n  Use /resume <id> to continue a session");
+      }
+      return;
+    }
+    if (trimmed === "/resume") {
+      const sessions = listSessions(10);
+      if (sessions.length === 0) {
+        addMsg("info", "No past sessions to resume.");
+        return;
+      }
+      const items = sessions.map((s) => {
+        const date = new Date(s.updated_at + "Z");
+        const ago = formatTimeAgo(date);
+        const dir = s.cwd.split("/").pop() || s.cwd;
+        const tokens = s.token_estimate >= 1000
+          ? `${(s.token_estimate / 1000).toFixed(1)}k`
+          : String(s.token_estimate);
+        return {
+          id: s.id,
+          display: `${s.id}  ${dir}/  ${s.message_count} msgs  ~${tokens} tok  ${ago}  ${s.model}`,
+        };
+      });
+      setSessionPicker(items);
+      setSessionPickerIndex(0);
+      return;
+    }
+    if (trimmed === "/push") {
+      try {
+        const output = execSync("git push", { cwd: process.cwd(), encoding: "utf-8", stdio: "pipe" });
+        addMsg("info", `✅ Pushed to remote${output.trim() ? "\n" + output.trim() : ""}`);
+      } catch (e: any) {
+        addMsg("error", `Push failed: ${e.stderr || e.message}`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/commit")) {
+      const msg = trimmed.replace("/commit", "").trim();
+      if (!msg) {
+        addMsg("info", "Usage: /commit your commit message here");
+        return;
+      }
+      try {
+        execSync("git add -A", { cwd: process.cwd(), stdio: "pipe" });
+        execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, { cwd: process.cwd(), stdio: "pipe" });
+        addMsg("info", `✅ Committed: ${msg}`);
+      } catch (e: any) {
+        addMsg("error", `Commit failed: ${e.stderr || e.message}`);
+      }
+      return;
+    }
+
+    setLoading(true);
+    setStreaming(false);
+    setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
+
+    try {
+      // Response is built incrementally via onToken callback
+      // chat() returns the final text but we don't need to add it again
+      await agent.chat(trimmed);
+    } catch (err: any) {
+      addMsg("error", `Error: ${err.message}`);
+    }
+
+    setLoading(false);
+    setStreaming(false);
+  }, [agent, exit]);
+
+  useInput((inputChar, key) => {
+    // Handle slash command navigation
+    if (showSuggestionsRef.current) {
+      const matches = cmdMatchesRef.current;
+      if (key.upArrow) {
+        setCmdIndex((prev) => (prev - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setCmdIndex((prev) => (prev + 1) % matches.length);
+        return;
+      }
+      if (key.tab) {
+        const selected = matches[cmdIndexRef.current];
+        if (selected) {
+          setInput(selected.cmd + (selected.cmd === "/commit" ? " " : ""));
+          setCmdIndex(0);
+          setInputKey((k) => k + 1);
+        }
+        return;
+      }
+    }
+
+    // Session picker navigation
+    if (sessionPicker) {
+      if (key.upArrow) {
+        setSessionPickerIndex((prev) => (prev - 1 + sessionPicker.length) % sessionPicker.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSessionPickerIndex((prev) => (prev + 1) % sessionPicker.length);
+        return;
+      }
+      if (key.return) {
+        const selected = sessionPicker[sessionPickerIndex];
+        if (selected && agent) {
+          const session = getSession(selected.id);
+          if (session) {
+            agent.resume(selected.id).then(() => {
+              const dir = session.cwd.split("/").pop() || session.cwd;
+              // Find last user message for context
+              const msgs = loadMessages(selected.id);
+              const lastUserMsg = [...msgs].reverse().find(m => m.role === "user");
+              const lastText = lastUserMsg && typeof lastUserMsg.content === "string"
+                ? lastUserMsg.content.slice(0, 80) + (lastUserMsg.content.length > 80 ? "..." : "")
+                : null;
+              let info = `✅ Resumed session ${selected.id} (${dir}/, ${session.message_count} messages)`;
+              if (lastText) info += `\n  Last: "${lastText}"`;
+              addMsg("info", info);
+            }).catch((e: any) => {
+              addMsg("error", `Failed to resume: ${e.message}`);
+            });
+          }
+        }
+        setSessionPicker(null);
+        setSessionPickerIndex(0);
+        return;
+      }
+      if (key.escape) {
+        setSessionPicker(null);
+        setSessionPickerIndex(0);
+        addMsg("info", "Resume cancelled.");
+        return;
+      }
+      return; // Ignore other keys during session picker
+    }
+
+    // Backspace with empty input → remove last paste chunk
+    if (key.backspace || key.delete) {
+      if (input === "" && pastedChunksRef.current.length > 0) {
+        setPastedChunks((prev) => prev.slice(0, -1));
+        return;
+      }
+    }
+
+    // Handle approval prompts
+    if (approval) {
+      if (inputChar === "y" || inputChar === "Y") {
+        const r = approval.resolve;
+        setApproval(null);
+        setLoading(true);
+        setSpinnerMsg("Executing...");
+        r("yes");
+        return;
+      }
+      if (inputChar === "n" || inputChar === "N") {
+        const r = approval.resolve;
+        setApproval(null);
+        addMsg("info", "✗ Denied");
+        r("no");
+        return;
+      }
+      if (inputChar === "a" || inputChar === "A") {
+        const r = approval.resolve;
+        setApproval(null);
+        setLoading(true);
+        setSpinnerMsg("Executing...");
+        addMsg("info", `✔ Always allow ${approval.tool} for this session`);
+        r("always");
+        return;
+      }
+      return; // Ignore other keys during approval
+    }
+
+    if (key.ctrl && inputChar === "c") {
+      if (ctrlCPressed) {
+        exit();
+      } else {
+        setCtrlCPressed(true);
+        addMsg("info", "Press Ctrl+C again to exit.");
+        setTimeout(() => setCtrlCPressed(false), 3000);
+      }
+    }
+  });
+
+  // CODE banner lines
+  const codeLines = [
+    "                     _(`-')    (`-')  _ ",
+    " _             .->  ( (OO ).-> ( OO).-/ ",
+    " \\-,-----.(`-')----. \\    .'_ (,------. ",
+    "  |  .--./( OO).-.  ''`'-..__) |  .---' ",
+    " /_) (`-')( _) | |  ||  |  ' |(|  '--.  ",
+    " ||  |OO ) \\|  |)|  ||  |  / : |  .--'  ",
+    "(_'  '--'\\  '  '-'  '|  '-'  / |  `---. ",
+    "   `-----'   `-----' `------'  `------' ",
+  ];
+  const maxxingLines = [
+    "<-. (`-')   (`-')  _  (`-')      (`-')      _     <-. (`-')_            ",
+    "   \\(OO )_  (OO ).-/  (OO )_.->  (OO )_.-> (_)       \\( OO) )    .->    ",
+    ",--./  ,-.) / ,---.   (_| \\_)--. (_| \\_)--.,-(`-'),--./ ,--/  ,---(`-') ",
+    "|   `.'   | | \\ /`.\\  \\  `.'  /  \\  `.'  / | ( OO)|   \\ |  | '  .-(OO ) ",
+    "|  |'.'|  | '-'|_.' |  \\    .')   \\    .') |  |  )|  . '|  |)|  | .-, \\ ",
+    "|  |   |  |(|  .-.  |  .'    \\    .'    \\ (|  |_/ |  |\\    | |  | '.(_/ ",
+    "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
+    "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
+  ];
+
+  return (
+    <Box flexDirection="column">
+      {/* ═══ BANNER BOX ═══ */}
+      <Box flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
+        {codeLines.map((line, i) => (
+          <Text key={`c${i}`} color="#00FFFF">{line}</Text>
+        ))}
+        {maxxingLines.map((line, i) => (
+          <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
+        ))}
+        <Text>
+          <Text color="#008B8B">{"                            v" + VERSION}</Text>
+          {"  "}<Text color="#00FFFF">💪</Text>
+          {"  "}<Text dimColor>your code. your model. no excuses.</Text>
+        </Text>
+        <Text dimColor>{"  Type "}<Text color="#008B8B">/help</Text>{" for commands · "}<Text color="#008B8B">Ctrl+C</Text>{" twice to exit"}</Text>
+      </Box>
+
+      {/* ═══ CONNECTION INFO BOX ═══ */}
+      {connectionInfo.length > 0 && (
+        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
+          {connectionInfo.map((line, i) => (
+            <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+          ))}
+        </Box>
+      )}
+
+      {/* ═══ CHAT MESSAGES ═══ */}
+      {messages.map((msg) => {
+        switch (msg.type) {
+          case "user":
+            return (
+              <Box key={msg.id} marginTop={1}>
+                <Text color="#008B8B">{"  > "}{msg.text}</Text>
+              </Box>
+            );
+          case "response":
+            return (
+              <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
+                {msg.text.split("\n").map((l, i) => (
+                  <Text key={i} wrap="wrap">
+                    {i === 0 ? <Text color="#00FFFF">● </Text> : <Text>  </Text>}
+                    {l.startsWith("```") ? <Text color="#008B8B">{l}</Text> :
+                     l.startsWith("# ") || l.startsWith("## ") ? <Text bold color="#FF00FF">{l}</Text> :
+                     l.startsWith("**") ? <Text bold>{l}</Text> :
+                     <Text>{l}</Text>}
+                  </Text>
+                ))}
+              </Box>
+            );
+          case "tool":
+            return (
+              <Box key={msg.id}>
+                <Text><Text color="#00FFFF">  ● </Text><Text bold color="#FF00FF">{msg.text}</Text></Text>
+              </Box>
+            );
+          case "tool-result":
+            return <Text key={msg.id} color="#008B8B">    {msg.text}</Text>;
+          case "error":
+            return <Text key={msg.id} color="red">  {msg.text}</Text>;
+          case "info":
+            return <Text key={msg.id} color="#008B8B">  {msg.text}</Text>;
+          default:
+            return <Text key={msg.id}>{msg.text}</Text>;
+        }
+      })}
+
+      {/* ═══ SPINNER ═══ */}
+      {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} />}
+      {streaming && !loading && <StreamingIndicator />}
+
+      {/* ═══ APPROVAL PROMPT ═══ */}
+      {approval && (
+        <Box flexDirection="column" borderStyle="single" borderColor="#FF8C00" paddingX={1} marginTop={1}>
+          <Text bold color="#FF8C00">⚠ Approve {approval.tool}?</Text>
+          {approval.tool === "write_file" && approval.args.path ? (
+            <Text color="#008B8B">{"  📄 "}{String(approval.args.path)}</Text>
+          ) : null}
+          {approval.tool === "write_file" && approval.args.content ? (
+            <Text color="#008B8B">{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
+          ) : null}
+          {approval.tool === "run_command" && approval.args.command ? (
+            <Text color="#008B8B">{"  $ "}{String(approval.args.command)}</Text>
+          ) : null}
+          <Text>
+            <Text color="#00FF00" bold> [y]</Text><Text>es  </Text>
+            <Text color="#FF0000" bold>[n]</Text><Text>o  </Text>
+            <Text color="#00FFFF" bold>[a]</Text><Text>lways</Text>
+          </Text>
+        </Box>
+      )}
+
+      {/* ═══ SESSION PICKER ═══ */}
+      {sessionPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor="#FF00FF" paddingX={1} marginBottom={0}>
+          <Text bold color="#FF00FF">Resume a session:</Text>
+          {sessionPicker.map((s, i) => (
+            <Text key={s.id}>
+              {i === sessionPickerIndex ? <Text color="#FF00FF" bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === sessionPickerIndex ? "#FF00FF" : "#008B8B"}>{s.display}</Text>
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+        </Box>
+      )}
+
+      {/* ═══ COMMAND SUGGESTIONS ═══ */}
+      {showSuggestions && (
+        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={0}>
+          {cmdMatches.slice(0, 6).map((c, i) => (
+            <Text key={i}>
+              {i === cmdIndex ? <Text color="#FF00FF" bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === cmdIndex ? "#FF00FF" : "#00FFFF"} bold>{c.cmd}</Text>
+              <Text color="#008B8B">{" — "}{c.desc}</Text>
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Tab select"}</Text>
+        </Box>
+      )}
+
+      {/* ═══ INPUT BOX (always at bottom) ═══ */}
+      <Box borderStyle="single" borderColor={approval ? "#FF8C00" : "#00FFFF"} paddingX={1}>
+        <Text color="#FF00FF" bold>{"> "}</Text>
+        {approval ? (
+          <Text color="#FF8C00">waiting for approval...</Text>
+        ) : ready && !loading ? (
+          <Box>
+            {pastedChunks.map((p) => (
+              <Text key={p.id} color="#008B8B">[Pasted text #{p.id} +{p.lines} lines]</Text>
+            ))}
+            <TextInput
+              key={inputKey}
+              value={input}
+              onChange={(v) => { setInput(v); setCmdIndex(0); }}
+              onSubmit={handleSubmit}
+            />
+          </Box>
+        ) : (
+          <Text dimColor>{loading ? "waiting for response..." : "initializing..."}</Text>
+        )}
+      </Box>
+
+      {/* ═══ STATUS BAR ═══ */}
+      {agent && (
+        <Box paddingX={2}>
+          <Text dimColor>
+            {"💬 "}{agent.getContextLength()}{" messages · ~"}
+            {(() => {
+              const tokens = agent.estimateTokens();
+              return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+            })()}
+            {" tokens"}
+            {modelName ? ` · 🤖 ${modelName}` : ""}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// Clear screen before render
+process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
+
+// Paste event bus — communicates between stdin interceptor and React
+const pasteEvents = new EventEmitter();
+
+// Enable bracketed paste mode — terminal wraps pastes in escape sequences
+process.stdout.write("\x1b[?2004h");
+
+// Intercept stdin to handle pasted content
+// Bracketed paste: \x1b[200~ ... \x1b[201~
+let pasteBuffer = "";
+let inPaste = false;
+
+const origPush = process.stdin.push.bind(process.stdin);
+(process.stdin as any).push = function (chunk: any, encoding?: any) {
+  if (chunk === null) return origPush(chunk, encoding);
+
+  let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
+
+  const hasStart = data.includes("\x1b[200~");
+  const hasEnd = data.includes("\x1b[201~");
+
+  if (hasStart) {
+    inPaste = true;
+    data = data.replace(/\x1b\[200~/g, "");
+  }
+
+  if (hasEnd) {
+    data = data.replace(/\x1b\[201~/g, "");
+    pasteBuffer += data;
+    inPaste = false;
+
+    const content = pasteBuffer.trim();
+    pasteBuffer = "";
+    const lineCount = content.split("\n").length;
+
+    if (lineCount > 2) {
+      // Multi-line paste → store as chunk, don't send to input
+      pasteEvents.emit("paste", { content, lines: lineCount });
+      return true;
+    }
+
+    // Short paste (1-2 lines) — send as normal input
+    const sanitized = content.replace(/\r?\n/g, " ");
+    if (sanitized) {
+      return origPush(sanitized, "utf-8" as any);
+    }
+    return true;
+  }
+
+  if (inPaste) {
+    pasteBuffer += data;
+    return true;
+  }
+
+  data = data.replace(/\x1b\[20[01]~/g, "");
+  return origPush(typeof chunk === "string" ? data : Buffer.from(data), encoding);
+};
+
+// Disable bracketed paste on exit
+process.on("exit", () => {
+  process.stdout.write("\x1b[?2004l");
+});
+
+// Handle terminal resize — clear ghost artifacts
+process.stdout.on("resize", () => {
+  process.stdout.write("\x1B[2J\x1B[H");
+});
+
+render(<App />, { exitOnCtrlC: false });

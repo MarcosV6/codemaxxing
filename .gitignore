@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Private docs
+ROADMAP.md
+
+# Test artifacts (created by LLM during sessions)
+test.txt
+hello-world.*
+demo-*.tsx
+run-demo.sh
+neon-counter.*
