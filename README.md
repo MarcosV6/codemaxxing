@@ -40,6 +40,12 @@ curl -fsSL -o %TEMP%\install-codemaxxing.bat https://raw.githubusercontent.com/M
 npm install -g codemaxxing
 ```
 
+## Updating
+
+```bash
+npm update -g codemaxxing
+```
+
 ## Quick Start
 
 ### 1. Start Your LLM
