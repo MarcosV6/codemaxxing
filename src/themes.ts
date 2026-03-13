@@ -162,7 +162,7 @@ export const THEMES: Record<string, Theme> = {
   },
 };
 
-export const DEFAULT_THEME = "neon";
+export const DEFAULT_THEME = "nord";
 
 export function getTheme(name: string): Theme {
   return THEMES[name] ?? THEMES[DEFAULT_THEME];
