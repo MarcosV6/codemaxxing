@@ -9,6 +9,7 @@ import { loadConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listMode
 import { listSessions, getSession, loadMessages } from "./utils/sessions.js";
 import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
+import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 
 const VERSION = "0.1.0";
 
@@ -37,6 +38,7 @@ const SLASH_COMMANDS = [
   { cmd: "/git on", desc: "enable auto-commits" },
   { cmd: "/git off", desc: "disable auto-commits" },
   { cmd: "/models", desc: "list available models" },
+  { cmd: "/theme", desc: "switch color theme" },
   { cmd: "/model", desc: "switch model mid-session" },
   { cmd: "/sessions", desc: "list past sessions" },
   { cmd: "/resume", desc: "resume a past session" },
@@ -54,7 +56,7 @@ const SPINNER_MESSAGES = [
 ];
 
 // ── Neon Spinner ──
-function NeonSpinner({ message }: { message: string }) {
+function NeonSpinner({ message, colors }: { message: string; colors: Theme['colors'] }) {
   const [frame, setFrame] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
@@ -69,16 +71,16 @@ function NeonSpinner({ message }: { message: string }) {
 
   return (
     <Text>
-      {"  "}<Text color="#00FFFF">{SPINNER_FRAMES[frame]}</Text>
-      {" "}<Text bold color="#FF00FF">{message}</Text>
-      {" "}<Text color="#008B8B">[{elapsed}s]</Text>
+      {"  "}<Text color={colors.spinner}>{SPINNER_FRAMES[frame]}</Text>
+      {" "}<Text bold color={colors.secondary}>{message}</Text>
+      {" "}<Text color={colors.muted}>[{elapsed}s]</Text>
     </Text>
   );
 }
 
 // ── Streaming Indicator (subtle, shows model is still working) ──
 const STREAM_DOTS = ["·  ", "·· ", "···", " ··", "  ·", "   "];
-function StreamingIndicator() {
+function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
@@ -90,8 +92,8 @@ function StreamingIndicator() {
 
   return (
     <Text dimColor>
-      {"  "}<Text color="#008B8B">{STREAM_DOTS[frame]}</Text>
-      {" "}<Text color="#008B8B">streaming</Text>
+      {"  "}<Text color={colors.spinner}>{STREAM_DOTS[frame]}</Text>
+      {" "}<Text color={colors.muted}>streaming</Text>
     </Text>
   );
 }
@@ -120,6 +122,7 @@ function App() {
   const [spinnerMsg, setSpinnerMsg] = useState("");
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
+  const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
   const providerRef = React.useRef<{ baseUrl: string; apiKey: string }>({ baseUrl: "", apiKey: "" });
   const [ready, setReady] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState<string[]>([]);
@@ -368,6 +371,23 @@ function App() {
       agent.switchModel(newModel);
       setModelName(newModel);
       addMsg("info", `✅ Switched to model: ${newModel}`);
+      return;
+    }
+    if (trimmed.startsWith("/theme")) {
+      const themeName = trimmed.replace("/theme", "").trim();
+      if (!themeName) {
+        const available = Object.entries(THEMES)
+          .map(([key, t]) => `  ${key === theme.name.toLowerCase() ? "▸ " : "  "}${key} — ${t.description}`)
+          .join("\n");
+        addMsg("info", `Current theme: ${theme.name}\n\nAvailable themes:\n${available}\n\n  Usage: /theme <name>`);
+        return;
+      }
+      if (!THEMES[themeName]) {
+        addMsg("error", `Theme "${themeName}" not found. Use /theme to see available themes.`);
+        return;
+      }
+      setTheme(getTheme(themeName));
+      addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
       return;
     }
     if (trimmed === "/map") {
@@ -628,26 +648,26 @@ function App() {
   return (
     <Box flexDirection="column">
       {/* ═══ BANNER BOX ═══ */}
-      <Box flexDirection="column" borderStyle="round" borderColor="#00FFFF" paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={theme.colors.border} paddingX={1}>
         {codeLines.map((line, i) => (
-          <Text key={`c${i}`} color="#00FFFF">{line}</Text>
+          <Text key={`c${i}`} color={theme.colors.primary}>{line}</Text>
         ))}
         {maxxingLines.map((line, i) => (
-          <Text key={`m${i}`} color={i === maxxingLines.length - 1 ? "#CC00CC" : "#FF00FF"}>{line}</Text>
+          <Text key={`m${i}`} color={theme.colors.secondary}>{line}</Text>
         ))}
         <Text>
-          <Text color="#008B8B">{"                            v" + VERSION}</Text>
-          {"  "}<Text color="#00FFFF">💪</Text>
+          <Text color={theme.colors.muted}>{"                            v" + VERSION}</Text>
+          {"  "}<Text color={theme.colors.primary}>💪</Text>
           {"  "}<Text dimColor>your code. your model. no excuses.</Text>
         </Text>
-        <Text dimColor>{"  Type "}<Text color="#008B8B">/help</Text>{" for commands · "}<Text color="#008B8B">Ctrl+C</Text>{" twice to exit"}</Text>
+        <Text dimColor>{"  Type "}<Text color={theme.colors.muted}>/help</Text>{" for commands · "}<Text color={theme.colors.muted}>Ctrl+C</Text>{" twice to exit"}</Text>
       </Box>
 
       {/* ═══ CONNECTION INFO BOX ═══ */}
       {connectionInfo.length > 0 && (
-        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={1}>
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.muted} paddingX={1} marginBottom={1}>
           {connectionInfo.map((line, i) => (
-            <Text key={i} color={line.startsWith("✔") ? "#00FFFF" : line.startsWith("✗") ? "red" : "#008B8B"}>{line}</Text>
+            <Text key={i} color={line.startsWith("✔") ? theme.colors.primary : line.startsWith("✗") ? theme.colors.error : theme.colors.muted}>{line}</Text>
           ))}
         </Box>
       )}
@@ -658,7 +678,7 @@ function App() {
           case "user":
             return (
               <Box key={msg.id} marginTop={1}>
-                <Text color="#008B8B">{"  > "}{msg.text}</Text>
+                <Text color={theme.colors.userInput}>{"  > "}{msg.text}</Text>
               </Box>
             );
           case "response":
@@ -666,9 +686,9 @@ function App() {
               <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
                 {msg.text.split("\n").map((l, i) => (
                   <Text key={i} wrap="wrap">
-                    {i === 0 ? <Text color="#00FFFF">● </Text> : <Text>  </Text>}
-                    {l.startsWith("```") ? <Text color="#008B8B">{l}</Text> :
-                     l.startsWith("# ") || l.startsWith("## ") ? <Text bold color="#FF00FF">{l}</Text> :
+                    {i === 0 ? <Text color={theme.colors.response}>● </Text> : <Text>  </Text>}
+                    {l.startsWith("```") ? <Text color={theme.colors.muted}>{l}</Text> :
+                     l.startsWith("# ") || l.startsWith("## ") ? <Text bold color={theme.colors.secondary}>{l}</Text> :
                      l.startsWith("**") ? <Text bold>{l}</Text> :
                      <Text>{l}</Text>}
                   </Text>
@@ -678,53 +698,53 @@ function App() {
           case "tool":
             return (
               <Box key={msg.id}>
-                <Text><Text color="#00FFFF">  ● </Text><Text bold color="#FF00FF">{msg.text}</Text></Text>
+                <Text><Text color={theme.colors.response}>  ● </Text><Text bold color={theme.colors.tool}>{msg.text}</Text></Text>
               </Box>
             );
           case "tool-result":
-            return <Text key={msg.id} color="#008B8B">    {msg.text}</Text>;
+            return <Text key={msg.id} color={theme.colors.toolResult}>    {msg.text}</Text>;
           case "error":
-            return <Text key={msg.id} color="red">  {msg.text}</Text>;
+            return <Text key={msg.id} color={theme.colors.error}>  {msg.text}</Text>;
           case "info":
-            return <Text key={msg.id} color="#008B8B">  {msg.text}</Text>;
+            return <Text key={msg.id} color={theme.colors.muted}>  {msg.text}</Text>;
           default:
             return <Text key={msg.id}>{msg.text}</Text>;
         }
       })}
 
       {/* ═══ SPINNER ═══ */}
-      {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} />}
-      {streaming && !loading && <StreamingIndicator />}
+      {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} colors={theme.colors} />}
+      {streaming && !loading && <StreamingIndicator colors={theme.colors} />}
 
       {/* ═══ APPROVAL PROMPT ═══ */}
       {approval && (
-        <Box flexDirection="column" borderStyle="single" borderColor="#FF8C00" paddingX={1} marginTop={1}>
-          <Text bold color="#FF8C00">⚠ Approve {approval.tool}?</Text>
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginTop={1}>
+          <Text bold color={theme.colors.warning}>⚠ Approve {approval.tool}?</Text>
           {approval.tool === "write_file" && approval.args.path ? (
-            <Text color="#008B8B">{"  📄 "}{String(approval.args.path)}</Text>
+            <Text color={theme.colors.muted}>{"  📄 "}{String(approval.args.path)}</Text>
           ) : null}
           {approval.tool === "write_file" && approval.args.content ? (
-            <Text color="#008B8B">{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
+            <Text color={theme.colors.muted}>{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
           ) : null}
           {approval.tool === "run_command" && approval.args.command ? (
-            <Text color="#008B8B">{"  $ "}{String(approval.args.command)}</Text>
+            <Text color={theme.colors.muted}>{"  $ "}{String(approval.args.command)}</Text>
           ) : null}
           <Text>
-            <Text color="#00FF00" bold> [y]</Text><Text>es  </Text>
-            <Text color="#FF0000" bold>[n]</Text><Text>o  </Text>
-            <Text color="#00FFFF" bold>[a]</Text><Text>lways</Text>
+            <Text color={theme.colors.success} bold> [y]</Text><Text>es  </Text>
+            <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
+            <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
           </Text>
         </Box>
       )}
 
       {/* ═══ SESSION PICKER ═══ */}
       {sessionPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor="#FF00FF" paddingX={1} marginBottom={0}>
-          <Text bold color="#FF00FF">Resume a session:</Text>
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.secondary} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Resume a session:</Text>
           {sessionPicker.map((s, i) => (
             <Text key={s.id}>
-              {i === sessionPickerIndex ? <Text color="#FF00FF" bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === sessionPickerIndex ? "#FF00FF" : "#008B8B"}>{s.display}</Text>
+              {i === sessionPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === sessionPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.display}</Text>
             </Text>
           ))}
           <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
@@ -733,12 +753,12 @@ function App() {
 
       {/* ═══ COMMAND SUGGESTIONS ═══ */}
       {showSuggestions && (
-        <Box flexDirection="column" borderStyle="single" borderColor="#008B8B" paddingX={1} marginBottom={0}>
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.muted} paddingX={1} marginBottom={0}>
           {cmdMatches.slice(0, 6).map((c, i) => (
             <Text key={i}>
-              {i === cmdIndex ? <Text color="#FF00FF" bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === cmdIndex ? "#FF00FF" : "#00FFFF"} bold>{c.cmd}</Text>
-              <Text color="#008B8B">{" — "}{c.desc}</Text>
+              {i === cmdIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === cmdIndex ? theme.colors.suggestion : theme.colors.primary} bold>{c.cmd}</Text>
+              <Text color={theme.colors.muted}>{" — "}{c.desc}</Text>
             </Text>
           ))}
           <Text dimColor>{"  ↑↓ navigate · Tab select"}</Text>
@@ -746,14 +766,14 @@ function App() {
       )}
 
       {/* ═══ INPUT BOX (always at bottom) ═══ */}
-      <Box borderStyle="single" borderColor={approval ? "#FF8C00" : "#00FFFF"} paddingX={1}>
-        <Text color="#FF00FF" bold>{"> "}</Text>
+      <Box borderStyle="single" borderColor={approval ? theme.colors.warning : theme.colors.border} paddingX={1}>
+        <Text color={theme.colors.secondary} bold>{"> "}</Text>
         {approval ? (
-          <Text color="#FF8C00">waiting for approval...</Text>
+          <Text color={theme.colors.warning}>waiting for approval...</Text>
         ) : ready && !loading ? (
           <Box>
             {pastedChunks.map((p) => (
-              <Text key={p.id} color="#008B8B">[Pasted text #{p.id} +{p.lines} lines]</Text>
+              <Text key={p.id} color={theme.colors.muted}>[Pasted text #{p.id} +{p.lines} lines]</Text>
             ))}
             <TextInput
               key={inputKey}
