@@ -10,8 +10,9 @@ import { listSessions, getSession, loadMessages } from "./utils/sessions.js";
 import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
+import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.5";
 
 // ── Helpers ──
 function formatTimeAgo(date: Date): string {
@@ -28,6 +29,7 @@ function formatTimeAgo(date: Date): string {
 // ── Slash Commands ──
 const SLASH_COMMANDS = [
   { cmd: "/help", desc: "show commands" },
+  { cmd: "/login", desc: "set up authentication" },
   { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
@@ -134,6 +136,8 @@ function App() {
   const [sessionPickerIndex, setSessionPickerIndex] = useState(0);
   const [themePicker, setThemePicker] = useState(false);
   const [themePickerIndex, setThemePickerIndex] = useState(0);
+  const [loginPicker, setLoginPicker] = useState(false);
+  const [loginPickerIndex, setLoginPickerIndex] = useState(0);
   const [approval, setApproval] = useState<{
     tool: string;
     args: Record<string, unknown>;
@@ -325,25 +329,8 @@ function App() {
       return;
     }
     if (trimmed === "/login" || trimmed === "/auth") {
-      addMsg("info", [
-        "💪 Authentication Setup",
-        "",
-        "Run 'codemaxxing login' in a new terminal to set up:",
-        "  • OpenRouter OAuth (browser login, 200+ models)",
-        "  • Anthropic via Claude Code (your Pro/Max subscription)",
-        "  • ChatGPT via Codex CLI (your Plus/Pro subscription)",
-        "  • Qwen CLI (your Qwen access)",
-        "  • GitHub Copilot (device flow)",
-        "  • Manual API keys for any provider",
-        "",
-        "Commands:",
-        "  codemaxxing login              — interactive setup",
-        "  codemaxxing auth list          — see saved credentials",
-        "  codemaxxing auth openrouter    — OpenRouter OAuth",
-        "  codemaxxing auth anthropic     — Anthropic subscription",
-        "  codemaxxing auth openai        — ChatGPT subscription",
-        "  codemaxxing auth copilot       — GitHub Copilot",
-      ].join("\n"));
+      setLoginPicker(true);
+      setLoginPickerIndex(0);
       return;
     }
     if (trimmed === "/help") {
@@ -555,6 +542,87 @@ function App() {
         }
         return;
       }
+    }
+
+    // Login picker navigation
+    if (loginPicker) {
+      const loginProviders = PROVIDERS.filter((p) => p.id !== "local");
+      if (key.upArrow) {
+        setLoginPickerIndex((prev: number) => (prev - 1 + loginProviders.length) % loginProviders.length);
+        return;
+      }
+      if (key.downArrow) {
+        setLoginPickerIndex((prev: number) => (prev + 1) % loginProviders.length);
+        return;
+      }
+      if (key.return) {
+        const selected = loginProviders[loginPickerIndex];
+        setLoginPicker(false);
+
+        if (selected.id === "openrouter") {
+          addMsg("info", "Starting OpenRouter OAuth — opening browser...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for authorization...");
+          openRouterOAuth((msg: string) => addMsg("info", msg))
+            .then((cred) => {
+              addMsg("info", `✅ OpenRouter authenticated! You now have access to 200+ models.`);
+              addMsg("info", `Switch with: /model anthropic/claude-sonnet-4`);
+              setLoading(false);
+            })
+            .catch((err: any) => {
+              addMsg("error", `OAuth failed: ${err.message}`);
+              setLoading(false);
+            });
+        } else if (selected.id === "anthropic") {
+          addMsg("info", "Starting Anthropic setup-token flow...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for Claude Code auth...");
+          anthropicSetupToken((msg: string) => addMsg("info", msg))
+            .then((cred) => {
+              addMsg("info", `✅ Anthropic authenticated! (${cred.label})`);
+              setLoading(false);
+            })
+            .catch((err: any) => {
+              addMsg("error", `Anthropic auth failed: ${err.message}`);
+              setLoading(false);
+            });
+        } else if (selected.id === "openai") {
+          const imported = importCodexToken((msg: string) => addMsg("info", msg));
+          if (imported) {
+            addMsg("info", `✅ Imported Codex credentials! (${imported.label})`);
+          } else {
+            addMsg("info", "No Codex CLI found. Run: codemaxxing auth api-key openai <your-key>");
+          }
+        } else if (selected.id === "qwen") {
+          const imported = importQwenToken((msg: string) => addMsg("info", msg));
+          if (imported) {
+            addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
+          } else {
+            addMsg("info", "No Qwen CLI found. Run: codemaxxing auth api-key qwen <your-key>");
+          }
+        } else if (selected.id === "copilot") {
+          addMsg("info", "Starting GitHub Copilot device flow...");
+          setLoading(true);
+          setSpinnerMsg("Waiting for GitHub authorization...");
+          copilotDeviceFlow((msg: string) => addMsg("info", msg))
+            .then(() => {
+              addMsg("info", `✅ GitHub Copilot authenticated!`);
+              setLoading(false);
+            })
+            .catch((err: any) => {
+              addMsg("error", `Copilot auth failed: ${err.message}`);
+              setLoading(false);
+            });
+        } else {
+          addMsg("info", `Run: codemaxxing auth api-key ${selected.id} <your-key>\n  Get key at: ${selected.consoleUrl ?? selected.baseUrl}`);
+        }
+        return;
+      }
+      if (key.escape) {
+        setLoginPicker(false);
+        return;
+      }
+      return;
     }
 
     // Theme picker navigation

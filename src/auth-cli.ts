@@ -28,9 +28,9 @@ import {
   detectAvailableAuth,
 } from "./utils/auth.js";
 
-const command = process.argv[2] ?? "login";
+export async function main() {
+  const command = process.argv[2] ?? "login";
 
-async function main() {
   switch (command) {
     case "login": {
       console.log("\n💪 Codemaxxing Authentication\n");
@@ -280,7 +280,10 @@ Examples:
   }
 }
 
-main().catch((err) => {
-  console.error(`Error: ${err.message}`);
-  process.exit(1);
-});
+// Run main if this is the main module
+if (typeof require !== "undefined" && require.main === module) {
+  main().catch((err) => {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  });
+}
