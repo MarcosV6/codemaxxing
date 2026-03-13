@@ -131,6 +131,8 @@ function App() {
   const [inputKey, setInputKey] = useState(0);
   const [sessionPicker, setSessionPicker] = useState<Array<{ id: string; display: string }> | null>(null);
   const [sessionPickerIndex, setSessionPickerIndex] = useState(0);
+  const [themePicker, setThemePicker] = useState(false);
+  const [themePickerIndex, setThemePickerIndex] = useState(0);
   const [approval, setApproval] = useState<{
     tool: string;
     args: Record<string, unknown>;
@@ -376,10 +378,10 @@ function App() {
     if (trimmed.startsWith("/theme")) {
       const themeName = trimmed.replace("/theme", "").trim();
       if (!themeName) {
-        const available = Object.entries(THEMES)
-          .map(([key, t]) => `  ${key === theme.name.toLowerCase() ? "▸ " : "  "}${key} — ${t.description}`)
-          .join("\n");
-        addMsg("info", `Current theme: ${theme.name}\n\nAvailable themes:\n${available}\n\n  Usage: /theme <name>`);
+        const themeKeys = listThemes();
+        const currentIdx = themeKeys.indexOf(theme.name.toLowerCase());
+        setThemePicker(true);
+        setThemePickerIndex(currentIdx >= 0 ? currentIdx : 0);
         return;
       }
       if (!THEMES[themeName]) {
@@ -529,6 +531,31 @@ function App() {
         }
         return;
       }
+    }
+
+    // Theme picker navigation
+    if (themePicker) {
+      const themeKeys = listThemes();
+      if (key.upArrow) {
+        setThemePickerIndex((prev) => (prev - 1 + themeKeys.length) % themeKeys.length);
+        return;
+      }
+      if (key.downArrow) {
+        setThemePickerIndex((prev) => (prev + 1) % themeKeys.length);
+        return;
+      }
+      if (key.return) {
+        const selected = themeKeys[themePickerIndex];
+        setTheme(getTheme(selected));
+        setThemePicker(false);
+        addMsg("info", `✅ Switched to theme: ${THEMES[selected].name}`);
+        return;
+      }
+      if (key.escape) {
+        setThemePicker(false);
+        return;
+      }
+      return;
     }
 
     // Session picker navigation
@@ -734,6 +761,22 @@ function App() {
             <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
             <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* ═══ THEME PICKER ═══ */}
+      {themePicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Choose a theme:</Text>
+          {listThemes().map((key, i) => (
+            <Text key={key}>
+              {i === themePickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === themePickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{key}</Text>
+              <Text color={theme.colors.muted}>{" — "}{THEMES[key].description}</Text>
+              {key === theme.name.toLowerCase() ? <Text color={theme.colors.muted}> (current)</Text> : null}
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
         </Box>
       )}
 
