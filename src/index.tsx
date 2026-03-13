@@ -30,7 +30,6 @@ function formatTimeAgo(date: Date): string {
 const SLASH_COMMANDS = [
   { cmd: "/help", desc: "show commands" },
   { cmd: "/login", desc: "set up authentication" },
-  { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
   { cmd: "/context", desc: "show message count" },

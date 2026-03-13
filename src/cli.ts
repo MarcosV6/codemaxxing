@@ -15,7 +15,7 @@ const __dirname = dirname(__filename);
 const subcmd = process.argv[2];
 
 if (subcmd === "login" || subcmd === "auth") {
-  // Route to auth CLI
+  // Route to auth CLI (spawn is fine here — no TUI/raw mode needed)
   const authScript = join(__dirname, "auth-cli.js");
   const args = subcmd === "login"
     ? [authScript, "login", ...process.argv.slice(3)]
@@ -28,12 +28,6 @@ if (subcmd === "login" || subcmd === "auth") {
 
   child.on("exit", (code) => process.exit(code ?? 0));
 } else {
-  // Route to TUI
-  const tuiScript = join(__dirname, "index.js");
-  const child = spawn(process.execPath, [tuiScript, ...process.argv.slice(2)], {
-    stdio: "inherit",
-    cwd: process.cwd(),
-  });
-
-  child.on("exit", (code) => process.exit(code ?? 0));
+  // TUI mode — import directly (not spawn) to preserve raw stdin
+  await import("./index.js");
 }

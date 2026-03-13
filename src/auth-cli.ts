@@ -280,10 +280,8 @@ Examples:
   }
 }
 
-// Run main if this is the main module
-if (typeof require !== "undefined" && require.main === module) {
-  main().catch((err) => {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  });
-}
+// Always run main — this module is either imported and main() called, or run directly
+main().catch((err) => {
+  console.error(`Error: ${err.message}`);
+  process.exit(1);
+});
