@@ -61,6 +61,39 @@ That's it. Codemaxxing auto-detects LM Studio and connects. Start coding.
 
 ---
 
+## Authentication
+
+**One command to connect any provider:**
+
+```bash
+codemaxxing login
+```
+
+Interactive setup walks you through it. Or use `/login` inside the TUI.
+
+**Supported auth methods:**
+
+| Provider | Methods |
+|----------|---------|
+| **OpenRouter** | OAuth (browser login) or API key — one login, 200+ models |
+| **Anthropic** | Link your Claude subscription (via Claude Code) or API key |
+| **OpenAI** | Import from Codex CLI or API key |
+| **Qwen** | Import from Qwen CLI or API key |
+| **GitHub Copilot** | Device flow (browser) |
+| **Google Gemini** | API key |
+| **Any provider** | API key + custom base URL |
+
+```bash
+codemaxxing login              # Interactive provider picker
+codemaxxing auth list          # See saved credentials
+codemaxxing auth remove <name> # Delete a credential
+codemaxxing auth openrouter    # Direct OpenRouter OAuth
+```
+
+Credentials stored securely in `~/.codemaxxing/auth.json` (owner-only permissions).
+
+---
+
 ## Advanced Setup
 
 **With a remote provider (OpenAI, OpenRouter, etc.):**
@@ -106,6 +139,9 @@ Switch models mid-session without restarting:
 - `/model gpt-4o` — switch to a different model
 - `/models` — list available models from your provider
 
+### 🔐 Authentication
+One command to connect any LLM provider. OpenRouter OAuth (browser login for 200+ models), Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys. Use `codemaxxing login` or `/login` in-session.
+
 ### 📋 Smart Paste
 Paste large code blocks without breaking the UI. Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges (like Claude Code).
 
@@ -117,6 +153,7 @@ Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to s
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/login` | Interactive auth setup |
 | `/model <name>` | Switch model mid-session |
 | `/models` | List available models |
 | `/map` | Show repository map |
