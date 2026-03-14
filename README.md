@@ -12,33 +12,33 @@ Open-source terminal coding agent. Connect **any** LLM — local or remote — a
 
 Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM Studio, Ollama, OpenRouter, OpenAI, or any OpenAI-compatible endpoint. Your machine, your model, your rules.
 
-## Quick Install (Recommended)
+## Install
 
-**Linux / macOS:**
+**If you have Node.js:**
+```bash
+npm install -g codemaxxing
+```
+
+**If you don't have Node.js:**
+
+The one-line installers below will install Node.js first, then codemaxxing.
+
+*Linux / macOS:*
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.sh)"
 ```
 
-**Windows (PowerShell as Administrator):**
-```powershell
-curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.bat; & $env:TEMP\install-codemaxxing.bat
-```
-
-**Windows (CMD as Administrator):**
+*Windows (CMD as Administrator):*
 ```
 curl -fsSL -o %TEMP%\install-codemaxxing.bat https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.bat && %TEMP%\install-codemaxxing.bat
 ```
 
-> **Note:** Restart your terminal after installation to ensure everything works.
-
-## Manual Installation
-
-**Prerequisites:** [Node.js](https://nodejs.org) 20 or later.
-
-**NPM:**
-```bash
-npm install -g codemaxxing
+*Windows (PowerShell as Administrator):*
+```powershell
+curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.com/MarcosV6/codemaxxing/main/install.bat; & $env:TEMP\install-codemaxxing.bat
 ```
+
+> **Windows note:** If Node.js was just installed, you may need to close and reopen your terminal, then run `npm install -g codemaxxing` manually. This is a Windows PATH limitation.
 
 ## Updating
 
