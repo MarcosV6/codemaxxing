@@ -400,8 +400,7 @@ function App() {
         // Commands that need args (like /commit, /model) — fill input instead of executing
         if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
             selected.cmd === "/skills install" || selected.cmd === "/skills remove" || selected.cmd === "/skills search" ||
-            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect" ||
-            selected.cmd === "/ollama pull" || selected.cmd === "/ollama delete") {
+            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
