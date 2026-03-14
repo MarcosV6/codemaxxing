@@ -191,10 +191,35 @@ Conversations auto-save to SQLite. Pick up where you left off:
 - `/session delete` — remove a session
 - `/resume` — interactive session picker
 
+### 🔌 MCP Support (Model Context Protocol)
+Connect to external tools via the industry-standard MCP protocol. Databases, GitHub, Slack, browsers — anything with an MCP server.
+- Compatible with `.cursor/mcp.json` and `opencode.json` configs
+- `/mcp` — show connected servers
+- `/mcp add github npx -y @modelcontextprotocol/server-github` — add a server
+- `/mcp tools` — list all available MCP tools
+
+### 🖥️ Zero-Setup Local LLM
+First time with no LLM? Codemaxxing walks you through it:
+1. Detects your hardware (CPU, RAM, GPU)
+2. Recommends coding models that fit your machine
+3. Installs Ollama automatically
+4. Downloads the model with a progress bar
+5. Connects and drops you into coding mode
+
+No googling, no config files, no decisions. Just run `codemaxxing`.
+
+### 🦙 Ollama Management
+Full Ollama control from inside codemaxxing:
+- `/ollama` — status, installed models, GPU usage
+- `/ollama pull` — interactive model picker + download
+- `/ollama delete` — pick and remove models
+- `/ollama start` / `/ollama stop` — server management
+- Exit warning when Ollama is using GPU memory
+
 ### 🔄 Multi-Provider
-Switch models mid-session without restarting:
-- `/model gpt-4o` — switch to a different model
-- `/models` — list available models from your provider
+Switch models mid-session with an interactive picker:
+- `/model` — browse and switch models
+- `/model gpt-4o` — switch directly by name
 - Native Anthropic API support (not just OpenAI-compatible)
 
 ### 🎨 14 Themes
@@ -216,11 +241,15 @@ Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to s
 | `/help` | Show all commands |
 | `/connect` | Retry LLM connection |
 | `/login` | Interactive auth setup |
+| `/model` | Browse & switch models (picker) |
 | `/architect` | Toggle architect mode / set model |
 | `/skills` | Browse, install, manage skills |
 | `/lint on/off` | Toggle auto-linting |
-| `/model <name>` | Switch model mid-session |
-| `/models` | List available models |
+| `/mcp` | MCP server status & tools |
+| `/ollama` | Ollama status, models & GPU |
+| `/ollama pull` | Download a model (picker) |
+| `/ollama delete` | Remove a model (picker) |
+| `/ollama start/stop` | Server management |
 | `/theme` | Switch color theme |
 | `/map` | Show repository map |
 | `/sessions` | List past sessions |
@@ -295,13 +324,15 @@ Settings are stored in `~/.codemaxxing/settings.json`:
 
 ## Tools
 
-Codemaxxing gives the model these tools:
+Built-in tools:
 
 - **read_file** — Read file contents (safe)
-- **write_file** — Write/create files (requires approval)
+- **write_file** — Write/create files (requires approval, shows diff)
 - **list_files** — List directory contents (safe)
 - **search_files** — Search for patterns across files (safe)
 - **run_command** — Execute shell commands (requires approval)
+
+Plus any tools from connected MCP servers (databases, APIs, GitHub, etc.)
 
 ## Project Context
 
@@ -311,8 +342,10 @@ Drop a `CODEMAXXING.md` file in your project root to give the model extra contex
 
 - **Runtime:** Node.js + TypeScript
 - **TUI:** [Ink](https://github.com/vadimdemedes/ink) (React for the terminal)
-- **LLM SDK:** [OpenAI SDK](https://github.com/openai/openai-node) (works with any compatible API)
+- **LLM SDKs:** [OpenAI SDK](https://github.com/openai/openai-node) + [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript)
+- **MCP:** [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)
 - **Sessions:** [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
+- **Local LLM:** Ollama integration (auto-install, pull, manage)
 - **Zero cloud dependencies** — everything runs locally
 
 ## Inspired By
