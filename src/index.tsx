@@ -17,7 +17,9 @@ import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware
 import { getRecommendations, getRecommendationsWithLlmfit, getFitIcon, isLlmfitAvailable, type ScoredModel } from "./utils/models.js";
 import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, stopOllama, pullModel, listInstalledModelsDetailed, deleteModel, getGPUMemoryUsage, type PullProgress } from "./utils/ollama.js";
 
-const VERSION = require("../package.json").version;
+import { createRequire } from "module";
+const _require = createRequire(import.meta.url);
+const VERSION = _require("../package.json").version;
 
 // ── Helpers ──
 function formatTimeAgo(date: Date): string {
@@ -1492,7 +1494,7 @@ function App() {
             try {
               // Use pipe instead of inherit — Ink TUI conflicts with inherit stdio
               const parts = installCmd.split(" ");
-              const result = require("child_process").spawnSync(parts[0], parts.slice(1), {
+              const result = _require("child_process").spawnSync(parts[0], parts.slice(1), {
                 stdio: "pipe",
                 timeout: 180000,
                 shell: true,
