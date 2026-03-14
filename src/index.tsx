@@ -188,9 +188,9 @@ function App() {
         info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
         setConnectionInfo([...info]);
       } else {
-        info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
-        info.push("  Use --base-url and --api-key to connect to a remote provider.");
-        info.push("  Type /login to authenticate, or /connect to retry.");
+        info.push("✗ No local LLM server found.");
+        info.push("  /connect  — retry after starting LM Studio or Ollama");
+        info.push("  /login    — authenticate with a cloud provider");
         setConnectionInfo([...info]);
         setReady(true);
         return;
