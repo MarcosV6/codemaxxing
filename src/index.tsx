@@ -191,6 +191,8 @@ function App() {
   const [ollamaDeletePickerIndex, setOllamaDeletePickerIndex] = useState(0);
   const [ollamaPullPicker, setOllamaPullPicker] = useState(false);
   const [ollamaPullPickerIndex, setOllamaPullPickerIndex] = useState(0);
+  const [modelPicker, setModelPicker] = useState<string[] | null>(null);
+  const [modelPickerIndex, setModelPickerIndex] = useState(0);
 
   // ── Setup Wizard State ──
   type WizardScreen = "connection" | "models" | "install-ollama" | "pulling" | null;
@@ -939,10 +941,32 @@ function App() {
       }
       return;
     }
-    if (trimmed.startsWith("/model")) {
-      const newModel = trimmed.replace("/model", "").trim();
+    if (trimmed === "/model" || trimmed === "/models") {
+      // Show picker of available models
+      try {
+        const ollamaModels = await listInstalledModelsDetailed();
+        if (ollamaModels.length > 0) {
+          setModelPicker(ollamaModels.map(m => m.name));
+          setModelPickerIndex(0);
+          return;
+        }
+      } catch {}
+      // Fallback: try provider's model list
+      try {
+        const providerModels = await listModels(providerRef.current?.baseUrl || "", providerRef.current?.apiKey || "");
+        if (providerModels.length > 0) {
+          setModelPicker(providerModels.map((m: any) => m.id || m));
+          setModelPickerIndex(0);
+          return;
+        }
+      } catch {}
+      addMsg("info", `Current model: ${modelName}\n  Usage: /model <model-name>`);
+      return;
+    }
+    if (trimmed.startsWith("/model ")) {
+      const newModel = trimmed.replace("/model ", "").trim();
       if (!newModel) {
-        addMsg("info", `Current model: ${agent.getModel()}\n  Usage: /model <model-name>`);
+        addMsg("info", `Current model: ${modelName}\n  Usage: /model <model-name>`);
         return;
       }
       agent.switchModel(newModel);
@@ -1385,6 +1409,34 @@ function App() {
           setSkillsPicker(null);
           return;
         }
+        return;
+      }
+      return;
+    }
+
+    // ── Model picker ──
+    if (modelPicker) {
+      if (key.upArrow) {
+        setModelPickerIndex((prev) => (prev - 1 + modelPicker.length) % modelPicker.length);
+        return;
+      }
+      if (key.downArrow) {
+        setModelPickerIndex((prev) => (prev + 1) % modelPicker.length);
+        return;
+      }
+      if (key.escape) {
+        setModelPicker(null);
+        return;
+      }
+      if (key.return) {
+        const selected = modelPicker[modelPickerIndex];
+        if (selected && agent) {
+          agent.switchModel(selected);
+          setModelName(selected);
+          addMsg("info", `✅ Switched to: ${selected}`);
+          refreshConnectionBanner();
+        }
+        setModelPicker(null);
         return;
       }
       return;
@@ -2209,6 +2261,23 @@ function App() {
             <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
             <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* ═══ MODEL PICKER ═══ */}
+      {modelPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Switch model:</Text>
+          <Text>{""}</Text>
+          {modelPicker.map((m, i) => (
+            <Text key={m}>
+              {"  "}{i === modelPickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
+              <Text color={i === modelPickerIndex ? theme.colors.primary : undefined}>{m}</Text>
+              {m === modelName ? <Text color={theme.colors.success}>{" (active)"}</Text> : null}
+            </Text>
+          ))}
+          <Text>{""}</Text>
+          <Text dimColor>{"  ↑↓ navigate · Enter to switch · Esc cancel"}</Text>
         </Box>
       )}
 
