@@ -6,7 +6,8 @@ import type {
   ChatCompletionChunk,
 } from "openai/resources/chat/completions";
 import { FILE_TOOLS, executeTool, generateDiff, getExistingContent } from "./tools/files.js";
-import { buildProjectContext, getSystemPrompt } from "./utils/context.js";
+import { detectLinter, runLinter } from "./utils/lint.js";
+import { buildProjectContext, getSystemPrompt, loadProjectRules } from "./utils/context.js";
 import { isGitRepo, autoCommit } from "./utils/git.js";
 import { buildSkillPrompts, getActiveSkillCount } from "./utils/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "./utils/sessions.js";
@@ -71,6 +72,8 @@ export interface AgentOptions {
   onToolApproval?: (name: string, args: Record<string, unknown>, diff?: string) => Promise<"yes" | "no" | "always">;
   onGitCommit?: (message: string) => void;
   onContextCompressed?: (oldTokens: number, newTokens: number) => void;
+  onArchitectPlan?: (plan: string) => void;
+  onLintResult?: (file: string, errors: string) => void;
   contextCompressionThreshold?: number;
 }
 
@@ -101,6 +104,10 @@ export class CodingAgent {
   private systemPrompt: string = "";
   private compressionThreshold: number;
   private sessionDisabledSkills: Set<string> = new Set();
+  private projectRulesSource: string | null = null;
+  private architectModel: string | null = null;
+  private autoLintEnabled: boolean = true;
+  private detectedLinter: { command: string; name: string } | null = null;
 
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
@@ -131,7 +138,12 @@ export class CodingAgent {
   async init(): Promise<void> {
     const context = await buildProjectContext(this.cwd);
     const skillPrompts = buildSkillPrompts(this.cwd, this.sessionDisabledSkills);
-    this.systemPrompt = await getSystemPrompt(context, skillPrompts);
+    const rules = loadProjectRules(this.cwd);
+    if (rules) this.projectRulesSource = rules.source;
+    this.systemPrompt = await getSystemPrompt(context, skillPrompts, rules?.content ?? "");
+
+    // Detect project linter
+    this.detectedLinter = detectLinter(this.cwd);
 
     this.messages = [
       { role: "system", content: this.systemPrompt },
@@ -172,6 +184,16 @@ export class CodingAgent {
     const { buildRepoMap } = await import("./utils/repomap.js");
     this.repoMap = await buildRepoMap(this.cwd);
     return this.repoMap;
+  }
+
+  /**
+   * Send a message, routing through architect model if enabled
+   */
+  async send(userMessage: string): Promise<string> {
+    if (this.architectModel) {
+      return this.architectChat(userMessage);
+    }
+    return this.chat(userMessage);
   }
 
   /**
@@ -344,6 +366,23 @@ export class CodingAgent {
           const committed = autoCommit(this.cwd, path, "write");
           if (committed) {
             this.options.onGitCommit?.(`write ${path}`);
+          }
+        }
+
+        // Auto-lint after successful write_file
+        if (this.autoLintEnabled && this.detectedLinter && toolCall.name === "write_file" && result.startsWith("✅")) {
+          const filePath = String(args.path ?? "");
+          const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+          if (lintErrors) {
+            this.options.onLintResult?.(filePath, lintErrors);
+            const lintMsg: ChatCompletionMessageParam = {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
+            };
+            this.messages.push(lintMsg);
+            saveMessage(this.sessionId, lintMsg);
+            continue; // skip the normal tool message push
           }
         }
 
@@ -542,6 +581,23 @@ export class CodingAgent {
           }
         }
 
+        // Auto-lint after successful write_file
+        if (this.autoLintEnabled && this.detectedLinter && toolCall.name === "write_file" && result.startsWith("✅")) {
+          const filePath = String(args.path ?? "");
+          const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+          if (lintErrors) {
+            this.options.onLintResult?.(filePath, lintErrors);
+            const lintMsg: ChatCompletionMessageParam = {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
+            };
+            this.messages.push(lintMsg);
+            saveMessage(this.sessionId, lintMsg);
+            continue;
+          }
+        }
+
         const toolMsg: ChatCompletionMessageParam = {
           role: "tool",
           tool_call_id: toolCall.id,
@@ -710,6 +766,72 @@ export class CodingAgent {
 
   getCwd(): string {
     return this.cwd;
+  }
+
+  getProjectRulesSource(): string | null {
+    return this.projectRulesSource;
+  }
+
+  setArchitectModel(model: string | null): void {
+    this.architectModel = model;
+  }
+
+  getArchitectModel(): string | null {
+    return this.architectModel;
+  }
+
+  setAutoLint(enabled: boolean): void {
+    this.autoLintEnabled = enabled;
+  }
+
+  isAutoLintEnabled(): boolean {
+    return this.autoLintEnabled;
+  }
+
+  getDetectedLinter(): { command: string; name: string } | null {
+    return this.detectedLinter;
+  }
+
+  setDetectedLinter(linter: { command: string; name: string } | null): void {
+    this.detectedLinter = linter;
+  }
+
+  /**
+   * Run the architect model to generate a plan, then feed to editor model
+   */
+  private async architectChat(userMessage: string): Promise<string> {
+    const architectSystemPrompt = "You are a senior software architect. Analyze the request and create a detailed implementation plan. List exactly which files to modify, what changes to make, and in what order. Do NOT write code — just plan.";
+
+    let plan = "";
+
+    if (this.providerType === "anthropic" && this.anthropicClient) {
+      const response = await this.anthropicClient.messages.create({
+        model: this.architectModel!,
+        max_tokens: this.maxTokens,
+        system: architectSystemPrompt,
+        messages: [{ role: "user", content: userMessage }],
+      });
+      plan = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+    } else {
+      const response = await this.client.chat.completions.create({
+        model: this.architectModel!,
+        max_tokens: this.maxTokens,
+        messages: [
+          { role: "system", content: architectSystemPrompt },
+          { role: "user", content: userMessage },
+        ],
+      });
+      plan = response.choices[0]?.message?.content ?? "(no plan generated)";
+    }
+
+    this.options.onArchitectPlan?.(plan);
+
+    // Feed plan + original request to the editor model
+    const editorPrompt = `## Architect Plan\n${plan}\n\n## Original Request\n${userMessage}\n\nExecute the plan above. Follow it step by step.`;
+    return this.chat(editorPrompt);
   }
 
   reset(): void {

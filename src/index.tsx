@@ -54,6 +54,10 @@ const SLASH_COMMANDS = [
   { cmd: "/skills search", desc: "search registry" },
   { cmd: "/skills on", desc: "enable skill for session" },
   { cmd: "/skills off", desc: "disable skill for session" },
+  { cmd: "/architect", desc: "toggle architect mode" },
+  { cmd: "/lint", desc: "show auto-lint status" },
+  { cmd: "/lint on", desc: "enable auto-lint" },
+  { cmd: "/lint off", desc: "disable auto-lint" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -277,6 +281,12 @@ function App() {
         const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
         addMsg("info", `📦 Context compressed (~${savedStr} tokens freed)`);
       },
+      onArchitectPlan: (plan) => {
+        addMsg("info", `🏗️ Architect Plan:\n${plan}`);
+      },
+      onLintResult: (file, errors) => {
+        addMsg("info", `🔍 Lint errors in ${file}:\n${errors}`);
+      },
       contextCompressionThreshold: config.defaults.contextCompressionThreshold,
       onToolApproval: (name, args, diff) => {
         return new Promise((resolve) => {
@@ -288,6 +298,13 @@ function App() {
 
     // Initialize async context (repo map)
     await a.init();
+
+    // Show project rules in banner
+    const rulesSource = a.getProjectRulesSource();
+    if (rulesSource) {
+      info.push(`📋 ${rulesSource} loaded`);
+      setConnectionInfo([...info]);
+    }
 
     setAgent(a);
     setModelName(provider.model);
@@ -336,7 +353,7 @@ function App() {
         // Commands that need args (like /commit, /model) — fill input instead of executing
         if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
             selected.cmd === "/skills install" || selected.cmd === "/skills remove" || selected.cmd === "/skills search" ||
-            selected.cmd === "/skills on" || selected.cmd === "/skills off") {
+            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -398,6 +415,10 @@ function App() {
         "  /git on    — enable auto-commits",
         "  /git off   — disable auto-commits",
         "  /skills    — manage skill packs",
+        "  /architect — toggle architect mode (plan then execute)",
+        "  /lint      — show auto-lint status & detected linter",
+        "  /lint on   — enable auto-lint",
+        "  /lint off  — disable auto-lint",
         "  /quit      — exit",
       ].join("\n"));
       return;
@@ -502,6 +523,62 @@ function App() {
       addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
       return;
     }
+    // ── Architect commands (work without agent) ──
+    if (trimmed === "/architect") {
+      if (!agent) {
+        addMsg("info", "🏗️ Architect mode: no agent connected. Connect first with /login or /connect.");
+        return;
+      }
+      const current = agent.getArchitectModel();
+      if (current) {
+        agent.setArchitectModel(null);
+        addMsg("info", "🏗️ Architect mode OFF");
+      } else {
+        // Use config default or a sensible default
+        const defaultModel = loadConfig().defaults.architectModel || agent.getModel();
+        agent.setArchitectModel(defaultModel);
+        addMsg("info", `🏗️ Architect mode ON (planner: ${defaultModel})`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/architect ")) {
+      const model = trimmed.replace("/architect ", "").trim();
+      if (!model) {
+        addMsg("info", "Usage: /architect <model> or /architect to toggle");
+        return;
+      }
+      if (agent) {
+        agent.setArchitectModel(model);
+        addMsg("info", `🏗️ Architect mode ON (planner: ${model})`);
+      } else {
+        addMsg("info", "⚠ No agent connected. Connect first.");
+      }
+      return;
+    }
+
+    // ── Lint commands (work without agent) ──
+    if (trimmed === "/lint") {
+      const { detectLinter } = await import("./utils/lint.js");
+      const linter = detectLinter(process.cwd());
+      const enabled = agent ? agent.isAutoLintEnabled() : true;
+      if (linter) {
+        addMsg("info", `🔍 Auto-lint: ${enabled ? "ON" : "OFF"}\n  Detected: ${linter.name}\n  Command: ${linter.command} <file>`);
+      } else {
+        addMsg("info", `🔍 Auto-lint: ${enabled ? "ON" : "OFF"}\n  No linter detected in this project.`);
+      }
+      return;
+    }
+    if (trimmed === "/lint on") {
+      if (agent) agent.setAutoLint(true);
+      addMsg("info", "🔍 Auto-lint ON");
+      return;
+    }
+    if (trimmed === "/lint off") {
+      if (agent) agent.setAutoLint(false);
+      addMsg("info", "🔍 Auto-lint OFF");
+      return;
+    }
+
     // Commands below require an active LLM connection
     if (!agent) {
       addMsg("info", "⚠ No LLM connected. Use /login to authenticate with a provider, or start a local server.");
@@ -684,8 +761,8 @@ function App() {
 
     try {
       // Response is built incrementally via onToken callback
-      // chat() returns the final text but we don't need to add it again
-      await agent.chat(trimmed);
+      // send() routes through architect if enabled, otherwise direct chat
+      await agent.send(trimmed);
     } catch (err: any) {
       addMsg("error", `Error: ${err.message}`);
     }
@@ -1497,6 +1574,7 @@ function App() {
               const count = getActiveSkillCount(process.cwd(), sessionDisabledSkills);
               return count > 0 ? ` · 🧠 ${count} skill${count !== 1 ? "s" : ""}` : "";
             })()}
+            {agent.getArchitectModel() ? " · 🏗️ architect" : ""}
           </Text>
         </Box>
       )}

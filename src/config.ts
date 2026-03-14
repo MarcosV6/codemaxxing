@@ -22,6 +22,8 @@ export interface CodemaxxingConfig {
     contextFiles: number;
     maxTokens: number;
     contextCompressionThreshold?: number;
+    architectModel?: string;
+    autoLint?: boolean;
   };
 }
 
@@ -85,6 +87,7 @@ codemaxxing — your code. your model. no excuses.
 
 Usage:
   codemaxxing [options]
+  codemaxxing exec "prompt" [exec-options]
 
 Options:
   -m, --model <model>       Model name to use
@@ -93,11 +96,19 @@ Options:
   -u, --base-url <url>      Base URL for the provider API
   -h, --help                Show this help
 
+Exec options (headless/CI mode):
+  --auto-approve            Skip tool approval prompts
+  --json                    Output JSON instead of streaming text
+  -m, --model <model>       Model to use
+  -p, --provider <name>     Provider profile
+
 Examples:
   codemaxxing                                    # Auto-detect local LLM
   codemaxxing -m gpt-4o -u https://api.openai.com/v1 -k sk-...
   codemaxxing -p openrouter                      # Use saved provider profile
   codemaxxing -m qwen3.5-35b                     # Override model only
+  codemaxxing exec "fix the failing tests"       # Headless mode
+  echo "explain this code" | codemaxxing exec    # Pipe input
 
 Config: ~/.codemaxxing/settings.json
 `);
