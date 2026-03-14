@@ -17,7 +17,7 @@ import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware
 import { getRecommendations, getRecommendationsWithLlmfit, getFitIcon, isLlmfitAvailable, type ScoredModel } from "./utils/models.js";
 import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, stopOllama, pullModel, listInstalledModelsDetailed, deleteModel, getGPUMemoryUsage, type PullProgress } from "./utils/ollama.js";
 
-const VERSION = "0.1.9";
+const VERSION = require("../package.json").version;
 
 // ── Helpers ──
 function formatTimeAgo(date: Date): string {
