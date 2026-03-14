@@ -177,6 +177,133 @@ export async function executeTool(
   }
 }
 
+/**
+ * Generate a simple unified diff between two strings
+ */
+export function generateDiff(oldContent: string, newContent: string, filePath: string): string {
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+  const output: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
+
+  const lcs = computeLCS(oldLines, newLines);
+
+  let oi = 0, ni = 0, li = 0;
+  let hunkLines: string[] = [];
+  let hunkOldCount = 0;
+  let hunkNewCount = 0;
+  let hunkStartOld = 1;
+  let hunkStartNew = 1;
+  let pendingContext: string[] = [];
+  let hasHunk = false;
+
+  function flushHunk() {
+    if (hasHunk && hunkLines.length > 0) {
+      output.push(`@@ -${hunkStartOld},${hunkOldCount} +${hunkStartNew},${hunkNewCount} @@`);
+      output.push(...hunkLines);
+    }
+    hunkLines = [];
+    hunkOldCount = 0;
+    hunkNewCount = 0;
+    hasHunk = false;
+    pendingContext = [];
+  }
+
+  function startHunk() {
+    if (!hasHunk) {
+      hasHunk = true;
+      hunkStartOld = Math.max(1, oi + 1 - 3);
+      hunkStartNew = Math.max(1, ni + 1 - 3);
+      const contextStart = Math.max(0, oi - 3);
+      for (let c = contextStart; c < oi; c++) {
+        hunkLines.push(` ${oldLines[c]}`);
+        hunkOldCount++;
+        hunkNewCount++;
+      }
+    }
+    if (pendingContext.length > 0) {
+      hunkLines.push(...pendingContext);
+      pendingContext = [];
+    }
+  }
+
+  while (oi < oldLines.length || ni < newLines.length) {
+    if (li < lcs.length && oi < oldLines.length && ni < newLines.length &&
+        oldLines[oi] === lcs[li] && newLines[ni] === lcs[li]) {
+      // Matching line
+      if (hasHunk) {
+        pendingContext.push(` ${oldLines[oi]}`);
+        hunkOldCount++;
+        hunkNewCount++;
+        if (pendingContext.length > 6) flushHunk();
+      }
+      oi++; ni++; li++;
+    } else if (oi < oldLines.length && (li >= lcs.length || oldLines[oi] !== lcs[li])) {
+      startHunk();
+      hunkLines.push(`-${oldLines[oi]}`);
+      hunkOldCount++;
+      oi++;
+    } else if (ni < newLines.length && (li >= lcs.length || newLines[ni] !== lcs[li])) {
+      startHunk();
+      hunkLines.push(`+${newLines[ni]}`);
+      hunkNewCount++;
+      ni++;
+    } else {
+      break;
+    }
+  }
+
+  flushHunk();
+
+  if (output.length <= 2) return "(no changes)";
+
+  const maxDiffLines = 60;
+  if (output.length > maxDiffLines + 2) {
+    return output.slice(0, maxDiffLines + 2).join("\n") + `\n... (${output.length - maxDiffLines - 2} more lines)`;
+  }
+  return output.join("\n");
+}
+
+function computeLCS(a: string[], b: string[]): string[] {
+  if (a.length > 500 || b.length > 500) {
+    // For large files, just return common lines in order
+    const result: string[] = [];
+    let bi = 0;
+    for (const line of a) {
+      while (bi < b.length && b[bi] !== line) bi++;
+      if (bi < b.length) { result.push(line); bi++; }
+    }
+    return result;
+  }
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const result: string[] = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) { result.unshift(a[i - 1]); i--; j--; }
+    else if (dp[i - 1][j] > dp[i][j - 1]) { i--; }
+    else { j--; }
+  }
+  return result;
+}
+
+/**
+ * Get existing file content for diff preview (returns null if file doesn't exist)
+ */
+export function getExistingContent(filePath: string, cwd: string): string | null {
+  const fullPath = join(cwd, filePath);
+  if (!existsSync(fullPath)) return null;
+  try {
+    return readFileSync(fullPath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
 function listDir(
   dirPath: string,
   cwd: string,

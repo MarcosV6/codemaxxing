@@ -34,7 +34,10 @@ function getDb(): Database.Database {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       message_count INTEGER NOT NULL DEFAULT 0,
       token_estimate INTEGER NOT NULL DEFAULT 0,
-      summary TEXT
+      summary TEXT,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      estimated_cost REAL NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -50,6 +53,17 @@ function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
   `);
+
+  // Migrate: add cost columns if missing (for existing DBs)
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN estimated_cost REAL NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
 
   return db;
 }
@@ -129,6 +143,9 @@ export interface SessionInfo {
   message_count: number;
   token_estimate: number;
   summary: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost: number;
 }
 
 export function listSessions(limit: number = 10): SessionInfo[] {
@@ -189,6 +206,21 @@ export function deleteSession(sessionId: string): boolean {
   db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(sessionId);
   const result = db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
   return result.changes > 0;
+}
+
+/**
+ * Update cost tracking for a session
+ */
+export function updateSessionCost(
+  sessionId: string,
+  promptTokens: number,
+  completionTokens: number,
+  estimatedCost: number
+): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE sessions SET prompt_tokens = ?, completion_tokens = ?, estimated_cost = ? WHERE id = ?
+  `).run(promptTokens, completionTokens, estimatedCost, sessionId);
 }
 
 /**

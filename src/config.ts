@@ -7,6 +7,7 @@ export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  type?: "openai" | "anthropic";
 }
 
 export interface ProviderProfile extends ProviderConfig {
@@ -20,6 +21,7 @@ export interface CodemaxxingConfig {
     autoApprove: boolean;
     contextFiles: number;
     maxTokens: number;
+    contextCompressionThreshold?: number;
   };
 }
 
@@ -135,12 +137,25 @@ export function applyOverrides(config: CodemaxxingConfig, args: CLIArgs): Codema
   if (args.provider && config.providers?.[args.provider]) {
     const profile = config.providers[args.provider];
     result.provider = { ...profile };
+    // Also check auth store for this provider
+    const authCred = getCredential(args.provider);
+    if (authCred) {
+      result.provider.baseUrl = authCred.baseUrl;
+      result.provider.apiKey = authCred.apiKey;
+    }
+    // Detect provider type
+    result.provider.type = detectProviderType(args.provider, result.provider.baseUrl);
   }
 
   // CLI flags override everything
   if (args.model) result.provider.model = args.model;
   if (args.apiKey) result.provider.apiKey = args.apiKey;
   if (args.baseUrl) result.provider.baseUrl = args.baseUrl;
+
+  // Auto-detect type from baseUrl if not set
+  if (!result.provider.type && result.provider.baseUrl) {
+    result.provider.type = detectProviderType(args.provider || "", result.provider.baseUrl);
+  }
 
   return result;
 }
@@ -218,7 +233,7 @@ export async function listModels(baseUrl: string, apiKey: string): Promise<strin
 export function resolveProvider(
   providerId: string,
   cliArgs: CLIArgs
-): { baseUrl: string; apiKey: string; model: string } | null {
+): ProviderConfig | null {
   // Check auth store first
   const authCred = getCredential(providerId);
   if (authCred) {
@@ -226,6 +241,7 @@ export function resolveProvider(
       baseUrl: authCred.baseUrl,
       apiKey: authCred.apiKey,
       model: cliArgs.model || "auto",
+      type: detectProviderType(providerId, authCred.baseUrl),
     };
   }
 
@@ -237,8 +253,19 @@ export function resolveProvider(
       baseUrl: provider.baseUrl,
       apiKey: cliArgs.apiKey || provider.apiKey,
       model: cliArgs.model || provider.model,
+      type: detectProviderType(providerId, provider.baseUrl),
     };
   }
 
   return null;
+}
+
+/**
+ * Detect provider type from ID or base URL
+ */
+function detectProviderType(providerId: string, baseUrl: string): "openai" | "anthropic" {
+  if (providerId === "anthropic" || baseUrl.includes("anthropic.com")) {
+    return "anthropic";
+  }
+  return "openai";
 }

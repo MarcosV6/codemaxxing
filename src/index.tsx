@@ -6,13 +6,13 @@ import { EventEmitter } from "events";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listModels } from "./config.js";
-import { listSessions, getSession, loadMessages } from "./utils/sessions.js";
+import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 
-const VERSION = "0.1.5";
+const VERSION = "0.1.9";
 
 // ── Helpers ──
 function formatTimeAgo(date: Date): string {
@@ -43,6 +43,7 @@ const SLASH_COMMANDS = [
   { cmd: "/theme", desc: "switch color theme" },
   { cmd: "/model", desc: "switch model mid-session" },
   { cmd: "/sessions", desc: "list past sessions" },
+  { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
   { cmd: "/quit", desc: "exit" },
 ];
@@ -135,6 +136,9 @@ function App() {
   const [sessionPickerIndex, setSessionPickerIndex] = useState(0);
   const [themePicker, setThemePicker] = useState(false);
   const [themePickerIndex, setThemePickerIndex] = useState(0);
+  const [deleteSessionPicker, setDeleteSessionPicker] = useState<Array<{ id: string; display: string }> | null>(null);
+  const [deleteSessionPickerIndex, setDeleteSessionPickerIndex] = useState(0);
+  const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<{ id: string; display: string } | null>(null);
   const [loginPicker, setLoginPicker] = useState(false);
   const [loginPickerIndex, setLoginPickerIndex] = useState(0);
   const [loginMethodPicker, setLoginMethodPicker] = useState<{ provider: string; methods: string[] } | null>(null);
@@ -142,6 +146,7 @@ function App() {
   const [approval, setApproval] = useState<{
     tool: string;
     args: Record<string, unknown>;
+    diff?: string;
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
 
@@ -249,9 +254,15 @@ function App() {
         onGitCommit: (message) => {
           addMsg("info", `📝 Auto-committed: ${message}`);
         },
-        onToolApproval: (name, args) => {
+        onContextCompressed: (oldTokens, newTokens) => {
+          const saved = oldTokens - newTokens;
+          const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
+          addMsg("info", `📦 Context compressed (~${savedStr} tokens freed)`);
+        },
+        contextCompressionThreshold: config.defaults.contextCompressionThreshold,
+        onToolApproval: (name, args, diff) => {
           return new Promise((resolve) => {
-            setApproval({ tool: name, args, resolve });
+            setApproval({ tool: name, args, diff, resolve });
             setLoading(false);
           });
         },
@@ -298,7 +309,7 @@ function App() {
       const selected = matches[idx];
       if (selected) {
         // Commands that need args (like /commit, /model) — fill input instead of executing
-        if (selected.cmd === "/commit" || selected.cmd === "/model") {
+        if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -343,6 +354,7 @@ function App() {
         "  /models    — list available models",
         "  /map       — show repository map",
         "  /sessions  — list past sessions",
+        "  /session delete — delete a session",
         "  /resume    — resume a past session",
         "  /reset     — clear conversation",
         "  /context   — show message count",
@@ -453,10 +465,48 @@ function App() {
           const tokens = s.token_estimate >= 1000
             ? `${(s.token_estimate / 1000).toFixed(1)}k`
             : String(s.token_estimate);
-          return `  ${s.id}  ${dir}/  ${s.message_count} msgs  ~${tokens} tok  ${ago}  ${s.model}`;
+          const cost = s.estimated_cost > 0
+            ? `$${s.estimated_cost < 0.01 ? s.estimated_cost.toFixed(4) : s.estimated_cost.toFixed(2)}`
+            : "";
+          return `  ${s.id}  ${dir}/  ${s.message_count} msgs  ~${tokens} tok${cost ? `  ${cost}` : ""}  ${ago}  ${s.model}`;
         });
         addMsg("info", "Recent sessions:\n" + lines.join("\n") + "\n\n  Use /resume <id> to continue a session");
       }
+      return;
+    }
+    if (trimmed.startsWith("/session delete")) {
+      const idArg = trimmed.replace("/session delete", "").trim();
+      if (idArg) {
+        // Direct delete by ID
+        const session = getSession(idArg);
+        if (!session) {
+          addMsg("error", `Session "${idArg}" not found.`);
+          return;
+        }
+        const dir = session.cwd.split("/").pop() || session.cwd;
+        setDeleteSessionConfirm({ id: idArg, display: `${idArg}  ${dir}/  ${session.message_count} msgs  ${session.model}` });
+        return;
+      }
+      // Show picker
+      const sessions = listSessions(10);
+      if (sessions.length === 0) {
+        addMsg("info", "No sessions to delete.");
+        return;
+      }
+      const items = sessions.map((s) => {
+        const date = new Date(s.updated_at + "Z");
+        const ago = formatTimeAgo(date);
+        const dir = s.cwd.split("/").pop() || s.cwd;
+        const tokens = s.token_estimate >= 1000
+          ? `${(s.token_estimate / 1000).toFixed(1)}k`
+          : String(s.token_estimate);
+        return {
+          id: s.id,
+          display: `${s.id}  ${dir}/  ${s.message_count} msgs  ~${tokens} tok  ${ago}  ${s.model}`,
+        };
+      });
+      setDeleteSessionPicker(items);
+      setDeleteSessionPickerIndex(0);
       return;
     }
     if (trimmed === "/resume") {
@@ -733,6 +783,54 @@ function App() {
       return; // Ignore other keys during session picker
     }
 
+    // Delete session confirmation (y/n)
+    if (deleteSessionConfirm) {
+      if (inputChar === "y" || inputChar === "Y") {
+        const deleted = deleteSession(deleteSessionConfirm.id);
+        if (deleted) {
+          addMsg("info", `✅ Deleted session ${deleteSessionConfirm.id}`);
+        } else {
+          addMsg("error", `Failed to delete session ${deleteSessionConfirm.id}`);
+        }
+        setDeleteSessionConfirm(null);
+        return;
+      }
+      if (inputChar === "n" || inputChar === "N" || key.escape) {
+        addMsg("info", "Delete cancelled.");
+        setDeleteSessionConfirm(null);
+        return;
+      }
+      return;
+    }
+
+    // Delete session picker navigation
+    if (deleteSessionPicker) {
+      if (key.upArrow) {
+        setDeleteSessionPickerIndex((prev) => (prev - 1 + deleteSessionPicker.length) % deleteSessionPicker.length);
+        return;
+      }
+      if (key.downArrow) {
+        setDeleteSessionPickerIndex((prev) => (prev + 1) % deleteSessionPicker.length);
+        return;
+      }
+      if (key.return) {
+        const selected = deleteSessionPicker[deleteSessionPickerIndex];
+        if (selected) {
+          setDeleteSessionPicker(null);
+          setDeleteSessionPickerIndex(0);
+          setDeleteSessionConfirm(selected);
+        }
+        return;
+      }
+      if (key.escape) {
+        setDeleteSessionPicker(null);
+        setDeleteSessionPickerIndex(0);
+        addMsg("info", "Delete cancelled.");
+        return;
+      }
+      return;
+    }
+
     // Backspace with empty input → remove last paste chunk
     if (key.backspace || key.delete) {
       if (input === "" && pastedChunksRef.current.length > 0) {
@@ -884,6 +982,21 @@ function App() {
           {approval.tool === "write_file" && approval.args.content ? (
             <Text color={theme.colors.muted}>{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
           ) : null}
+          {approval.diff ? (
+            <Box flexDirection="column" marginTop={0} marginLeft={2}>
+              {approval.diff.split("\n").slice(0, 40).map((line, i) => (
+                <Text key={i} color={
+                  line.startsWith("+") ? theme.colors.success :
+                  line.startsWith("-") ? theme.colors.error :
+                  line.startsWith("@@") ? theme.colors.primary :
+                  theme.colors.muted
+                }>{line}</Text>
+              ))}
+              {approval.diff.split("\n").length > 40 ? (
+                <Text color={theme.colors.muted}>... ({approval.diff.split("\n").length - 40} more lines)</Text>
+              ) : null}
+            </Box>
+          ) : null}
           {approval.tool === "run_command" && approval.args.command ? (
             <Text color={theme.colors.muted}>{"  $ "}{String(approval.args.command)}</Text>
           ) : null}
@@ -964,6 +1077,32 @@ function App() {
         </Box>
       )}
 
+      {/* ═══ DELETE SESSION PICKER ═══ */}
+      {deleteSessionPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.error} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.error}>Delete a session:</Text>
+          {deleteSessionPicker.map((s, i) => (
+            <Text key={s.id}>
+              {i === deleteSessionPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === deleteSessionPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.display}</Text>
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+        </Box>
+      )}
+
+      {/* ═══ DELETE SESSION CONFIRM ═══ */}
+      {deleteSessionConfirm && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.warning}>Delete session {deleteSessionConfirm.id}?</Text>
+          <Text color={theme.colors.muted}>{"  "}{deleteSessionConfirm.display}</Text>
+          <Text>
+            <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
+            <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
+          </Text>
+        </Box>
+      )}
+
       {/* ═══ COMMAND SUGGESTIONS ═══ */}
       {showSuggestions && (
         <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.muted} paddingX={1} marginBottom={0}>
@@ -1010,6 +1149,13 @@ function App() {
               return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
             })()}
             {" tokens"}
+            {(() => {
+              const { totalCost } = agent.getCostInfo();
+              if (totalCost > 0) {
+                return ` · 💰 $${totalCost < 0.01 ? totalCost.toFixed(4) : totalCost.toFixed(2)}`;
+              }
+              return "";
+            })()}
             {modelName ? ` · 🤖 ${modelName}` : ""}
           </Text>
         </Box>
