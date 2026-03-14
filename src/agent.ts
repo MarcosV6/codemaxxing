@@ -11,6 +11,7 @@ import { buildProjectContext, getSystemPrompt, loadProjectRules } from "./utils/
 import { isGitRepo, autoCommit } from "./utils/git.js";
 import { buildSkillPrompts, getActiveSkillCount } from "./utils/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "./utils/sessions.js";
+import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "./utils/mcp.js";
 import type { ProviderConfig } from "./config.js";
 
 // Tools that can modify your project — require approval
@@ -74,6 +75,7 @@ export interface AgentOptions {
   onContextCompressed?: (oldTokens: number, newTokens: number) => void;
   onArchitectPlan?: (plan: string) => void;
   onLintResult?: (file: string, errors: string) => void;
+  onMCPStatus?: (server: string, status: string) => void;
   contextCompressionThreshold?: number;
 }
 
@@ -108,6 +110,7 @@ export class CodingAgent {
   private architectModel: string | null = null;
   private autoLintEnabled: boolean = true;
   private detectedLinter: { command: string; name: string } | null = null;
+  private mcpServers: ConnectedServer[] = [];
 
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
@@ -144,6 +147,16 @@ export class CodingAgent {
 
     // Detect project linter
     this.detectedLinter = detectLinter(this.cwd);
+
+    // Connect to MCP servers
+    const mcpConfig = loadMCPConfig(this.cwd);
+    if (Object.keys(mcpConfig.mcpServers).length > 0) {
+      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus);
+      if (this.mcpServers.length > 0) {
+        const mcpTools = getAllMCPTools(this.mcpServers);
+        this.tools = [...FILE_TOOLS, ...mcpTools];
+      }
+    }
 
     this.messages = [
       { role: "system", content: this.systemPrompt },
@@ -357,7 +370,14 @@ export class CodingAgent {
           }
         }
 
-        const result = await executeTool(toolCall.name, args, this.cwd);
+        // Route to MCP or built-in tool
+        const mcpParsed = parseMCPToolName(toolCall.name);
+        let result: string;
+        if (mcpParsed) {
+          result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+        } else {
+          result = await executeTool(toolCall.name, args, this.cwd);
+        }
         this.options.onToolResult?.(toolCall.name, result);
 
         // Auto-commit after successful write_file (only if enabled)
@@ -569,7 +589,14 @@ export class CodingAgent {
           }
         }
 
-        const result = await executeTool(toolCall.name, args, this.cwd);
+        // Route to MCP or built-in tool
+        const mcpParsed = parseMCPToolName(toolCall.name);
+        let result: string;
+        if (mcpParsed) {
+          result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+        } else {
+          result = await executeTool(toolCall.name, args, this.cwd);
+        }
         this.options.onToolResult?.(toolCall.name, result);
 
         // Auto-commit after successful write_file
@@ -832,6 +859,32 @@ export class CodingAgent {
     // Feed plan + original request to the editor model
     const editorPrompt = `## Architect Plan\n${plan}\n\n## Original Request\n${userMessage}\n\nExecute the plan above. Follow it step by step.`;
     return this.chat(editorPrompt);
+  }
+
+  getMCPServerCount(): number {
+    return this.mcpServers.length;
+  }
+
+  getMCPServers(): ConnectedServer[] {
+    return this.mcpServers;
+  }
+
+  async disconnectMCP(): Promise<void> {
+    await disconnectAll();
+    this.mcpServers = [];
+    this.tools = FILE_TOOLS;
+  }
+
+  async reconnectMCP(): Promise<void> {
+    await this.disconnectMCP();
+    const mcpConfig = loadMCPConfig(this.cwd);
+    if (Object.keys(mcpConfig.mcpServers).length > 0) {
+      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus);
+      if (this.mcpServers.length > 0) {
+        const mcpTools = getAllMCPTools(this.mcpServers);
+        this.tools = [...FILE_TOOLS, ...mcpTools];
+      }
+    }
   }
 
   reset(): void {

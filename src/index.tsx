@@ -12,6 +12,7 @@ import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./util
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
+import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
 
 const VERSION = "0.1.9";
 
@@ -58,6 +59,11 @@ const SLASH_COMMANDS = [
   { cmd: "/lint", desc: "show auto-lint status" },
   { cmd: "/lint on", desc: "enable auto-lint" },
   { cmd: "/lint off", desc: "disable auto-lint" },
+  { cmd: "/mcp", desc: "show MCP servers" },
+  { cmd: "/mcp tools", desc: "list MCP tools" },
+  { cmd: "/mcp add", desc: "add MCP server" },
+  { cmd: "/mcp remove", desc: "remove MCP server" },
+  { cmd: "/mcp reconnect", desc: "reconnect MCP servers" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -287,6 +293,9 @@ function App() {
       onLintResult: (file, errors) => {
         addMsg("info", `🔍 Lint errors in ${file}:\n${errors}`);
       },
+      onMCPStatus: (server, status) => {
+        addMsg("info", `🔌 MCP ${server}: ${status}`);
+      },
       contextCompressionThreshold: config.defaults.contextCompressionThreshold,
       onToolApproval: (name, args, diff) => {
         return new Promise((resolve) => {
@@ -303,6 +312,13 @@ function App() {
     const rulesSource = a.getProjectRulesSource();
     if (rulesSource) {
       info.push(`📋 ${rulesSource} loaded`);
+      setConnectionInfo([...info]);
+    }
+
+    // Show MCP server count
+    const mcpCount = a.getMCPServerCount();
+    if (mcpCount > 0) {
+      info.push(`🔌 ${mcpCount} MCP server${mcpCount > 1 ? "s" : ""} connected`);
       setConnectionInfo([...info]);
     }
 
@@ -419,6 +435,11 @@ function App() {
         "  /lint      — show auto-lint status & detected linter",
         "  /lint on   — enable auto-lint",
         "  /lint off  — disable auto-lint",
+        "  /mcp       — show MCP servers & status",
+        "  /mcp tools — list all MCP tools",
+        "  /mcp add   — add MCP server to global config",
+        "  /mcp remove — remove MCP server",
+        "  /mcp reconnect — reconnect all MCP servers",
         "  /quit      — exit",
       ].join("\n"));
       return;
@@ -576,6 +597,71 @@ function App() {
     if (trimmed === "/lint off") {
       if (agent) agent.setAutoLint(false);
       addMsg("info", "🔍 Auto-lint OFF");
+      return;
+    }
+
+    // ── MCP commands (partially work without agent) ──
+    if (trimmed === "/mcp" || trimmed === "/mcp list") {
+      const servers = listServers(process.cwd());
+      if (servers.length === 0) {
+        addMsg("info", "🔌 No MCP servers configured.\n  Add one: /mcp add <name> <command> [args...]");
+      } else {
+        const lines = servers.map((s) => {
+          const status = s.connected ? `✔ connected (${s.toolCount} tools)` : "✗ not connected";
+          return `  ${s.connected ? "●" : "○"} ${s.name} [${s.source}] — ${s.command}\n    ${status}`;
+        });
+        addMsg("info", `🔌 MCP Servers:\n${lines.join("\n")}`);
+      }
+      return;
+    }
+    if (trimmed === "/mcp tools") {
+      const servers = getConnectedServers();
+      if (servers.length === 0) {
+        addMsg("info", "🔌 No MCP servers connected.");
+        return;
+      }
+      const lines: string[] = [];
+      for (const server of servers) {
+        lines.push(`${server.name} (${server.tools.length} tools):`);
+        for (const tool of server.tools) {
+          lines.push(`  • ${tool.name} — ${tool.description ?? "(no description)"}`);
+        }
+      }
+      addMsg("info", `🔌 MCP Tools:\n${lines.join("\n")}`);
+      return;
+    }
+    if (trimmed.startsWith("/mcp add ")) {
+      const parts = trimmed.replace("/mcp add ", "").trim().split(/\s+/);
+      if (parts.length < 2) {
+        addMsg("info", "Usage: /mcp add <name> <command> [args...]\n  Example: /mcp add github npx -y @modelcontextprotocol/server-github");
+        return;
+      }
+      const [name, command, ...cmdArgs] = parts;
+      const result = addServer(name, { command, args: cmdArgs.length > 0 ? cmdArgs : undefined });
+      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed.startsWith("/mcp remove ")) {
+      const name = trimmed.replace("/mcp remove ", "").trim();
+      if (!name) {
+        addMsg("info", "Usage: /mcp remove <name>");
+        return;
+      }
+      const result = removeServer(name);
+      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed === "/mcp reconnect") {
+      if (!agent) {
+        addMsg("info", "⚠ No agent connected. Connect first.");
+        return;
+      }
+      addMsg("info", "🔌 Reconnecting MCP servers...");
+      await agent.reconnectMCP();
+      const count = agent.getMCPServerCount();
+      addMsg("info", count > 0
+        ? `✅ ${count} MCP server${count > 1 ? "s" : ""} reconnected.`
+        : "No MCP servers connected.");
       return;
     }
 

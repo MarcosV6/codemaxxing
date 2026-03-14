@@ -8,6 +8,7 @@
 import { CodingAgent } from "./agent.js";
 import { loadConfig, applyOverrides, detectLocalProvider } from "./config.js";
 import { getCredential } from "./utils/auth.js";
+import { disconnectAll } from "./utils/mcp.js";
 
 interface ExecArgs {
   prompt: string;
@@ -140,10 +141,19 @@ export async function runExec(argv: string[]): Promise<void> {
       process.stderr.write(`⚠ Denied ${name} (use --auto-approve to allow)\n`);
       return "no";
     },
+    onMCPStatus: (server, status) => {
+      process.stderr.write(`MCP ${server}: ${status}\n`);
+    },
   });
 
   try {
     await agent.init();
+
+    const mcpCount = agent.getMCPServerCount();
+    if (mcpCount > 0) {
+      process.stderr.write(`MCP: ${mcpCount} server${mcpCount > 1 ? "s" : ""} connected\n`);
+    }
+
     await agent.send(args.prompt);
 
     if (!args.json) {
@@ -160,8 +170,10 @@ export async function runExec(argv: string[]): Promise<void> {
       process.stdout.write(JSON.stringify(output, null, 2) + "\n");
     }
 
+    await disconnectAll();
     process.exit(hasChanges ? 0 : 2);
   } catch (err: any) {
+    await disconnectAll();
     process.stderr.write(`Error: ${err.message}\n`);
     if (args.json) {
       process.stdout.write(JSON.stringify({ error: err.message }, null, 2) + "\n");
