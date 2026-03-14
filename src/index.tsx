@@ -770,7 +770,20 @@ function App() {
       return;
     }
     if (trimmed === "/ollama delete") {
-      // No model specified — show picker of installed models
+      // Ensure Ollama is running so we can list models
+      let running = await isOllamaRunning();
+      if (!running) {
+        addMsg("info", "Starting Ollama to list models...");
+        startOllama();
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          if (await isOllamaRunning()) { running = true; break; }
+        }
+        if (!running) {
+          addMsg("error", "Could not start Ollama. Start it manually first.");
+          return;
+        }
+      }
       const models = await listInstalledModelsDetailed();
       if (models.length === 0) {
         addMsg("info", "No models installed.");
