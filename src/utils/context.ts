@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, extname } from "path";
 import { buildRepoMap } from "./repomap.js";
+import { buildSkillPrompts } from "./skills.js";
 
 /**
  * Build a project context string by scanning the working directory
@@ -93,8 +94,8 @@ export async function buildProjectContext(cwd: string): Promise<string> {
 /**
  * Get the system prompt for the coding agent
  */
-export async function getSystemPrompt(projectContext: string): Promise<string> {
-  return `You are CODEMAXXING, an AI coding assistant running in the terminal.
+export async function getSystemPrompt(projectContext: string, skillPrompts: string = ""): Promise<string> {
+  const base = `You are CODEMAXXING, an AI coding assistant running in the terminal.
 
 You help developers understand, write, debug, and refactor code. You have access to tools that let you read files, write files, list directories, search code, and run shell commands.
 
@@ -118,6 +119,11 @@ ${projectContext}
 - Use code blocks with language tags
 - Be direct and helpful
 - If the user asks to "just do it", skip explanations and execute`;
+
+  if (skillPrompts) {
+    return base + "\n\n## Active Skills\n" + skillPrompts;
+  }
+  return base;
 }
 
 /**

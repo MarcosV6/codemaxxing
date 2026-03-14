@@ -8,6 +8,7 @@ import type {
 import { FILE_TOOLS, executeTool, generateDiff, getExistingContent } from "./tools/files.js";
 import { buildProjectContext, getSystemPrompt } from "./utils/context.js";
 import { isGitRepo, autoCommit } from "./utils/git.js";
+import { buildSkillPrompts, getActiveSkillCount } from "./utils/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "./utils/sessions.js";
 import type { ProviderConfig } from "./config.js";
 
@@ -99,6 +100,7 @@ export class CodingAgent {
   private totalCost: number = 0;
   private systemPrompt: string = "";
   private compressionThreshold: number;
+  private sessionDisabledSkills: Set<string> = new Set();
 
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
@@ -128,7 +130,8 @@ export class CodingAgent {
    */
   async init(): Promise<void> {
     const context = await buildProjectContext(this.cwd);
-    this.systemPrompt = await getSystemPrompt(context);
+    const skillPrompts = buildSkillPrompts(this.cwd, this.sessionDisabledSkills);
+    this.systemPrompt = await getSystemPrompt(context, skillPrompts);
 
     this.messages = [
       { role: "system", content: this.systemPrompt },
@@ -687,6 +690,26 @@ export class CodingAgent {
       completionTokens: this.totalCompletionTokens,
       totalCost: this.totalCost,
     };
+  }
+
+  disableSkill(name: string): void {
+    this.sessionDisabledSkills.add(name);
+  }
+
+  enableSkill(name: string): void {
+    this.sessionDisabledSkills.delete(name);
+  }
+
+  getSessionDisabledSkills(): Set<string> {
+    return this.sessionDisabledSkills;
+  }
+
+  getActiveSkillCount(): number {
+    return getActiveSkillCount(this.cwd, this.sessionDisabledSkills);
+  }
+
+  getCwd(): string {
+    return this.cwd;
   }
 
   reset(): void {

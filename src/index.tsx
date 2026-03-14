@@ -11,6 +11,7 @@ import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
+import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 
 const VERSION = "0.1.9";
 
@@ -46,6 +47,13 @@ const SLASH_COMMANDS = [
   { cmd: "/sessions", desc: "list past sessions" },
   { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
+  { cmd: "/skills", desc: "manage skill packs" },
+  { cmd: "/skills install", desc: "install a skill" },
+  { cmd: "/skills remove", desc: "remove a skill" },
+  { cmd: "/skills list", desc: "show installed skills" },
+  { cmd: "/skills search", desc: "search registry" },
+  { cmd: "/skills on", desc: "enable skill for session" },
+  { cmd: "/skills off", desc: "disable skill for session" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -144,6 +152,9 @@ function App() {
   const [loginPickerIndex, setLoginPickerIndex] = useState(0);
   const [loginMethodPicker, setLoginMethodPicker] = useState<{ provider: string; methods: string[] } | null>(null);
   const [loginMethodIndex, setLoginMethodIndex] = useState(0);
+  const [skillsPicker, setSkillsPicker] = useState<"menu" | "browse" | "installed" | "remove" | null>(null);
+  const [skillsPickerIndex, setSkillsPickerIndex] = useState(0);
+  const [sessionDisabledSkills, setSessionDisabledSkills] = useState<Set<string>>(new Set());
   const [approval, setApproval] = useState<{
     tool: string;
     args: Record<string, unknown>;
@@ -323,7 +334,9 @@ function App() {
       const selected = matches[idx];
       if (selected) {
         // Commands that need args (like /commit, /model) — fill input instead of executing
-        if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete") {
+        if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
+            selected.cmd === "/skills install" || selected.cmd === "/skills remove" || selected.cmd === "/skills search" ||
+            selected.cmd === "/skills on" || selected.cmd === "/skills off") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -384,8 +397,92 @@ function App() {
         "  /push      — push to remote",
         "  /git on    — enable auto-commits",
         "  /git off   — disable auto-commits",
+        "  /skills    — manage skill packs",
         "  /quit      — exit",
       ].join("\n"));
+      return;
+    }
+    // ── Skills commands (work without agent) ──
+    if (trimmed === "/skills") {
+      setSkillsPicker("menu");
+      setSkillsPickerIndex(0);
+      return;
+    }
+    if (trimmed.startsWith("/skills install ")) {
+      const name = trimmed.replace("/skills install ", "").trim();
+      const result = installSkill(name);
+      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed.startsWith("/skills remove ")) {
+      const name = trimmed.replace("/skills remove ", "").trim();
+      const result = removeSkill(name);
+      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed === "/skills list") {
+      const installed = listInstalledSkills();
+      if (installed.length === 0) {
+        addMsg("info", "No skills installed. Use /skills to browse & install.");
+      } else {
+        const active = getActiveSkills(process.cwd(), sessionDisabledSkills);
+        const lines = installed.map((s) => {
+          const isActive = active.includes(s.name);
+          const disabledBySession = sessionDisabledSkills.has(s.name);
+          const status = disabledBySession ? " (off)" : isActive ? " (on)" : "";
+          return `  ${isActive ? "●" : "○"} ${s.name} — ${s.description}${status}`;
+        });
+        addMsg("info", `Installed skills:\n${lines.join("\n")}`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/skills search ")) {
+      const query = trimmed.replace("/skills search ", "").trim();
+      const results = searchRegistry(query);
+      if (results.length === 0) {
+        addMsg("info", `No skills found matching "${query}".`);
+      } else {
+        const installed = listInstalledSkills().map((s) => s.name);
+        const lines = results.map((s) => {
+          const mark = installed.includes(s.name) ? " ✓" : "";
+          return `  ${s.name} — ${s.description}${mark}`;
+        });
+        addMsg("info", `Registry matches:\n${lines.join("\n")}`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/skills create ")) {
+      const name = trimmed.replace("/skills create ", "").trim();
+      if (!name) {
+        addMsg("info", "Usage: /skills create <name>");
+        return;
+      }
+      const result = createSkillScaffold(name);
+      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}\n  Edit: ${result.path}/prompt.md` : `✗ ${result.message}`);
+      return;
+    }
+    if (trimmed.startsWith("/skills on ")) {
+      const name = trimmed.replace("/skills on ", "").trim();
+      const installed = listInstalledSkills().map((s) => s.name);
+      if (!installed.includes(name)) {
+        addMsg("error", `Skill "${name}" is not installed.`);
+        return;
+      }
+      setSessionDisabledSkills((prev) => { const next = new Set(prev); next.delete(name); return next; });
+      if (agent) agent.enableSkill(name);
+      addMsg("info", `✅ Enabled skill: ${name}`);
+      return;
+    }
+    if (trimmed.startsWith("/skills off ")) {
+      const name = trimmed.replace("/skills off ", "").trim();
+      const installed = listInstalledSkills().map((s) => s.name);
+      if (!installed.includes(name)) {
+        addMsg("error", `Skill "${name}" is not installed.`);
+        return;
+      }
+      setSessionDisabledSkills((prev) => { const next = new Set(prev); next.add(name); return next; });
+      if (agent) agent.disableSkill(name);
+      addMsg("info", `✅ Disabled skill: ${name} (session only)`);
       return;
     }
     if (trimmed.startsWith("/theme")) {
@@ -739,6 +836,148 @@ function App() {
       return;
     }
 
+    // Skills picker navigation
+    if (skillsPicker) {
+      if (skillsPicker === "menu") {
+        const menuItems = ["browse", "installed", "create", "remove"];
+        if (key.upArrow) {
+          setSkillsPickerIndex((prev) => (prev - 1 + menuItems.length) % menuItems.length);
+          return;
+        }
+        if (key.downArrow) {
+          setSkillsPickerIndex((prev) => (prev + 1) % menuItems.length);
+          return;
+        }
+        if (key.escape) {
+          setSkillsPicker(null);
+          return;
+        }
+        if (key.return) {
+          const selected = menuItems[skillsPickerIndex];
+          if (selected === "browse") {
+            setSkillsPicker("browse");
+            setSkillsPickerIndex(0);
+          } else if (selected === "installed") {
+            setSkillsPicker("installed");
+            setSkillsPickerIndex(0);
+          } else if (selected === "create") {
+            setSkillsPicker(null);
+            setInput("/skills create ");
+            setInputKey((k) => k + 1);
+          } else if (selected === "remove") {
+            const installed = listInstalledSkills();
+            if (installed.length === 0) {
+              setSkillsPicker(null);
+              addMsg("info", "No skills installed to remove.");
+            } else {
+              setSkillsPicker("remove");
+              setSkillsPickerIndex(0);
+            }
+          }
+          return;
+        }
+        return;
+      }
+      if (skillsPicker === "browse") {
+        const registry = getRegistrySkills();
+        if (key.upArrow) {
+          setSkillsPickerIndex((prev) => (prev - 1 + registry.length) % registry.length);
+          return;
+        }
+        if (key.downArrow) {
+          setSkillsPickerIndex((prev) => (prev + 1) % registry.length);
+          return;
+        }
+        if (key.escape) {
+          setSkillsPicker("menu");
+          setSkillsPickerIndex(0);
+          return;
+        }
+        if (key.return) {
+          const selected = registry[skillsPickerIndex];
+          if (selected) {
+            const result = installSkill(selected.name);
+            addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+          }
+          setSkillsPicker(null);
+          return;
+        }
+        return;
+      }
+      if (skillsPicker === "installed") {
+        const installed = listInstalledSkills();
+        if (installed.length === 0) {
+          setSkillsPicker("menu");
+          setSkillsPickerIndex(0);
+          addMsg("info", "No skills installed.");
+          return;
+        }
+        if (key.upArrow) {
+          setSkillsPickerIndex((prev) => (prev - 1 + installed.length) % installed.length);
+          return;
+        }
+        if (key.downArrow) {
+          setSkillsPickerIndex((prev) => (prev + 1) % installed.length);
+          return;
+        }
+        if (key.escape) {
+          setSkillsPicker("menu");
+          setSkillsPickerIndex(0);
+          return;
+        }
+        if (key.return) {
+          // Toggle on/off for session
+          const selected = installed[skillsPickerIndex];
+          if (selected) {
+            const isDisabled = sessionDisabledSkills.has(selected.name);
+            if (isDisabled) {
+              setSessionDisabledSkills((prev) => { const next = new Set(prev); next.delete(selected.name); return next; });
+              if (agent) agent.enableSkill(selected.name);
+              addMsg("info", `✅ Enabled: ${selected.name}`);
+            } else {
+              setSessionDisabledSkills((prev) => { const next = new Set(prev); next.add(selected.name); return next; });
+              if (agent) agent.disableSkill(selected.name);
+              addMsg("info", `✅ Disabled: ${selected.name} (session only)`);
+            }
+          }
+          setSkillsPicker(null);
+          return;
+        }
+        return;
+      }
+      if (skillsPicker === "remove") {
+        const installed = listInstalledSkills();
+        if (installed.length === 0) {
+          setSkillsPicker(null);
+          return;
+        }
+        if (key.upArrow) {
+          setSkillsPickerIndex((prev) => (prev - 1 + installed.length) % installed.length);
+          return;
+        }
+        if (key.downArrow) {
+          setSkillsPickerIndex((prev) => (prev + 1) % installed.length);
+          return;
+        }
+        if (key.escape) {
+          setSkillsPicker("menu");
+          setSkillsPickerIndex(0);
+          return;
+        }
+        if (key.return) {
+          const selected = installed[skillsPickerIndex];
+          if (selected) {
+            const result = removeSkill(selected.name);
+            addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
+          }
+          setSkillsPicker(null);
+          return;
+        }
+        return;
+      }
+      return;
+    }
+
     // Theme picker navigation
     if (themePicker) {
       const themeKeys = listThemes();
@@ -1072,6 +1311,78 @@ function App() {
         </Box>
       )}
 
+      {/* ═══ SKILLS PICKER ═══ */}
+      {skillsPicker === "menu" && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Skills:</Text>
+          {[
+            { key: "browse", label: "Browse & Install", icon: "📦" },
+            { key: "installed", label: "Installed Skills", icon: "📋" },
+            { key: "create", label: "Create Custom Skill", icon: "➕" },
+            { key: "remove", label: "Remove Skill", icon: "🗑️" },
+          ].map((item, i) => (
+            <Text key={item.key}>
+              {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+              <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{item.icon} {item.label}</Text>
+            </Text>
+          ))}
+          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+        </Box>
+      )}
+      {skillsPicker === "browse" && (() => {
+        const registry = getRegistrySkills();
+        const installed = listInstalledSkills().map((s) => s.name);
+        return (
+          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+            <Text bold color={theme.colors.secondary}>Browse Skills Registry:</Text>
+            {registry.map((s, i) => (
+              <Text key={s.name}>
+                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{s.name}</Text>
+                <Text color={theme.colors.muted}>{" — "}{s.description}</Text>
+                {installed.includes(s.name) ? <Text color={theme.colors.success}> ✓</Text> : null}
+              </Text>
+            ))}
+            <Text dimColor>{"  ↑↓ navigate · Enter install · Esc back"}</Text>
+          </Box>
+        );
+      })()}
+      {skillsPicker === "installed" && (() => {
+        const installed = listInstalledSkills();
+        const active = getActiveSkills(process.cwd(), sessionDisabledSkills);
+        return (
+          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+            <Text bold color={theme.colors.secondary}>Installed Skills:</Text>
+            {installed.length === 0 ? (
+              <Text color={theme.colors.muted}>  No skills installed. Use Browse & Install.</Text>
+            ) : installed.map((s, i) => (
+              <Text key={s.name}>
+                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{s.name}</Text>
+                <Text color={theme.colors.muted}>{" — "}{s.description}</Text>
+                {active.includes(s.name) ? <Text color={theme.colors.success}> (on)</Text> : <Text color={theme.colors.muted}> (off)</Text>}
+              </Text>
+            ))}
+            <Text dimColor>{"  ↑↓ navigate · Enter toggle · Esc back"}</Text>
+          </Box>
+        );
+      })()}
+      {skillsPicker === "remove" && (() => {
+        const installed = listInstalledSkills();
+        return (
+          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.error} paddingX={1} marginBottom={0}>
+            <Text bold color={theme.colors.error}>Remove a skill:</Text>
+            {installed.map((s, i) => (
+              <Text key={s.name}>
+                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.name} — {s.description}</Text>
+              </Text>
+            ))}
+            <Text dimColor>{"  ↑↓ navigate · Enter remove · Esc back"}</Text>
+          </Box>
+        );
+      })()}
+
       {/* ═══ THEME PICKER ═══ */}
       {themePicker && (
         <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
@@ -1182,6 +1493,10 @@ function App() {
               return "";
             })()}
             {modelName ? ` · 🤖 ${modelName}` : ""}
+            {(() => {
+              const count = getActiveSkillCount(process.cwd(), sessionDisabledSkills);
+              return count > 0 ? ` · 🧠 ${count} skill${count !== 1 ? "s" : ""}` : "";
+            })()}
           </Text>
         </Box>
       )}
