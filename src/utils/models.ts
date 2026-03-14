@@ -9,7 +9,7 @@ export interface RecommendedModel {
   vramOptimal: number;    // Optimal VRAM in GB (0 = CPU fine)
   description: string;    // One-liner
   speed: string;          // e.g., "~45 tok/s on M1"
-  quality: "good" | "great" | "best";
+  quality: "limited" | "good" | "great" | "best";
 }
 
 export type ModelFit = "perfect" | "good" | "tight" | "skip";
@@ -25,9 +25,9 @@ const MODELS: RecommendedModel[] = [
     size: 2,
     ramRequired: 8,
     vramOptimal: 4,
-    description: "Lightweight, fast coding model",
+    description: "\u26A0\uFE0F May not support tool calling well",
     speed: "~60 tok/s on M1",
-    quality: "good",
+    quality: "limited",
   },
   {
     name: "Qwen 2.5 Coder 7B",
@@ -103,7 +103,7 @@ function scoreModel(model: RecommendedModel, ramGB: number, vramGB: number): Mod
   return "skip";
 }
 
-const qualityOrder: Record<string, number> = { best: 3, great: 2, good: 1 };
+const qualityOrder: Record<string, number> = { best: 3, great: 2, good: 1, limited: 0 };
 const fitOrder: Record<string, number> = { perfect: 4, good: 3, tight: 2, skip: 1 };
 
 export function getRecommendations(hardware: HardwareInfo): ScoredModel[] {
@@ -168,10 +168,11 @@ function mapLlmfitFit(fit: string): ModelFit {
   }
 }
 
-function mapLlmfitQuality(params_b: number): "good" | "great" | "best" {
+function mapLlmfitQuality(params_b: number): "limited" | "good" | "great" | "best" {
   if (params_b >= 14) return "best";
   if (params_b >= 7) return "great";
-  return "good";
+  if (params_b >= 5) return "good";
+  return "limited";
 }
 
 /** Get recommendations using llmfit if available, otherwise fall back to hardcoded list */

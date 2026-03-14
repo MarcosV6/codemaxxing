@@ -46,6 +46,11 @@ curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.co
 npm update -g codemaxxing
 ```
 
+If that doesn't get the latest version:
+```bash
+npm install -g codemaxxing@latest
+```
+
 ## Quick Start
 
 ### 1. Start Your LLM

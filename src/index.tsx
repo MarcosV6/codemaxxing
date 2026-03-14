@@ -215,6 +215,37 @@ function App() {
     return () => { pasteEvents.off("paste", handler); };
   }, []);
 
+  // Refresh the connection banner to reflect current provider status
+  const refreshConnectionBanner = useCallback(async () => {
+    const info: string[] = [];
+    const cliArgs = parseCLIArgs();
+    const rawConfig = loadConfig();
+    const config = applyOverrides(rawConfig, cliArgs);
+    const provider = config.provider;
+
+    if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
+      const detected = await detectLocalProvider();
+      if (detected) {
+        info.push(`✔ Connected to ${detected.baseUrl} → ${detected.model}`);
+      } else {
+        const ollamaUp = await isOllamaRunning();
+        info.push(ollamaUp ? "Ollama running (no model loaded)" : "✗ No local LLM server found");
+      }
+    } else {
+      info.push(`Provider: ${provider.baseUrl}`);
+      info.push(`Model: ${provider.model}`);
+    }
+
+    const cwd = process.cwd();
+    if (isGitRepo(cwd)) {
+      const branch = getBranch(cwd);
+      const status = getStatus(cwd);
+      info.push(`Git: ${branch} (${status})`);
+    }
+
+    setConnectionInfo(info);
+  }, []);
+
   // Connect/reconnect to LLM provider
   const connectToProvider = useCallback(async (isRetry = false) => {
     const cliArgs = parseCLIArgs();
@@ -708,6 +739,7 @@ function App() {
         await new Promise(r => setTimeout(r, 1000));
         if (await isOllamaRunning()) {
           addMsg("info", "Ollama is running.");
+          await refreshConnectionBanner();
           return;
         }
       }
@@ -723,6 +755,7 @@ function App() {
       addMsg("info", "Stopping Ollama...");
       const result = await stopOllama();
       addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
+      if (result.ok) await refreshConnectionBanner();
       return;
     }
     if (trimmed === "/ollama pull") {
@@ -1071,7 +1104,7 @@ function App() {
 
     setLoading(false);
     setStreaming(false);
-  }, [agent, exit]);
+  }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {
     // Handle slash command navigation
@@ -1387,7 +1420,7 @@ function App() {
       const pullModels = [
         { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
         { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
-        { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "Fast but limited quality" },
+        { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "\u26A0\uFE0F Basic \u2014 may struggle with tool calls" },
         { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs 48GB+" },
         { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
         { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
@@ -2204,7 +2237,7 @@ function App() {
           {[
             { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
             { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
-            { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "Fast but limited quality" },
+            { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "\u26A0\uFE0F Basic \u2014 may struggle with tool calls" },
             { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium, needs 48GB+" },
             { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
             { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },

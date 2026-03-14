@@ -319,7 +319,8 @@ export async function stopOllama(): Promise<{ ok: boolean; message: string }> {
 /** Delete a model from disk */
 export function deleteModel(modelId: string): { ok: boolean; message: string } {
   try {
-    execSync(`ollama rm ${modelId}`, { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
+    const bin = findOllamaBinary();
+    execSync(`"${bin}" rm ${modelId}`, { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
     return { ok: true, message: `Deleted ${modelId}` };
   } catch (err: any) {
     return { ok: false, message: `Failed to delete ${modelId}: ${err.stderr?.toString().trim() || err.message}` };
