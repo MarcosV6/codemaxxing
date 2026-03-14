@@ -2,7 +2,7 @@
 
 /**
  * Codemaxxing CLI entry point
- * Routes subcommands (login, auth) to auth-cli, everything else to the TUI
+ * Routes subcommands (login, auth, exec) to handlers, everything else to the TUI
  */
 
 import { spawn } from "node:child_process";
@@ -27,6 +27,10 @@ if (subcmd === "login" || subcmd === "auth") {
   });
 
   child.on("exit", (code) => process.exit(code ?? 0));
+} else if (subcmd === "exec") {
+  // Headless/CI mode — no TUI
+  const { runExec } = await import("./exec.js");
+  await runExec(process.argv.slice(3));
 } else {
   // TUI mode — import directly (not spawn) to preserve raw stdin
   await import("./index.js");
