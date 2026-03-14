@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
-import { loadConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listModels } from "./config.js";
+import { loadConfig, saveConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
@@ -14,8 +14,8 @@ import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, import
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
 import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware.js";
-import { getRecommendations, getFitIcon, type ScoredModel } from "./utils/models.js";
-import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, pullModel, type PullProgress } from "./utils/ollama.js";
+import { getRecommendations, getRecommendationsWithLlmfit, getFitIcon, isLlmfitAvailable, type ScoredModel } from "./utils/models.js";
+import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, stopOllama, pullModel, listInstalledModelsDetailed, deleteModel, getGPUMemoryUsage, type PullProgress } from "./utils/ollama.js";
 
 const VERSION = "0.1.9";
 
@@ -67,6 +67,12 @@ const SLASH_COMMANDS = [
   { cmd: "/mcp add", desc: "add MCP server" },
   { cmd: "/mcp remove", desc: "remove MCP server" },
   { cmd: "/mcp reconnect", desc: "reconnect MCP servers" },
+  { cmd: "/ollama", desc: "Ollama status & models" },
+  { cmd: "/ollama list", desc: "list installed models" },
+  { cmd: "/ollama start", desc: "start Ollama server" },
+  { cmd: "/ollama stop", desc: "stop Ollama server" },
+  { cmd: "/ollama pull", desc: "download a model" },
+  { cmd: "/ollama delete", desc: "delete a model" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -174,6 +180,11 @@ function App() {
     diff?: string;
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
+
+  // ── Ollama Management State ──
+  const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
+  const [ollamaPulling, setOllamaPulling] = useState<{ model: string; progress: PullProgress } | null>(null);
+  const [ollamaExitPrompt, setOllamaExitPrompt] = useState(false);
 
   // ── Setup Wizard State ──
   type WizardScreen = "connection" | "models" | "install-ollama" | "pulling" | null;
@@ -383,7 +394,8 @@ function App() {
         // Commands that need args (like /commit, /model) — fill input instead of executing
         if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
             selected.cmd === "/skills install" || selected.cmd === "/skills remove" || selected.cmd === "/skills search" ||
-            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect") {
+            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect" ||
+            selected.cmd === "/ollama pull" || selected.cmd === "/ollama delete") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -411,7 +423,20 @@ function App() {
     addMsg("user", trimmed);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
-      exit();
+      // Check if Ollama is running and offer to stop it
+      const ollamaUp = await isOllamaRunning();
+      if (ollamaUp) {
+        const config = loadConfig();
+        if (config.defaults.stopOllamaOnExit) {
+          addMsg("info", "Stopping Ollama...");
+          await stopOllama();
+          exit();
+        } else {
+          setOllamaExitPrompt(true);
+        }
+      } else {
+        exit();
+      }
       return;
     }
     if (trimmed === "/login" || trimmed === "/auth") {
@@ -454,6 +479,12 @@ function App() {
         "  /mcp add   — add MCP server to global config",
         "  /mcp remove — remove MCP server",
         "  /mcp reconnect — reconnect all MCP servers",
+        "  /ollama    — Ollama status, models & GPU usage",
+        "  /ollama list — list installed models with sizes",
+        "  /ollama start — start Ollama server",
+        "  /ollama stop — stop Ollama server (frees GPU RAM)",
+        "  /ollama pull <model> — download a model",
+        "  /ollama delete <model> — delete a model from disk",
         "  /quit      — exit",
       ].join("\n"));
       return;
@@ -611,6 +642,135 @@ function App() {
     if (trimmed === "/lint off") {
       if (agent) agent.setAutoLint(false);
       addMsg("info", "🔍 Auto-lint OFF");
+      return;
+    }
+
+    // ── Ollama commands (work without agent) ──
+    if (trimmed === "/ollama" || trimmed === "/ollama status") {
+      const running = await isOllamaRunning();
+      const lines: string[] = [`Ollama: ${running ? "running" : "stopped"}`];
+      if (running) {
+        const models = await listInstalledModelsDetailed();
+        if (models.length > 0) {
+          lines.push(`Installed models (${models.length}):`);
+          for (const m of models) {
+            const sizeGB = (m.size / (1024 * 1024 * 1024)).toFixed(1);
+            lines.push(`  ${m.name}  (${sizeGB} GB)`);
+          }
+        } else {
+          lines.push("No models installed.");
+        }
+        const gpuMem = getGPUMemoryUsage();
+        if (gpuMem) lines.push(`GPU: ${gpuMem}`);
+      } else {
+        lines.push("Start with: /ollama start");
+      }
+      addMsg("info", lines.join("\n"));
+      return;
+    }
+    if (trimmed === "/ollama list") {
+      const running = await isOllamaRunning();
+      if (!running) {
+        addMsg("info", "Ollama is not running. Start with /ollama start");
+        return;
+      }
+      const models = await listInstalledModelsDetailed();
+      if (models.length === 0) {
+        addMsg("info", "No models installed. Pull one with /ollama pull <model>");
+      } else {
+        const lines = models.map((m) => {
+          const sizeGB = (m.size / (1024 * 1024 * 1024)).toFixed(1);
+          return `  ${m.name}  (${sizeGB} GB)`;
+        });
+        addMsg("info", `Installed models:\n${lines.join("\n")}`);
+      }
+      return;
+    }
+    if (trimmed === "/ollama start") {
+      const running = await isOllamaRunning();
+      if (running) {
+        addMsg("info", "Ollama is already running.");
+        return;
+      }
+      if (!isOllamaInstalled()) {
+        addMsg("error", `Ollama is not installed. Install with: ${getOllamaInstallCommand(process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux")}`);
+        return;
+      }
+      startOllama();
+      addMsg("info", "Starting Ollama server...");
+      // Wait for it to come up
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (await isOllamaRunning()) {
+          addMsg("info", "Ollama is running.");
+          return;
+        }
+      }
+      addMsg("error", "Ollama did not start in time. Try running 'ollama serve' manually.");
+      return;
+    }
+    if (trimmed === "/ollama stop") {
+      const running = await isOllamaRunning();
+      if (!running) {
+        addMsg("info", "Ollama is not running.");
+        return;
+      }
+      addMsg("info", "Stopping Ollama...");
+      const result = await stopOllama();
+      addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
+      return;
+    }
+    if (trimmed.startsWith("/ollama pull ")) {
+      const modelId = trimmed.replace("/ollama pull ", "").trim();
+      if (!modelId) {
+        addMsg("info", "Usage: /ollama pull <model>\n  Example: /ollama pull qwen2.5-coder:7b");
+        return;
+      }
+      if (!isOllamaInstalled()) {
+        addMsg("error", "Ollama is not installed.");
+        return;
+      }
+      // Ensure ollama is running
+      let running = await isOllamaRunning();
+      if (!running) {
+        startOllama();
+        addMsg("info", "Starting Ollama server...");
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          if (await isOllamaRunning()) { running = true; break; }
+        }
+        if (!running) {
+          addMsg("error", "Could not start Ollama. Run 'ollama serve' manually.");
+          return;
+        }
+      }
+      setOllamaPulling({ model: modelId, progress: { status: "starting", percent: 0 } });
+      try {
+        await pullModel(modelId, (p) => {
+          setOllamaPulling({ model: modelId, progress: p });
+        });
+        setOllamaPulling(null);
+        addMsg("info", `\u2705 Downloaded ${modelId}`);
+      } catch (err: any) {
+        setOllamaPulling(null);
+        addMsg("error", `Failed to pull ${modelId}: ${err.message}`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/ollama delete ")) {
+      const modelId = trimmed.replace("/ollama delete ", "").trim();
+      if (!modelId) {
+        addMsg("info", "Usage: /ollama delete <model>");
+        return;
+      }
+      // Look up size for confirmation
+      const models = await listInstalledModelsDetailed();
+      const found = models.find((m) => m.name === modelId || m.name.startsWith(modelId));
+      if (!found) {
+        addMsg("error", `Model "${modelId}" not found. Use /ollama list to see installed models.`);
+        return;
+      }
+      setOllamaDeleteConfirm({ model: found.name, size: found.size });
       return;
     }
 
@@ -1155,6 +1315,49 @@ function App() {
       return;
     }
 
+    // ── Ollama delete confirmation ──
+    if (ollamaDeleteConfirm) {
+      if (inputChar === "y" || inputChar === "Y") {
+        const model = ollamaDeleteConfirm.model;
+        setOllamaDeleteConfirm(null);
+        const result = deleteModel(model);
+        addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
+        return;
+      }
+      if (inputChar === "n" || inputChar === "N" || key.escape) {
+        setOllamaDeleteConfirm(null);
+        addMsg("info", "Delete cancelled.");
+        return;
+      }
+      return;
+    }
+
+    // ── Ollama exit prompt ──
+    if (ollamaExitPrompt) {
+      if (inputChar === "y" || inputChar === "Y") {
+        setOllamaExitPrompt(false);
+        stopOllama().then(() => exit());
+        return;
+      }
+      if (inputChar === "n" || inputChar === "N") {
+        setOllamaExitPrompt(false);
+        exit();
+        return;
+      }
+      if (inputChar === "a" || inputChar === "A") {
+        setOllamaExitPrompt(false);
+        saveConfig({ defaults: { ...loadConfig().defaults, stopOllamaOnExit: true } });
+        addMsg("info", "Saved preference: always stop Ollama on exit.");
+        stopOllama().then(() => exit());
+        return;
+      }
+      if (key.escape) {
+        setOllamaExitPrompt(false);
+        return;
+      }
+      return;
+    }
+
     // ── Setup Wizard Navigation ──
     if (wizardScreen) {
       if (wizardScreen === "connection") {
@@ -1174,11 +1377,11 @@ function App() {
         if (key.return) {
           const selected = items[wizardIndex];
           if (selected === "local") {
-            // Scan hardware and show model picker
+            // Scan hardware and show model picker (use llmfit if available)
             const hw = detectHardware();
             setWizardHardware(hw);
-            const recs = getRecommendations(hw).filter(m => m.fit !== "skip");
-            setWizardModels(recs);
+            const { models: recs } = getRecommendationsWithLlmfit(hw);
+            setWizardModels(recs.filter(m => m.fit !== "skip"));
             setWizardScreen("models");
             setWizardIndex(0);
           } else if (selected === "openrouter") {
@@ -1527,7 +1730,13 @@ function App() {
 
     if (key.ctrl && inputChar === "c") {
       if (ctrlCPressed) {
-        exit();
+        // Force quit on second Ctrl+C — don't block
+        const config = loadConfig();
+        if (config.defaults.stopOllamaOnExit) {
+          stopOllama().finally(() => exit());
+        } else {
+          exit();
+        }
       } else {
         setCtrlCPressed(true);
         addMsg("info", "Press Ctrl+C again to exit.");
@@ -1832,6 +2041,52 @@ function App() {
         </Box>
       )}
 
+      {/* ═══ OLLAMA DELETE CONFIRM ═══ */}
+      {ollamaDeleteConfirm && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.warning}>Delete {ollamaDeleteConfirm.model} ({(ollamaDeleteConfirm.size / (1024 * 1024 * 1024)).toFixed(1)} GB)?</Text>
+          <Text>
+            <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
+            <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
+          </Text>
+        </Box>
+      )}
+
+      {/* ═══ OLLAMA PULL PROGRESS ═══ */}
+      {ollamaPulling && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>{"  Downloading "}{ollamaPulling.model}{"..."}</Text>
+          {ollamaPulling.progress.status === "downloading" || ollamaPulling.progress.percent > 0 ? (
+            <Text>
+              {"  "}
+              <Text color={theme.colors.primary}>
+                {"\u2588".repeat(Math.floor(ollamaPulling.progress.percent / 5))}
+                {"\u2591".repeat(20 - Math.floor(ollamaPulling.progress.percent / 5))}
+              </Text>
+              {"  "}<Text bold>{ollamaPulling.progress.percent}%</Text>
+              {ollamaPulling.progress.completed != null && ollamaPulling.progress.total != null ? (
+                <Text color={theme.colors.muted}>{" \u00B7 "}{formatBytes(ollamaPulling.progress.completed)}{" / "}{formatBytes(ollamaPulling.progress.total)}</Text>
+              ) : null}
+            </Text>
+          ) : (
+            <Text color={theme.colors.muted}>{"  "}{ollamaPulling.progress.status}...</Text>
+          )}
+        </Box>
+      )}
+
+      {/* ═══ OLLAMA EXIT PROMPT ═══ */}
+      {ollamaExitPrompt && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.warning}>Ollama is still running.</Text>
+          <Text color={theme.colors.muted}>Stop it to free GPU memory?</Text>
+          <Text>
+            <Text color={theme.colors.success} bold> [y]</Text><Text>es  </Text>
+            <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
+            <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
+          </Text>
+        </Box>
+      )}
+
       {/* ═══ SETUP WIZARD ═══ */}
       {wizardScreen === "connection" && (
         <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
@@ -1863,6 +2118,9 @@ function App() {
             <Text color={theme.colors.muted}>{"  GPU: "}{wizardHardware.gpu.name}{wizardHardware.gpu.vram > 0 ? ` (${formatBytes(wizardHardware.gpu.vram)})` : ""}</Text>
           ) : (
             <Text color={theme.colors.muted}>{"  GPU: none detected"}</Text>
+          )}
+          {!isLlmfitAvailable() && (
+            <Text dimColor>{"  Tip: Install llmfit for smarter recommendations: brew install llmfit"}</Text>
           )}
           <Text>{""}</Text>
           <Text bold color={theme.colors.secondary}>Recommended models:</Text>

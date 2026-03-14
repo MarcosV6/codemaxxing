@@ -24,6 +24,7 @@ export interface CodemaxxingConfig {
     contextCompressionThreshold?: number;
     architectModel?: string;
     autoLint?: boolean;
+    stopOllamaOnExit?: boolean;
   };
 }
 
@@ -136,6 +137,20 @@ export function loadConfig(): CodemaxxingConfig {
   } catch {
     return DEFAULT_CONFIG;
   }
+}
+
+/** Save config to disk (merges with existing) */
+export function saveConfig(updates: Partial<CodemaxxingConfig>): void {
+  const current = loadConfig();
+  const merged = {
+    ...current,
+    ...updates,
+    defaults: { ...current.defaults, ...(updates.defaults ?? {}) },
+  };
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
 }
 
 /**

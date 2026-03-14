@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import type { HardwareInfo } from "./hardware.js";
 
 export interface RecommendedModel {
@@ -133,5 +134,84 @@ export function getFitIcon(fit: ModelFit): string {
     case "good": return "\u2705";    // ✅
     case "tight": return "\u26A0\uFE0F";  // ⚠️
     case "skip": return "\u274C";    // ❌
+  }
+}
+
+/** Check if llmfit binary is available */
+export function isLlmfitAvailable(): boolean {
+  try {
+    const cmd = process.platform === "win32" ? "where llmfit" : "which llmfit";
+    execSync(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface LlmfitModel {
+  name: string;
+  provider: string;
+  params_b: number;
+  quant: string;
+  fit: string;
+  estimated_tps: number;
+  vram_gb: number;
+  ram_gb: number;
+}
+
+function mapLlmfitFit(fit: string): ModelFit {
+  switch (fit) {
+    case "perfect": return "perfect";
+    case "good": return "good";
+    case "marginal": return "tight";
+    default: return "skip";
+  }
+}
+
+function mapLlmfitQuality(params_b: number): "good" | "great" | "best" {
+  if (params_b >= 14) return "best";
+  if (params_b >= 7) return "great";
+  return "good";
+}
+
+/** Get recommendations using llmfit if available, otherwise fall back to hardcoded list */
+export function getRecommendationsWithLlmfit(hardware: HardwareInfo): { models: ScoredModel[]; usedLlmfit: boolean } {
+  if (!isLlmfitAvailable()) {
+    return { models: getRecommendations(hardware), usedLlmfit: false };
+  }
+
+  try {
+    const raw = execSync("llmfit recommend --use-case coding --format json --limit 10", {
+      encoding: "utf-8",
+      timeout: 15000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const llmfitModels: LlmfitModel[] = JSON.parse(raw.trim());
+    if (!Array.isArray(llmfitModels) || llmfitModels.length === 0) {
+      return { models: getRecommendations(hardware), usedLlmfit: false };
+    }
+
+    const scored: ScoredModel[] = llmfitModels
+      .filter((m) => m.provider === "ollama")
+      .map((m) => ({
+        name: m.name.split(":")[0]?.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) + ` ${m.params_b}B`,
+        ollamaId: m.name,
+        size: Math.ceil(m.vram_gb),
+        ramRequired: Math.ceil(m.ram_gb),
+        vramOptimal: Math.ceil(m.vram_gb),
+        description: `${m.quant} · ~${m.estimated_tps.toFixed(0)} tok/s`,
+        speed: `~${m.estimated_tps.toFixed(0)} tok/s`,
+        quality: mapLlmfitQuality(m.params_b),
+        fit: mapLlmfitFit(m.fit),
+      }));
+
+    if (scored.length === 0) {
+      return { models: getRecommendations(hardware), usedLlmfit: false };
+    }
+
+    return { models: scored, usedLlmfit: true };
+  } catch {
+    return { models: getRecommendations(hardware), usedLlmfit: false };
   }
 }

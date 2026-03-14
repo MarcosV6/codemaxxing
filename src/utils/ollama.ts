@@ -121,17 +121,112 @@ export function pullModel(
   });
 }
 
-/** List models installed in Ollama */
-export async function listInstalledModels(): Promise<string[]> {
+export interface OllamaModelInfo {
+  name: string;
+  size: number; // bytes
+  modified_at: string;
+  digest: string;
+}
+
+/** List models installed in Ollama with detailed info */
+export async function listInstalledModelsDetailed(): Promise<OllamaModelInfo[]> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
     const res = await fetch("http://localhost:11434/api/tags", { signal: controller.signal });
     clearTimeout(timeout);
     if (res.ok) {
-      const data = (await res.json()) as { models?: Array<{ name: string }> };
-      return (data.models ?? []).map((m) => m.name);
+      const data = (await res.json()) as { models?: Array<{ name: string; size: number; modified_at: string; digest: string }> };
+      return (data.models ?? []).map((m) => ({
+        name: m.name,
+        size: m.size,
+        modified_at: m.modified_at,
+        digest: m.digest,
+      }));
     }
   } catch { /* not running */ }
   return [];
+}
+
+/** List models installed in Ollama */
+export async function listInstalledModels(): Promise<string[]> {
+  const models = await listInstalledModelsDetailed();
+  return models.map((m) => m.name);
+}
+
+/** Stop all loaded models (frees VRAM) and kill the Ollama server process */
+export async function stopOllama(): Promise<{ ok: boolean; message: string }> {
+  try {
+    // First unload all models from memory
+    try {
+      execSync("ollama stop", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+    } catch { /* may fail if no models loaded */ }
+
+    // Kill the server process
+    if (process.platform === "win32") {
+      execSync("taskkill /f /im ollama.exe", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+    } else if (process.platform === "darwin") {
+      // Try launchctl first (Ollama app), then pkill
+      try {
+        execSync("launchctl stop com.ollama.ollama", { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
+      } catch {
+        try {
+          execSync("pkill ollama", { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
+        } catch { /* already stopped */ }
+      }
+    } else {
+      // Linux
+      try {
+        execSync("systemctl stop ollama", { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
+      } catch {
+        try {
+          execSync("pkill ollama", { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
+        } catch { /* already stopped */ }
+      }
+    }
+
+    // Verify it stopped
+    await new Promise(r => setTimeout(r, 500));
+    const stillRunning = await isOllamaRunning();
+    if (stillRunning) {
+      return { ok: false, message: "Ollama is still running. Try killing it manually." };
+    }
+    return { ok: true, message: "Ollama stopped." };
+  } catch (err: any) {
+    return { ok: false, message: `Failed to stop Ollama: ${err.message}` };
+  }
+}
+
+/** Delete a model from disk */
+export function deleteModel(modelId: string): { ok: boolean; message: string } {
+  try {
+    execSync(`ollama rm ${modelId}`, { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
+    return { ok: true, message: `Deleted ${modelId}` };
+  } catch (err: any) {
+    return { ok: false, message: `Failed to delete ${modelId}: ${err.stderr?.toString().trim() || err.message}` };
+  }
+}
+
+/** Get GPU memory usage info (best-effort) */
+export function getGPUMemoryUsage(): string | null {
+  try {
+    if (process.platform === "darwin") {
+      // Apple Silicon — check memory pressure
+      const raw = execSync("memory_pressure", { encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
+      const match = raw.match(/System-wide memory free percentage:\s*(\d+)%/);
+      if (match) {
+        return `${100 - parseInt(match[1])}% system memory in use`;
+      }
+      return null;
+    }
+    // NVIDIA GPU
+    const raw = execSync("nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits", {
+      encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"],
+    });
+    const parts = raw.trim().split(",").map(s => s.trim());
+    if (parts.length === 2) {
+      return `${parts[0]} MiB / ${parts[1]} MiB GPU memory`;
+    }
+  } catch { /* no GPU info available */ }
+  return null;
 }
