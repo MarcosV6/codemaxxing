@@ -185,7 +185,9 @@ function App() {
         } else {
           info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
           info.push("  Use --base-url and --api-key to connect to a remote provider.");
+          info.push("  Type /login to authenticate with a cloud provider.");
           setConnectionInfo([...info]);
+          setReady(true);
           return;
         }
       } else {
@@ -332,7 +334,7 @@ function App() {
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
-    if (!trimmed || !agent) return;
+    if (!trimmed) return;
 
     addMsg("user", trimmed);
 
@@ -368,6 +370,28 @@ function App() {
       ].join("\n"));
       return;
     }
+    if (trimmed.startsWith("/theme")) {
+      const themeName = trimmed.replace("/theme", "").trim();
+      if (!themeName) {
+        const themeKeys = listThemes();
+        const currentIdx = themeKeys.indexOf(theme.name.toLowerCase());
+        setThemePicker(true);
+        setThemePickerIndex(currentIdx >= 0 ? currentIdx : 0);
+        return;
+      }
+      if (!THEMES[themeName]) {
+        addMsg("error", `Theme "${themeName}" not found. Use /theme to see available themes.`);
+        return;
+      }
+      setTheme(getTheme(themeName));
+      addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
+      return;
+    }
+    // Commands below require an active LLM connection
+    if (!agent) {
+      addMsg("info", "⚠ No LLM connected. Use /login to authenticate with a provider, or start a local server.");
+      return;
+    }
     if (trimmed === "/reset") {
       agent.reset();
       addMsg("info", "✅ Conversation reset.");
@@ -397,23 +421,6 @@ function App() {
       agent.switchModel(newModel);
       setModelName(newModel);
       addMsg("info", `✅ Switched to model: ${newModel}`);
-      return;
-    }
-    if (trimmed.startsWith("/theme")) {
-      const themeName = trimmed.replace("/theme", "").trim();
-      if (!themeName) {
-        const themeKeys = listThemes();
-        const currentIdx = themeKeys.indexOf(theme.name.toLowerCase());
-        setThemePicker(true);
-        setThemePickerIndex(currentIdx >= 0 ? currentIdx : 0);
-        return;
-      }
-      if (!THEMES[themeName]) {
-        addMsg("error", `Theme "${themeName}" not found. Use /theme to see available themes.`);
-        return;
-      }
-      setTheme(getTheme(themeName));
-      addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
       return;
     }
     if (trimmed === "/map") {
