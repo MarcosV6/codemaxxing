@@ -13,6 +13,9 @@ import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./theme
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
+import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware.js";
+import { getRecommendations, getFitIcon, type ScoredModel } from "./utils/models.js";
+import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, pullModel, type PullProgress } from "./utils/ollama.js";
 
 const VERSION = "0.1.9";
 
@@ -172,6 +175,16 @@ function App() {
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
 
+  // ── Setup Wizard State ──
+  type WizardScreen = "connection" | "models" | "install-ollama" | "pulling" | null;
+  const [wizardScreen, setWizardScreen] = useState<WizardScreen>(null);
+  const [wizardIndex, setWizardIndex] = useState(0);
+  const [wizardHardware, setWizardHardware] = useState<HardwareInfo | null>(null);
+  const [wizardModels, setWizardModels] = useState<ScoredModel[]>([]);
+  const [wizardPullProgress, setWizardPullProgress] = useState<PullProgress | null>(null);
+  const [wizardPullError, setWizardPullError] = useState<string | null>(null);
+  const [wizardSelectedModel, setWizardSelectedModel] = useState<ScoredModel | null>(null);
+
   // Listen for paste events from stdin interceptor
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number }) => {
@@ -210,10 +223,11 @@ function App() {
         setConnectionInfo([...info]);
       } else {
         info.push("✗ No local LLM server found.");
-        info.push("  /connect  — retry after starting LM Studio or Ollama");
-        info.push("  /login    — authenticate with a cloud provider");
         setConnectionInfo([...info]);
         setReady(true);
+        // Show the setup wizard on first run
+        setWizardScreen("connection");
+        setWizardIndex(0);
         return;
       }
     } else {
@@ -1141,6 +1155,222 @@ function App() {
       return;
     }
 
+    // ── Setup Wizard Navigation ──
+    if (wizardScreen) {
+      if (wizardScreen === "connection") {
+        const items = ["local", "openrouter", "apikey", "existing"];
+        if (key.upArrow) {
+          setWizardIndex((prev) => (prev - 1 + items.length) % items.length);
+          return;
+        }
+        if (key.downArrow) {
+          setWizardIndex((prev) => (prev + 1) % items.length);
+          return;
+        }
+        if (key.escape) {
+          setWizardScreen(null);
+          return;
+        }
+        if (key.return) {
+          const selected = items[wizardIndex];
+          if (selected === "local") {
+            // Scan hardware and show model picker
+            const hw = detectHardware();
+            setWizardHardware(hw);
+            const recs = getRecommendations(hw).filter(m => m.fit !== "skip");
+            setWizardModels(recs);
+            setWizardScreen("models");
+            setWizardIndex(0);
+          } else if (selected === "openrouter") {
+            setWizardScreen(null);
+            addMsg("info", "Starting OpenRouter OAuth — opening browser...");
+            setLoading(true);
+            setSpinnerMsg("Waiting for authorization...");
+            openRouterOAuth((msg: string) => addMsg("info", msg))
+              .then(() => {
+                addMsg("info", "✅ OpenRouter authenticated! Use /connect to connect.");
+                setLoading(false);
+              })
+              .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
+          } else if (selected === "apikey") {
+            setWizardScreen(null);
+            setLoginPicker(true);
+            setLoginPickerIndex(0);
+          } else if (selected === "existing") {
+            setWizardScreen(null);
+            addMsg("info", "Start your LLM server, then type /connect to retry.");
+          }
+          return;
+        }
+        return;
+      }
+
+      if (wizardScreen === "models") {
+        const models = wizardModels;
+        if (key.upArrow) {
+          setWizardIndex((prev) => (prev - 1 + models.length) % models.length);
+          return;
+        }
+        if (key.downArrow) {
+          setWizardIndex((prev) => (prev + 1) % models.length);
+          return;
+        }
+        if (key.escape) {
+          setWizardScreen("connection");
+          setWizardIndex(0);
+          return;
+        }
+        if (key.return) {
+          const selected = models[wizardIndex];
+          if (selected) {
+            setWizardSelectedModel(selected);
+            // Check if Ollama is installed
+            if (!isOllamaInstalled()) {
+              setWizardScreen("install-ollama");
+            } else {
+              // Start pulling the model
+              setWizardScreen("pulling");
+              setWizardPullProgress({ status: "starting", percent: 0 });
+              setWizardPullError(null);
+
+              (async () => {
+                try {
+                  // Ensure ollama is running
+                  const running = await isOllamaRunning();
+                  if (!running) {
+                    setWizardPullProgress({ status: "Starting Ollama server...", percent: 0 });
+                    startOllama();
+                    // Wait for it to come up
+                    for (let i = 0; i < 15; i++) {
+                      await new Promise(r => setTimeout(r, 1000));
+                      if (await isOllamaRunning()) break;
+                    }
+                    if (!(await isOllamaRunning())) {
+                      setWizardPullError("Could not start Ollama server. Run 'ollama serve' manually, then press Enter.");
+                      return;
+                    }
+                  }
+
+                  await pullModel(selected.ollamaId, (p) => {
+                    setWizardPullProgress(p);
+                  });
+
+                  setWizardPullProgress({ status: "success", percent: 100 });
+
+                  // Wait briefly then connect
+                  await new Promise(r => setTimeout(r, 500));
+                  setWizardScreen(null);
+                  setWizardPullProgress(null);
+                  setWizardSelectedModel(null);
+                  addMsg("info", `✅ ${selected.name} installed! Connecting...`);
+                  await connectToProvider(true);
+                } catch (err: any) {
+                  setWizardPullError(err.message);
+                }
+              })();
+            }
+          }
+          return;
+        }
+        return;
+      }
+
+      if (wizardScreen === "install-ollama") {
+        if (key.escape) {
+          setWizardScreen("models");
+          setWizardIndex(0);
+          return;
+        }
+        if (key.return) {
+          // User says they installed it — check and proceed
+          if (isOllamaInstalled()) {
+            const selected = wizardSelectedModel;
+            if (selected) {
+              setWizardScreen("pulling");
+              setWizardPullProgress({ status: "starting", percent: 0 });
+              setWizardPullError(null);
+
+              (async () => {
+                try {
+                  const running = await isOllamaRunning();
+                  if (!running) {
+                    setWizardPullProgress({ status: "Starting Ollama server...", percent: 0 });
+                    startOllama();
+                    for (let i = 0; i < 15; i++) {
+                      await new Promise(r => setTimeout(r, 1000));
+                      if (await isOllamaRunning()) break;
+                    }
+                    if (!(await isOllamaRunning())) {
+                      setWizardPullError("Could not start Ollama server. Run 'ollama serve' manually, then press Enter.");
+                      return;
+                    }
+                  }
+                  await pullModel(selected.ollamaId, (p) => setWizardPullProgress(p));
+                  setWizardPullProgress({ status: "success", percent: 100 });
+                  await new Promise(r => setTimeout(r, 500));
+                  setWizardScreen(null);
+                  setWizardPullProgress(null);
+                  setWizardSelectedModel(null);
+                  addMsg("info", `✅ ${selected.name} installed! Connecting...`);
+                  await connectToProvider(true);
+                } catch (err: any) {
+                  setWizardPullError(err.message);
+                }
+              })();
+            }
+          } else {
+            addMsg("info", "Ollama not found yet. Install it and press Enter again.");
+          }
+          return;
+        }
+        return;
+      }
+
+      if (wizardScreen === "pulling") {
+        // Allow retry on error
+        if (wizardPullError && key.return) {
+          const selected = wizardSelectedModel;
+          if (selected) {
+            setWizardPullError(null);
+            setWizardPullProgress({ status: "retrying", percent: 0 });
+            (async () => {
+              try {
+                const running = await isOllamaRunning();
+                if (!running) {
+                  startOllama();
+                  for (let i = 0; i < 15; i++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    if (await isOllamaRunning()) break;
+                  }
+                }
+                await pullModel(selected.ollamaId, (p) => setWizardPullProgress(p));
+                setWizardPullProgress({ status: "success", percent: 100 });
+                await new Promise(r => setTimeout(r, 500));
+                setWizardScreen(null);
+                setWizardPullProgress(null);
+                setWizardSelectedModel(null);
+                addMsg("info", `✅ ${selected.name} installed! Connecting...`);
+                await connectToProvider(true);
+              } catch (err: any) {
+                setWizardPullError(err.message);
+              }
+            })();
+          }
+          return;
+        }
+        if (wizardPullError && key.escape) {
+          setWizardScreen("models");
+          setWizardIndex(0);
+          setWizardPullError(null);
+          setWizardPullProgress(null);
+          return;
+        }
+        return; // Ignore keys while pulling
+      }
+
+      return;
+    }
+
     // Theme picker navigation
     if (themePicker) {
       const themeKeys = listThemes();
@@ -1599,6 +1829,101 @@ function App() {
             <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
             <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* ═══ SETUP WIZARD ═══ */}
+      {wizardScreen === "connection" && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>No LLM detected. How do you want to connect?</Text>
+          <Text>{""}</Text>
+          {[
+            { key: "local",      icon: "\uD83D\uDDA5\uFE0F",  label: "Set up a local model", desc: "free, runs on your machine" },
+            { key: "openrouter", icon: "\uD83C\uDF10", label: "OpenRouter", desc: "200+ cloud models, browser login" },
+            { key: "apikey",     icon: "\uD83D\uDD11", label: "Enter API key manually", desc: "" },
+            { key: "existing",   icon: "\u2699\uFE0F",  label: "I already have a server running", desc: "" },
+          ].map((item, i) => (
+            <Text key={item.key}>
+              {i === wizardIndex ? <Text color={theme.colors.suggestion} bold>{"  \u25B8 "}</Text> : <Text>{"    "}</Text>}
+              <Text color={i === wizardIndex ? theme.colors.suggestion : theme.colors.primary} bold>{item.icon}  {item.label}</Text>
+              {item.desc ? <Text color={theme.colors.muted}>{" ("}{item.desc}{")"}</Text> : null}
+            </Text>
+          ))}
+          <Text>{""}</Text>
+          <Text dimColor>{"  \u2191\u2193 navigate \u00B7 Enter to select"}</Text>
+        </Box>
+      )}
+
+      {wizardScreen === "models" && wizardHardware && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Your hardware:</Text>
+          <Text color={theme.colors.muted}>{"  CPU: "}{wizardHardware.cpu.name}{" ("}{wizardHardware.cpu.cores}{" cores)"}</Text>
+          <Text color={theme.colors.muted}>{"  RAM: "}{formatBytes(wizardHardware.ram)}</Text>
+          {wizardHardware.gpu ? (
+            <Text color={theme.colors.muted}>{"  GPU: "}{wizardHardware.gpu.name}{wizardHardware.gpu.vram > 0 ? ` (${formatBytes(wizardHardware.gpu.vram)})` : ""}</Text>
+          ) : (
+            <Text color={theme.colors.muted}>{"  GPU: none detected"}</Text>
+          )}
+          <Text>{""}</Text>
+          <Text bold color={theme.colors.secondary}>Recommended models:</Text>
+          <Text>{""}</Text>
+          {wizardModels.map((m, i) => (
+            <Text key={m.ollamaId}>
+              {i === wizardIndex ? <Text color={theme.colors.suggestion} bold>{"  \u25B8 "}</Text> : <Text>{"    "}</Text>}
+              <Text>{getFitIcon(m.fit)} </Text>
+              <Text color={i === wizardIndex ? theme.colors.suggestion : theme.colors.primary} bold>{m.name}</Text>
+              <Text color={theme.colors.muted}>{"     ~"}{m.size}{" GB \u00B7 "}{m.quality === "best" ? "Best" : m.quality === "great" ? "Great" : "Good"}{" quality \u00B7 "}{m.speed}</Text>
+            </Text>
+          ))}
+          {wizardModels.length === 0 && (
+            <Text color={theme.colors.error}>{"  No suitable models found for your hardware."}</Text>
+          )}
+          <Text>{""}</Text>
+          <Text dimColor>{"  \u2191\u2193 navigate \u00B7 Enter to install \u00B7 Esc back"}</Text>
+        </Box>
+      )}
+
+      {wizardScreen === "install-ollama" && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.warning}>Ollama is required for local models.</Text>
+          <Text>{""}</Text>
+          <Text color={theme.colors.primary}>{"  Install with: "}<Text bold>{getOllamaInstallCommand(wizardHardware?.os ?? "linux")}</Text></Text>
+          <Text>{""}</Text>
+          <Text dimColor>{"  Run the command above, then press Enter to continue..."}</Text>
+          <Text dimColor>{"  Esc to go back"}</Text>
+        </Box>
+      )}
+
+      {wizardScreen === "pulling" && wizardSelectedModel && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          {wizardPullError ? (
+            <>
+              <Text color={theme.colors.error} bold>{"  \u274C Error: "}{wizardPullError}</Text>
+              <Text>{""}</Text>
+              <Text dimColor>{"  Press Enter to retry \u00B7 Esc to go back"}</Text>
+            </>
+          ) : wizardPullProgress ? (
+            <>
+              <Text bold color={theme.colors.secondary}>{"  Downloading "}{wizardSelectedModel.name}{"..."}</Text>
+              {wizardPullProgress.status === "downloading" || wizardPullProgress.percent > 0 ? (
+                <>
+                  <Text>
+                    {"  "}
+                    <Text color={theme.colors.primary}>
+                      {"\u2588".repeat(Math.floor(wizardPullProgress.percent / 5))}
+                      {"\u2591".repeat(20 - Math.floor(wizardPullProgress.percent / 5))}
+                    </Text>
+                    {"  "}<Text bold>{wizardPullProgress.percent}%</Text>
+                    {wizardPullProgress.completed != null && wizardPullProgress.total != null ? (
+                      <Text color={theme.colors.muted}>{" \u00B7 "}{formatBytes(wizardPullProgress.completed)}{" / "}{formatBytes(wizardPullProgress.total)}</Text>
+                    ) : null}
+                  </Text>
+                </>
+              ) : (
+                <Text color={theme.colors.muted}>{"  "}{wizardPullProgress.status}...</Text>
+              )}
+            </>
+          ) : null}
         </Box>
       )}
 
