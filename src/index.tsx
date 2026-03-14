@@ -187,6 +187,10 @@ function App() {
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
   const [ollamaPulling, setOllamaPulling] = useState<{ model: string; progress: PullProgress } | null>(null);
   const [ollamaExitPrompt, setOllamaExitPrompt] = useState(false);
+  const [ollamaDeletePicker, setOllamaDeletePicker] = useState<{ models: { name: string; size: number }[] } | null>(null);
+  const [ollamaDeletePickerIndex, setOllamaDeletePickerIndex] = useState(0);
+  const [ollamaPullPicker, setOllamaPullPicker] = useState(false);
+  const [ollamaPullPickerIndex, setOllamaPullPickerIndex] = useState(0);
 
   // ── Setup Wizard State ──
   type WizardScreen = "connection" | "models" | "install-ollama" | "pulling" | null;
@@ -722,10 +726,17 @@ function App() {
       addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
       return;
     }
+    if (trimmed === "/ollama pull") {
+      // No model specified — show picker
+      setOllamaPullPicker(true);
+      setOllamaPullPickerIndex(0);
+      return;
+    }
     if (trimmed.startsWith("/ollama pull ")) {
       const modelId = trimmed.replace("/ollama pull ", "").trim();
       if (!modelId) {
-        addMsg("info", "Usage: /ollama pull <model>\n  Example: /ollama pull qwen2.5-coder:7b");
+        setOllamaPullPicker(true);
+        setOllamaPullPickerIndex(0);
         return;
       }
       if (!isOllamaInstalled()) {
@@ -759,10 +770,27 @@ function App() {
       }
       return;
     }
+    if (trimmed === "/ollama delete") {
+      // No model specified — show picker of installed models
+      const models = await listInstalledModelsDetailed();
+      if (models.length === 0) {
+        addMsg("info", "No models installed.");
+        return;
+      }
+      setOllamaDeletePicker({ models: models.map(m => ({ name: m.name, size: m.size })) });
+      setOllamaDeletePickerIndex(0);
+      return;
+    }
     if (trimmed.startsWith("/ollama delete ")) {
       const modelId = trimmed.replace("/ollama delete ", "").trim();
       if (!modelId) {
-        addMsg("info", "Usage: /ollama delete <model>");
+        const models = await listInstalledModelsDetailed();
+        if (models.length === 0) {
+          addMsg("info", "No models installed.");
+          return;
+        }
+        setOllamaDeletePicker({ models: models.map(m => ({ name: m.name, size: m.size })) });
+        setOllamaDeletePickerIndex(0);
         return;
       }
       // Look up size for confirmation
@@ -1311,6 +1339,73 @@ function App() {
           }
           setSkillsPicker(null);
           return;
+        }
+        return;
+      }
+      return;
+    }
+
+    // ── Ollama delete picker ──
+    if (ollamaDeletePicker) {
+      if (key.upArrow) {
+        setOllamaDeletePickerIndex((prev) => (prev - 1 + ollamaDeletePicker.models.length) % ollamaDeletePicker.models.length);
+        return;
+      }
+      if (key.downArrow) {
+        setOllamaDeletePickerIndex((prev) => (prev + 1) % ollamaDeletePicker.models.length);
+        return;
+      }
+      if (key.escape) {
+        setOllamaDeletePicker(null);
+        return;
+      }
+      if (key.return) {
+        const selected = ollamaDeletePicker.models[ollamaDeletePickerIndex];
+        if (selected) {
+          setOllamaDeletePicker(null);
+          setOllamaDeleteConfirm({ model: selected.name, size: selected.size });
+        }
+        return;
+      }
+      return;
+    }
+
+    // ── Ollama pull picker ──
+    if (ollamaPullPicker) {
+      const pullModels = [
+        { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
+        { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
+        { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "Fast but limited quality" },
+        { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs 48GB+" },
+        { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
+        { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
+        { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Code completion focused" },
+      ];
+      if (key.upArrow) {
+        setOllamaPullPickerIndex((prev) => (prev - 1 + pullModels.length) % pullModels.length);
+        return;
+      }
+      if (key.downArrow) {
+        setOllamaPullPickerIndex((prev) => (prev + 1) % pullModels.length);
+        return;
+      }
+      if (key.escape) {
+        setOllamaPullPicker(false);
+        return;
+      }
+      if (key.return) {
+        const selected = pullModels[ollamaPullPickerIndex];
+        if (selected) {
+          setOllamaPullPicker(false);
+          // Trigger the pull
+          setInput(`/ollama pull ${selected.id}`);
+          setInputKey((k) => k + 1);
+          // Submit it
+          setTimeout(() => {
+            const submitInput = `/ollama pull ${selected.id}`;
+            setInput("");
+            handleSubmit(submitInput);
+          }, 50);
         }
         return;
       }
@@ -2069,6 +2164,48 @@ function App() {
             <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
             <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* ═══ OLLAMA DELETE PICKER ═══ */}
+      {ollamaDeletePicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Delete which model?</Text>
+          <Text>{""}</Text>
+          {ollamaDeletePicker.models.map((m, i) => (
+            <Text key={m.name}>
+              {"  "}{i === ollamaDeletePickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
+              <Text color={i === ollamaDeletePickerIndex ? theme.colors.primary : undefined}>{m.name}</Text>
+              <Text color={theme.colors.muted}>{" ("}{(m.size / (1024 * 1024 * 1024)).toFixed(1)}{" GB)"}</Text>
+            </Text>
+          ))}
+          <Text>{""}</Text>
+          <Text dimColor>{"  ↑↓ navigate · Enter to delete · Esc cancel"}</Text>
+        </Box>
+      )}
+
+      {/* ═══ OLLAMA PULL PICKER ═══ */}
+      {ollamaPullPicker && (
+        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
+          <Text bold color={theme.colors.secondary}>Download which model?</Text>
+          <Text>{""}</Text>
+          {[
+            { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
+            { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
+            { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "Fast but limited quality" },
+            { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium, needs 48GB+" },
+            { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
+            { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
+            { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Code completion focused" },
+          ].map((m, i) => (
+            <Text key={m.id}>
+              {"  "}{i === ollamaPullPickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
+              <Text color={i === ollamaPullPickerIndex ? theme.colors.primary : undefined} bold>{m.name}</Text>
+              <Text color={theme.colors.muted}>{" · "}{m.size}{" · "}{m.desc}</Text>
+            </Text>
+          ))}
+          <Text>{""}</Text>
+          <Text dimColor>{"  ↑↓ navigate · Enter to download · Esc cancel"}</Text>
         </Box>
       )}
 
