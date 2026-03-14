@@ -121,11 +121,56 @@ codemaxxing --provider openrouter
 ### 🔥 Streaming Tokens
 Real-time token display. See the model think, not just the final answer.
 
-### ⚠️ Tool Approval
-Dangerous operations (file writes, shell commands) require your approval. Press `y` to allow, `n` to deny, `a` to always allow for the session.
+### ⚠️ Tool Approval + Diff Preview
+Dangerous operations require your approval. File writes show a **unified diff** of what will change before you say yes. Press `y` to allow, `n` to deny, `a` to always allow.
+
+### 🏗️ Architect Mode
+Dual-model planning. A "planner" model reasons through the approach, then your editor model executes the changes.
+- `/architect` — toggle on/off
+- `/architect claude-3-5-sonnet` — set the planner model
+- Great for pairing expensive reasoning models with fast editors
+
+### 🧠 Skills System (21 Built-In)
+Downloadable skill packs that teach the agent domain expertise. Ships with 21 built-in skills:
+
+**Frontend:** react-expert, nextjs-app, tailwind-ui, svelte-kit
+**Mobile:** react-native, swift-ios, flutter
+**Backend:** python-pro, node-backend, go-backend, rust-systems
+**Data:** sql-master, supabase
+**Practices:** typescript-strict, api-designer, test-engineer, doc-writer, security-audit, devops-toolkit, git-workflow
+**Game Dev:** unity-csharp
+
+```
+/skills              # Browse & install from registry
+/skills install X    # Quick install
+/skills on/off X     # Toggle per session
+```
+
+Project-level config: add `.codemaxxing/skills.json` to scope skills per project.
+
+### 📋 CODEMAXXING.md — Project Rules
+Drop a `CODEMAXXING.md` in your project root for project-specific instructions. Auto-loaded every session. Also supports `.cursorrules` for Cursor migrants.
+
+### 🔧 Auto-Lint
+Automatically runs your linter after every file edit and feeds errors back to the model for auto-fix. Detects eslint, biome, ruff, clippy, golangci-lint, and more.
+- `/lint on` / `/lint off` — toggle (ON by default)
 
 ### 📂 Smart Context (Repo Map)
-Automatically scans your codebase and builds a map of functions, classes, and types. The model knows what exists where without reading every file.
+Scans your codebase and builds a map of functions, classes, and types. The model knows what exists where without reading every file.
+
+### 📦 Context Compression
+When conversation history exceeds 80k tokens, older messages are automatically summarized to free up context. Configurable via `contextCompressionThreshold`.
+
+### 💰 Cost Tracking
+Per-session token usage and estimated cost in the status bar. Pricing for 20+ common models. Saved to session history.
+
+### 🖥️ Headless/CI Mode
+Run codemaxxing in scripts and pipelines without the TUI:
+```bash
+codemaxxing exec "add error handling to api.ts"
+codemaxxing exec --auto-approve "fix all lint errors"
+echo "add tests" | codemaxxing exec
+```
 
 ### 🔀 Git Integration
 Opt-in git commands built in:
@@ -138,18 +183,23 @@ Opt-in git commands built in:
 ### 💾 Session Persistence
 Conversations auto-save to SQLite. Pick up where you left off:
 - `/sessions` — list past sessions
+- `/session delete` — remove a session
 - `/resume` — interactive session picker
 
 ### 🔄 Multi-Provider
 Switch models mid-session without restarting:
 - `/model gpt-4o` — switch to a different model
 - `/models` — list available models from your provider
+- Native Anthropic API support (not just OpenAI-compatible)
+
+### 🎨 14 Themes
+`/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rosé-pine, synthwave, blood-moon, mono, solarized, hacker, acid
 
 ### 🔐 Authentication
-One command to connect any LLM provider. OpenRouter OAuth (browser login for 200+ models), Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys. Use `codemaxxing login` or `/login` in-session.
+One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys.
 
 ### 📋 Smart Paste
-Paste large code blocks without breaking the UI. Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges (like Claude Code).
+Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges.
 
 ### ⌨️ Slash Commands
 Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to select.
@@ -159,11 +209,17 @@ Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to s
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/connect` | Retry LLM connection |
 | `/login` | Interactive auth setup |
+| `/architect` | Toggle architect mode / set model |
+| `/skills` | Browse, install, manage skills |
+| `/lint on/off` | Toggle auto-linting |
 | `/model <name>` | Switch model mid-session |
 | `/models` | List available models |
+| `/theme` | Switch color theme |
 | `/map` | Show repository map |
 | `/sessions` | List past sessions |
+| `/session delete` | Delete a session |
 | `/resume` | Resume a past session |
 | `/reset` | Clear conversation |
 | `/context` | Show message count + tokens |
@@ -174,7 +230,17 @@ Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to s
 | `/git on/off` | Toggle auto-commits |
 | `/quit` | Exit |
 
-## CLI Flags
+## CLI
+
+```bash
+codemaxxing                          # Start TUI
+codemaxxing login                    # Auth setup
+codemaxxing auth list                # Show saved credentials
+codemaxxing exec "prompt"            # Headless mode (no TUI)
+codemaxxing exec --auto-approve "x"  # Skip approval prompts
+codemaxxing exec --json "x"          # JSON output for scripts
+echo "fix tests" | codemaxxing exec  # Pipe from stdin
+```
 
 ```
 -m, --model <model>       Model name to use
