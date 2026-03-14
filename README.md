@@ -6,6 +6,8 @@
   <img src="assets/screenshot.jpg" alt="codemaxxing terminal UI" width="700">
 </p>
 
+[![npm version](https://img.shields.io/npm/v/codemaxxing)](https://www.npmjs.com/package/codemaxxing) [![license](https://img.shields.io/npm/l/codemaxxing)](LICENSE)
+
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
 ## Why?
@@ -110,7 +112,7 @@ Credentials stored securely in `~/.codemaxxing/auth.json` (owner-only permission
 **With a remote provider (OpenAI, OpenRouter, etc.):**
 
 ```bash
-codemaxxing --base-url https://api.openai.com/v1 --api-key sk-... --model gpt-4o
+codemaxxing --base-url https://api.openai.com/v1 --api-key sk-... --model gpt-5
 ```
 
 **With a saved provider profile:**
@@ -219,7 +221,7 @@ Full Ollama control from inside codemaxxing:
 ### 🔄 Multi-Provider
 Switch models mid-session with an interactive picker:
 - `/model` — browse and switch models
-- `/model gpt-4o` — switch directly by name
+- `/model gpt-5` — switch directly by name
 - Native Anthropic API support (not just OpenAI-compatible)
 
 ### 🎨 14 Themes
@@ -306,13 +308,13 @@ Settings are stored in `~/.codemaxxing/settings.json`:
       "name": "OpenRouter",
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiKey": "sk-or-...",
-      "model": "anthropic/claude-sonnet-4"
+      "model": "anthropic/claude-sonnet-4-6"
     },
     "openai": {
       "name": "OpenAI",
       "baseUrl": "https://api.openai.com/v1",
       "apiKey": "sk-...",
-      "model": "gpt-4o"
+      "model": "gpt-5"
     }
   },
   "defaults": {

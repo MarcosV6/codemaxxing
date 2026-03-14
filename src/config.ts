@@ -193,6 +193,57 @@ export function getConfigPath(): string {
 /**
  * Auto-detect local LLM servers
  */
+export type DetectionResult =
+  | { status: "connected"; provider: ProviderConfig }
+  | { status: "no-models"; serverName: string; baseUrl: string }
+  | { status: "no-server" };
+
+export async function detectLocalProviderDetailed(): Promise<DetectionResult> {
+  const endpoints = [
+    { name: "LM Studio", url: "http://localhost:1234/v1" },
+    { name: "Ollama", url: "http://localhost:11434/v1" },
+    { name: "vLLM", url: "http://localhost:8000/v1" },
+  ];
+
+  let serverFound: { name: string; url: string } | null = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`${endpoint.url}/models`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = (await res.json()) as { data?: Array<{ id: string }> };
+        const models = data.data ?? [];
+        if (models.length === 0) {
+          // Server is up but no models — remember it but keep looking
+          if (!serverFound) serverFound = endpoint;
+          continue;
+        }
+        return {
+          status: "connected",
+          provider: {
+            baseUrl: endpoint.url,
+            apiKey: "not-needed",
+            model: models[0]!.id,
+          },
+        };
+      }
+    } catch {
+      // Server not running, try next
+    }
+  }
+
+  if (serverFound) {
+    return { status: "no-models", serverName: serverFound.name, baseUrl: serverFound.url };
+  }
+  return { status: "no-server" };
+}
+
 export async function detectLocalProvider(): Promise<ProviderConfig | null> {
   const endpoints = [
     { name: "LM Studio", url: "http://localhost:1234/v1" },
@@ -212,7 +263,11 @@ export async function detectLocalProvider(): Promise<ProviderConfig | null> {
       if (res.ok) {
         const data = (await res.json()) as { data?: Array<{ id: string }> };
         const models = data.data ?? [];
-        const model = models[0]?.id ?? "auto";
+        if (models.length === 0) {
+          // Server is up but no models available — don't fake a connection
+          continue;
+        }
+        const model = models[0]!.id;
         return {
           baseUrl: endpoint.url,
           apiKey: "not-needed",

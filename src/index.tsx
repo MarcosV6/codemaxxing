@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
 import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
-import { loadConfig, saveConfig, detectLocalProvider, parseCLIArgs, applyOverrides, listModels } from "./config.js";
+import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { execSync } from "child_process";
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
@@ -81,11 +81,37 @@ const SLASH_COMMANDS = [
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 const SPINNER_MESSAGES = [
+  // OG
   "Locking in...", "Cooking...", "Maxxing...", "In the zone...",
   "Yapping...", "Frame mogging...", "Jester gooning...", "Gooning...",
   "Doing back flips...", "Jester maxxing...", "Getting baked...",
   "Blasting tren...", "Pumping...", "Wondering if I should actually do this...",
   "Hacking the main frame...", "Codemaxxing...", "Vibe coding...", "Running a marathon...",
+  // Gym/Looksmaxxing
+  "Mewing aggressively...", "Looksmaxxing your codebase...", "Hitting a PR on this function...",
+  "Eating 4000 calories of code...", "Creatine loading...", "On my bulk arc...",
+  "Warming up the deadlift...",
+  // Brainrot/Skibidi
+  "Going full skibidi...", "Sigma grinding...", "Rizzing up the compiler...",
+  "No cap processing...", "Main character coding...", "It's giving implementation...",
+  "This code is bussin fr fr...", "Aura check in progress...", "Erm what the sigma...",
+  // Deranged/Unhinged
+  "Ascending to a higher plane...", "Achieving final form...", "Third eye compiling...",
+  "Astral projecting through your repo...", "Becoming one with the codebase...",
+  "Having a spiritual awakening...", "Entering the shadow realm...", "Going goblin mode...",
+  "Deleting System32... jk...", "Sacrificing tokens to the GPU gods...",
+  "Summoning the machine spirit...",
+  // Self-aware/Meta
+  "Pretending to think really hard...", "Staring at your code judgmentally...",
+  "Rethinking my career choices...", "Having an existential crisis...",
+  "Hoping this actually works...", "Praying to the stack overflow gods...",
+  "Copying from the internet with dignity...",
+  // Pure Chaos
+  "Doing hot yoga in the terminal...", "Microdosing your dependencies...",
+  "Running on 3 hours of sleep...", "Speedrunning your deadline...",
+  "Built different rn...", "That's crazy let me cook...",
+  "Absolutely feral right now...", "Ong no cap fr fr...",
+  "Living rent free in your RAM...", "Ate and left no crumbs...",
 ];
 
 // ── Neon Spinner ──
@@ -264,13 +290,18 @@ function App() {
     if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
       info.push("Detecting local LLM server...");
       setConnectionInfo([...info]);
-      const detected = await detectLocalProvider();
-      if (detected) {
+      const detection = await detectLocalProviderDetailed();
+      if (detection.status === "connected") {
         // Keep CLI model override if specified
-        if (cliArgs.model) detected.model = cliArgs.model;
-        provider = detected;
+        if (cliArgs.model) detection.provider.model = cliArgs.model;
+        provider = detection.provider;
         info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
         setConnectionInfo([...info]);
+      } else if (detection.status === "no-models") {
+        info.push(`⚠ ${detection.serverName} is running but has no models. Use /ollama pull to download one.`);
+        setConnectionInfo([...info]);
+        setReady(true);
+        return;
       } else {
         info.push("✗ No local LLM server found.");
         setConnectionInfo([...info]);
@@ -941,8 +972,9 @@ function App() {
       }
       return;
     }
-    if (trimmed === "/model" || trimmed === "/models") {
+    if (trimmed === "/model") {
       // Show picker of available models
+      addMsg("info", "Fetching available models...");
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
@@ -950,17 +982,26 @@ function App() {
           setModelPickerIndex(0);
           return;
         }
-      } catch {}
+      } catch (err) {
+        // Ollama not available or failed, try provider
+      }
+      
       // Fallback: try provider's model list
-      try {
-        const providerModels = await listModels(providerRef.current?.baseUrl || "", providerRef.current?.apiKey || "");
-        if (providerModels.length > 0) {
-          setModelPicker(providerModels.map((m: any) => m.id || m));
-          setModelPickerIndex(0);
-          return;
+      if (providerRef.current?.baseUrl && providerRef.current.baseUrl !== "auto") {
+        try {
+          const providerModels = await listModels(providerRef.current.baseUrl, providerRef.current.apiKey || "");
+          if (providerModels.length > 0) {
+            setModelPicker(providerModels);
+            setModelPickerIndex(0);
+            return;
+          }
+        } catch (err) {
+          // Provider fetch failed
         }
-      } catch {}
-      addMsg("info", `Current model: ${modelName}\n  Usage: /model <model-name>`);
+      }
+      
+      // No models found anywhere
+      addMsg("error", "No models available. Download one with /ollama pull or configure a provider.");
       return;
     }
     if (trimmed.startsWith("/model ")) {
