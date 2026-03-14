@@ -72,9 +72,26 @@ export function getOllamaInstallCommand(os: "macos" | "linux" | "windows"): stri
   }
 }
 
+/** Find the ollama binary path */
+function findOllamaBinary(): string {
+  // Try PATH first
+  try {
+    const cmd = process.platform === "win32" ? "where ollama" : "which ollama";
+    return execSync(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 }).toString().trim().split("\n")[0];
+  } catch {}
+  // Check known Windows paths
+  if (process.platform === "win32") {
+    for (const p of getWindowsOllamaPaths()) {
+      if (existsSync(p)) return p;
+    }
+  }
+  return "ollama"; // fallback, hope for the best
+}
+
 /** Start ollama serve in background */
 export function startOllama(): void {
-  const child = spawn("ollama", ["serve"], {
+  const bin = findOllamaBinary();
+  const child = spawn(bin, ["serve"], {
     detached: true,
     stdio: "ignore",
   });
@@ -89,16 +106,77 @@ export interface PullProgress {
 }
 
 /**
- * Pull a model from Ollama registry.
+ * Pull a model from Ollama registry via HTTP API.
+ * Falls back to CLI if API fails.
  * Calls onProgress with download updates.
- * Returns a promise that resolves when complete.
  */
 export function pullModel(
   modelId: string,
   onProgress?: (progress: PullProgress) => void
 ): Promise<void> {
+  // Try HTTP API first (works even when CLI isn't on PATH)
+  return pullModelViaAPI(modelId, onProgress).catch(() => {
+    // Fallback to CLI
+    return pullModelViaCLI(modelId, onProgress);
+  });
+}
+
+function pullModelViaAPI(
+  modelId: string,
+  onProgress?: (progress: PullProgress) => void
+): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const res = await fetch("http://localhost:11434/api/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: modelId, stream: true }),
+      });
+      if (!res.ok || !res.body) {
+        reject(new Error(`Ollama API returned ${res.status}`));
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.status === "success") {
+              onProgress?.({ status: "success", percent: 100 });
+              resolve();
+              return;
+            }
+            if (data.total && data.completed) {
+              const percent = Math.round((data.completed / data.total) * 100);
+              onProgress?.({ status: "downloading", total: data.total, completed: data.completed, percent });
+            } else {
+              onProgress?.({ status: data.status || "working...", percent: 0 });
+            }
+          } catch {}
+        }
+      }
+      resolve();
+    } catch (err: any) {
+      reject(err);
+    }
+  });
+}
+
+function pullModelViaCLI(
+  modelId: string,
+  onProgress?: (progress: PullProgress) => void
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ollama", ["pull", modelId], {
+    const bin = findOllamaBinary();
+    const child = spawn(bin, ["pull", modelId], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -198,7 +276,9 @@ export async function stopOllama(): Promise<{ ok: boolean; message: string }> {
   try {
     // First unload all models from memory
     try {
-      execSync("ollama stop", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+      const bin = findOllamaBinary();
+      const { spawnSync } = require("child_process");
+      spawnSync(bin, ["stop"], { stdio: "pipe", timeout: 5000 });
     } catch { /* may fail if no models loaded */ }
 
     // Kill the server process
