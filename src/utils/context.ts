@@ -4,6 +4,30 @@ import { buildRepoMap } from "./repomap.js";
 import { buildSkillPrompts } from "./skills.js";
 
 /**
+ * Load project rules from CODEMAXXING.md, .codemaxxing/CODEMAXXING.md, or .cursorrules
+ * Returns { content, source } or null if none found
+ */
+export function loadProjectRules(cwd: string): { content: string; source: string } | null {
+  const candidates = [
+    { path: join(cwd, "CODEMAXXING.md"), source: "CODEMAXXING.md" },
+    { path: join(cwd, ".codemaxxing", "CODEMAXXING.md"), source: ".codemaxxing/CODEMAXXING.md" },
+    { path: join(cwd, ".cursorrules"), source: ".cursorrules" },
+  ];
+
+  for (const { path, source } of candidates) {
+    if (existsSync(path)) {
+      try {
+        const content = readFileSync(path, "utf-8").trim();
+        if (content) return { content, source };
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Build a project context string by scanning the working directory
  */
 export async function buildProjectContext(cwd: string): Promise<string> {
@@ -29,15 +53,6 @@ export async function buildProjectContext(cwd: string): Promise<string> {
 
   if (found.length > 0) {
     lines.push(`Project files: ${found.join(", ")}`);
-  }
-
-  // Read PIERRE.md if it exists (like QWEN.md — project context file)
-  const contextMd = join(cwd, "CODEMAXXING.md");
-  if (existsSync(contextMd)) {
-    const content = readFileSync(contextMd, "utf-8");
-    lines.push("\n--- CODEMAXXING.md (project context) ---");
-    lines.push(content.slice(0, 4000));
-    lines.push("--- end CODEMAXXING.md ---");
   }
 
   // Read package.json for project info
@@ -94,7 +109,7 @@ export async function buildProjectContext(cwd: string): Promise<string> {
 /**
  * Get the system prompt for the coding agent
  */
-export async function getSystemPrompt(projectContext: string, skillPrompts: string = ""): Promise<string> {
+export async function getSystemPrompt(projectContext: string, skillPrompts: string = "", projectRules: string = ""): Promise<string> {
   const base = `You are CODEMAXXING, an AI coding assistant running in the terminal.
 
 You help developers understand, write, debug, and refactor code. You have access to tools that let you read files, write files, list directories, search code, and run shell commands.
@@ -120,10 +135,17 @@ ${projectContext}
 - Be direct and helpful
 - If the user asks to "just do it", skip explanations and execute`;
 
-  if (skillPrompts) {
-    return base + "\n\n## Active Skills\n" + skillPrompts;
+  let prompt = base;
+
+  if (projectRules) {
+    prompt += "\n\n--- Project Rules (CODEMAXXING.md) ---\n" + projectRules + "\n--- End Project Rules ---";
   }
-  return base;
+
+  if (skillPrompts) {
+    prompt += "\n\n## Active Skills\n" + skillPrompts;
+  }
+
+  return prompt;
 }
 
 /**
