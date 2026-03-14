@@ -2230,7 +2230,7 @@ function App() {
         <Text color={theme.colors.secondary} bold>{"> "}</Text>
         {approval ? (
           <Text color={theme.colors.warning}>waiting for approval...</Text>
-        ) : ready && !loading ? (
+        ) : ready && !loading && !wizardScreen ? (
           <Box>
             {pastedChunks.map((p) => (
               <Text key={p.id} color={theme.colors.muted}>[Pasted text #{p.id} +{p.lines} lines]</Text>
