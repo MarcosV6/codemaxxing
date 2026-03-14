@@ -1,6 +1,6 @@
 {
   "name": "codemaxxing",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Open-source terminal coding agent. Connect any LLM. Max your code.",
   "main": "dist/index.js",
   "bin": {
@@ -26,6 +26,7 @@
   "author": "Marcos Vallejo",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@types/react": "^19.2.14",
     "better-sqlite3": "^12.6.2",
     "chalk": "^5.3.0",
