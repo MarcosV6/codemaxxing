@@ -1489,32 +1489,38 @@ function App() {
         if (key.return) {
           // Auto-install Ollama if not present
           if (!isOllamaInstalled()) {
-            addMsg("info", "📦 Installing Ollama... (this may take a minute)");
+            setWizardPullProgress({ status: "Installing Ollama...", percent: 0 });
+            setWizardScreen("pulling");
+
+            // Run install async so the UI can update
             const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
-            try {
-              // Use pipe instead of inherit — Ink TUI conflicts with inherit stdio
-              const parts = installCmd.split(" ");
-              const result = _require("child_process").spawnSync(parts[0], parts.slice(1), {
-                stdio: "pipe",
-                timeout: 180000,
-                shell: true,
-                encoding: "utf-8",
-              });
-              if (result.status === 0) {
-                addMsg("info", "✅ Ollama installed!");
-              } else {
-                const errMsg = (result.stderr || result.stdout || "").trim().split("\n").pop() || "Unknown error";
-                addMsg("error", `Install failed: ${errMsg}`);
+            (async () => {
+              try {
+                const { execFile } = _require("child_process");
+                const parts = installCmd.split(" ");
+                await new Promise<void>((resolve, reject) => {
+                  execFile(parts[0], parts.slice(1), { shell: true, timeout: 180000 }, (err: any, _stdout: string, stderr: string) => {
+                    if (err) reject(new Error(stderr || err.message));
+                    else resolve();
+                  });
+                });
+                addMsg("info", "✅ Ollama installed! Proceeding to model download...");
+                // Small delay for PATH to update on Windows
+                await new Promise(r => setTimeout(r, 2000));
+                // Go back to models screen so user can pick and it'll proceed to pull
+                setWizardScreen("models");
+                setWizardPullProgress(null);
+              } catch (e: any) {
+                addMsg("error", `Install failed: ${e.message}`);
                 addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
-                return;
+                setWizardScreen("install-ollama");
+                setWizardPullProgress(null);
               }
-            } catch (e: any) {
-              addMsg("error", `Install failed: ${e.message}`);
-              addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
-              return;
-            }
+            })();
+            return;
           }
-          if (isOllamaInstalled()) {
+          // Ollama already installed — proceed to pull
+          {
             const selected = wizardSelectedModel;
             if (selected) {
               setWizardScreen("pulling");
@@ -2178,7 +2184,7 @@ function App() {
         </Box>
       )}
 
-      {wizardScreen === "pulling" && wizardSelectedModel && (
+      {wizardScreen === "pulling" && (wizardSelectedModel || wizardPullProgress) && (
         <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
           {wizardPullError ? (
             <>
@@ -2188,7 +2194,7 @@ function App() {
             </>
           ) : wizardPullProgress ? (
             <>
-              <Text bold color={theme.colors.secondary}>{"  Downloading "}{wizardSelectedModel.name}{"..."}</Text>
+              <Text bold color={theme.colors.secondary}>{"  "}{wizardSelectedModel ? `Downloading ${wizardSelectedModel.name}...` : wizardPullProgress?.status || "Working..."}</Text>
               {wizardPullProgress.status === "downloading" || wizardPullProgress.percent > 0 ? (
                 <>
                   <Text>
