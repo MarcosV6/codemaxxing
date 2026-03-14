@@ -1487,14 +1487,28 @@ function App() {
         if (key.return) {
           // Auto-install Ollama if not present
           if (!isOllamaInstalled()) {
-            addMsg("info", "📦 Installing Ollama...");
+            addMsg("info", "📦 Installing Ollama... (this may take a minute)");
             const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
             try {
-              const { execSync } = require("child_process");
-              execSync(installCmd, { stdio: "inherit", timeout: 120000 });
-              addMsg("info", "✅ Ollama installed!");
+              // Use pipe instead of inherit — Ink TUI conflicts with inherit stdio
+              const parts = installCmd.split(" ");
+              const result = require("child_process").spawnSync(parts[0], parts.slice(1), {
+                stdio: "pipe",
+                timeout: 180000,
+                shell: true,
+                encoding: "utf-8",
+              });
+              if (result.status === 0) {
+                addMsg("info", "✅ Ollama installed!");
+              } else {
+                const errMsg = (result.stderr || result.stdout || "").trim().split("\n").pop() || "Unknown error";
+                addMsg("error", `Install failed: ${errMsg}`);
+                addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
+                return;
+              }
             } catch (e: any) {
-              addMsg("error", `Failed to install Ollama. Try manually: ${installCmd}`);
+              addMsg("error", `Install failed: ${e.message}`);
+              addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
               return;
             }
           }
