@@ -1,12 +1,29 @@
 import { execSync, spawn } from "child_process";
+import { existsSync } from "fs";
+import { join } from "path";
 
-/** Check if ollama binary exists on PATH */
+/** Get known Ollama binary paths for Windows */
+function getWindowsOllamaPaths(): string[] {
+  const paths: string[] = [];
+  const localAppData = process.env.LOCALAPPDATA || join(process.env.USERPROFILE || "", "AppData", "Local");
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  paths.push(join(localAppData, "Programs", "Ollama", "ollama.exe"));
+  paths.push(join(programFiles, "Ollama", "ollama.exe"));
+  paths.push(join(localAppData, "Ollama", "ollama.exe"));
+  return paths;
+}
+
+/** Check if ollama binary exists on PATH or known install locations */
 export function isOllamaInstalled(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where ollama" : "which ollama";
     execSync(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
     return true;
   } catch {
+    // Fallback: check known install paths on Windows
+    if (process.platform === "win32") {
+      return getWindowsOllamaPaths().some(p => existsSync(p));
+    }
     return false;
   }
 }

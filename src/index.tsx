@@ -1496,10 +1496,9 @@ function App() {
             const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
             (async () => {
               try {
-                const { execFile } = _require("child_process");
-                const parts = installCmd.split(" ");
+                const { exec } = _require("child_process");
                 await new Promise<void>((resolve, reject) => {
-                  execFile(parts[0], parts.slice(1), { shell: true, timeout: 180000 }, (err: any, _stdout: string, stderr: string) => {
+                  exec(installCmd, { timeout: 180000 }, (err: any, _stdout: string, stderr: string) => {
                     if (err) reject(new Error(stderr || err.message));
                     else resolve();
                   });
