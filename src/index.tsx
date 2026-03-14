@@ -1485,7 +1485,19 @@ function App() {
           return;
         }
         if (key.return) {
-          // User says they installed it — check and proceed
+          // Auto-install Ollama if not present
+          if (!isOllamaInstalled()) {
+            addMsg("info", "📦 Installing Ollama...");
+            const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
+            try {
+              const { execSync } = require("child_process");
+              execSync(installCmd, { stdio: "inherit", timeout: 120000 });
+              addMsg("info", "✅ Ollama installed!");
+            } catch (e: any) {
+              addMsg("error", `Failed to install Ollama. Try manually: ${installCmd}`);
+              return;
+            }
+          }
           if (isOllamaInstalled()) {
             const selected = wizardSelectedModel;
             if (selected) {
@@ -1521,8 +1533,6 @@ function App() {
                 }
               })();
             }
-          } else {
-            addMsg("info", "Ollama not found yet. Install it and press Enter again.");
           }
           return;
         }
@@ -2145,10 +2155,10 @@ function App() {
         <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
           <Text bold color={theme.colors.warning}>Ollama is required for local models.</Text>
           <Text>{""}</Text>
-          <Text color={theme.colors.primary}>{"  Install with: "}<Text bold>{getOllamaInstallCommand(wizardHardware?.os ?? "linux")}</Text></Text>
+          <Text color={theme.colors.primary}>{"  Press Enter to install Ollama automatically"}</Text>
+          <Text dimColor>{"  Or install manually: "}<Text>{getOllamaInstallCommand(wizardHardware?.os ?? "linux")}</Text></Text>
           <Text>{""}</Text>
-          <Text dimColor>{"  Run the command above, then press Enter to continue..."}</Text>
-          <Text dimColor>{"  Esc to go back"}</Text>
+          <Text dimColor>{"  Enter to install · Esc to go back"}</Text>
         </Box>
       )}
 
