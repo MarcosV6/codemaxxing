@@ -1489,8 +1489,8 @@ function App() {
         if (key.return) {
           // Auto-install Ollama if not present
           if (!isOllamaInstalled()) {
-            setWizardPullProgress({ status: "Installing Ollama...", percent: 0 });
-            setWizardScreen("pulling");
+            setLoading(true);
+            setSpinnerMsg("Installing Ollama... this may take a minute");
 
             // Run install async so the UI can update
             const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
@@ -1504,16 +1504,16 @@ function App() {
                   });
                 });
                 addMsg("info", "✅ Ollama installed! Proceeding to model download...");
+                setLoading(false);
                 // Small delay for PATH to update on Windows
                 await new Promise(r => setTimeout(r, 2000));
                 // Go back to models screen so user can pick and it'll proceed to pull
                 setWizardScreen("models");
-                setWizardPullProgress(null);
               } catch (e: any) {
                 addMsg("error", `Install failed: ${e.message}`);
                 addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
+                setLoading(false);
                 setWizardScreen("install-ollama");
-                setWizardPullProgress(null);
               }
             })();
             return;

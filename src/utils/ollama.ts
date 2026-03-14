@@ -13,19 +13,41 @@ function getWindowsOllamaPaths(): string[] {
   return paths;
 }
 
-/** Check if ollama binary exists on PATH or known install locations */
+/** Check if ollama binary exists on PATH, known install locations, or server is running */
 export function isOllamaInstalled(): boolean {
+  // Check PATH first
   try {
     const cmd = process.platform === "win32" ? "where ollama" : "which ollama";
     execSync(cmd, { stdio: ["pipe", "pipe", "pipe"], timeout: 3000 });
     return true;
-  } catch {
-    // Fallback: check known install paths on Windows
-    if (process.platform === "win32") {
-      return getWindowsOllamaPaths().some(p => existsSync(p));
-    }
-    return false;
+  } catch {}
+
+  // Check known install paths on Windows
+  if (process.platform === "win32") {
+    if (getWindowsOllamaPaths().some(p => existsSync(p))) return true;
   }
+
+  // Check if the server is responding (if server is running, Ollama is definitely installed)
+  try {
+    execSync("curl -s http://localhost:11434/api/tags", {
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 3000,
+    });
+    return true;
+  } catch {}
+
+  // Check if ollama process is running (Windows)
+  if (process.platform === "win32") {
+    try {
+      const result = execSync("tasklist /fi \"imagename eq ollama app.exe\" /fo csv /nh", {
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 3000,
+      });
+      if (result.toString().toLowerCase().includes("ollama")) return true;
+    } catch {}
+  }
+
+  return false;
 }
 
 /** Check if ollama server is responding */
