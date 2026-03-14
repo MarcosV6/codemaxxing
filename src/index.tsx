@@ -29,6 +29,7 @@ function formatTimeAgo(date: Date): string {
 // ── Slash Commands ──
 const SLASH_COMMANDS = [
   { cmd: "/help", desc: "show commands" },
+  { cmd: "/connect", desc: "retry LLM connection" },
   { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
@@ -163,121 +164,132 @@ function App() {
     return () => { pasteEvents.off("paste", handler); };
   }, []);
 
-  // Initialize agent
-  useEffect(() => {
-    (async () => {
-      const cliArgs = parseCLIArgs();
-      const rawConfig = loadConfig();
-      const config = applyOverrides(rawConfig, cliArgs);
-      let provider = config.provider;
-      const info: string[] = [];
+  // Connect/reconnect to LLM provider
+  const connectToProvider = useCallback(async (isRetry = false) => {
+    const cliArgs = parseCLIArgs();
+    const rawConfig = loadConfig();
+    const config = applyOverrides(rawConfig, cliArgs);
+    let provider = config.provider;
+    const info: string[] = [];
 
-      if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
-        info.push("Detecting local LLM server...");
+    if (isRetry) {
+      info.push("Retrying connection...");
+      setConnectionInfo([...info]);
+    }
+
+    if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
+      info.push("Detecting local LLM server...");
+      setConnectionInfo([...info]);
+      const detected = await detectLocalProvider();
+      if (detected) {
+        // Keep CLI model override if specified
+        if (cliArgs.model) detected.model = cliArgs.model;
+        provider = detected;
+        info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
         setConnectionInfo([...info]);
-        const detected = await detectLocalProvider();
-        if (detected) {
-          // Keep CLI model override if specified
-          if (cliArgs.model) detected.model = cliArgs.model;
-          provider = detected;
-          info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
-          setConnectionInfo([...info]);
-        } else {
-          info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
-          info.push("  Use --base-url and --api-key to connect to a remote provider.");
-          info.push("  Type /login to authenticate with a cloud provider.");
-          setConnectionInfo([...info]);
-          setReady(true);
-          return;
-        }
       } else {
-        info.push(`Provider: ${provider.baseUrl}`);
-        info.push(`Model: ${provider.model}`);
+        info.push("✗ No local LLM server found. Start LM Studio or Ollama.");
+        info.push("  Use --base-url and --api-key to connect to a remote provider.");
+        info.push("  Type /login to authenticate, or /connect to retry.");
         setConnectionInfo([...info]);
+        setReady(true);
+        return;
       }
+    } else {
+      info.push(`Provider: ${provider.baseUrl}`);
+      info.push(`Model: ${provider.model}`);
+      setConnectionInfo([...info]);
+    }
 
-      const cwd = process.cwd();
+    const cwd = process.cwd();
 
-      // Git info
-      if (isGitRepo(cwd)) {
-        const branch = getBranch(cwd);
-        const status = getStatus(cwd);
-        info.push(`Git: ${branch} (${status})`);
-        setConnectionInfo([...info]);
-      }
+    // Git info
+    if (isGitRepo(cwd)) {
+      const branch = getBranch(cwd);
+      const status = getStatus(cwd);
+      info.push(`Git: ${branch} (${status})`);
+      setConnectionInfo([...info]);
+    }
 
-      const a = new CodingAgent({
-        provider,
-        cwd,
-        maxTokens: config.defaults.maxTokens,
-        autoApprove: config.defaults.autoApprove,
-        onToken: (token) => {
-          // Switch from big spinner to streaming mode
-          setLoading(false);
-          setStreaming(true);
+    const a = new CodingAgent({
+      provider,
+      cwd,
+      maxTokens: config.defaults.maxTokens,
+      autoApprove: config.defaults.autoApprove,
+      onToken: (token) => {
+        // Switch from big spinner to streaming mode
+        setLoading(false);
+        setStreaming(true);
 
-          // Update the current streaming response in-place
-          setMessages((prev) => {
-            const lastIdx = prev.length - 1;
-            const last = prev[lastIdx];
+        // Update the current streaming response in-place
+        setMessages((prev) => {
+          const lastIdx = prev.length - 1;
+          const last = prev[lastIdx];
 
-            if (last && last.type === "response" && (last as any)._streaming) {
-              return [
-                ...prev.slice(0, lastIdx),
-                { ...last, text: last.text + token },
-              ];
-            }
-
-            // First token of a new response
-            return [...prev, { id: msgId++, type: "response" as const, text: token, _streaming: true } as any];
-          });
-        },
-        onToolCall: (name, args) => {
-          setLoading(true);
-          setSpinnerMsg("Executing tools...");
-          const argStr = Object.entries(args)
-            .map(([k, v]) => {
-              const val = String(v);
-              return val.length > 60 ? val.slice(0, 60) + "..." : val;
-            })
-            .join(", ");
-          addMsg("tool", `${name}(${argStr})`);
-        },
-        onToolResult: (_name, result) => {
-          const numLines = result.split("\n").length;
-          const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-          addMsg("tool-result", `└ ${numLines} lines (${size})`);
-        },
-        onThinking: (text) => {
-          if (text.length > 0) {
-            addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
+          if (last && last.type === "response" && (last as any)._streaming) {
+            return [
+              ...prev.slice(0, lastIdx),
+              { ...last, text: last.text + token },
+            ];
           }
-        },
-        onGitCommit: (message) => {
-          addMsg("info", `📝 Auto-committed: ${message}`);
-        },
-        onContextCompressed: (oldTokens, newTokens) => {
-          const saved = oldTokens - newTokens;
-          const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
-          addMsg("info", `📦 Context compressed (~${savedStr} tokens freed)`);
-        },
-        contextCompressionThreshold: config.defaults.contextCompressionThreshold,
-        onToolApproval: (name, args, diff) => {
-          return new Promise((resolve) => {
-            setApproval({ tool: name, args, diff, resolve });
-            setLoading(false);
-          });
-        },
-      });
 
-      // Initialize async context (repo map)
-      await a.init();
+          // First token of a new response
+          return [...prev, { id: msgId++, type: "response" as const, text: token, _streaming: true } as any];
+        });
+      },
+      onToolCall: (name, args) => {
+        setLoading(true);
+        setSpinnerMsg("Executing tools...");
+        const argStr = Object.entries(args)
+          .map(([k, v]) => {
+            const val = String(v);
+            return val.length > 60 ? val.slice(0, 60) + "..." : val;
+          })
+          .join(", ");
+        addMsg("tool", `${name}(${argStr})`);
+      },
+      onToolResult: (_name, result) => {
+        const numLines = result.split("\n").length;
+        const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
+        addMsg("tool-result", `└ ${numLines} lines (${size})`);
+      },
+      onThinking: (text) => {
+        if (text.length > 0) {
+          addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
+        }
+      },
+      onGitCommit: (message) => {
+        addMsg("info", `📝 Auto-committed: ${message}`);
+      },
+      onContextCompressed: (oldTokens, newTokens) => {
+        const saved = oldTokens - newTokens;
+        const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
+        addMsg("info", `📦 Context compressed (~${savedStr} tokens freed)`);
+      },
+      contextCompressionThreshold: config.defaults.contextCompressionThreshold,
+      onToolApproval: (name, args, diff) => {
+        return new Promise((resolve) => {
+          setApproval({ tool: name, args, diff, resolve });
+          setLoading(false);
+        });
+      },
+    });
 
-      setAgent(a);
-      setModelName(provider.model);
-      providerRef.current = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
-      setReady(true);
-    })();
+    // Initialize async context (repo map)
+    await a.init();
+
+    setAgent(a);
+    setModelName(provider.model);
+    providerRef.current = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
+    setReady(true);
+    if (isRetry) {
+      addMsg("info", `✅ Connected to ${provider.model}`);
+    }
+  }, []);
+
+  // Initialize agent on mount
+  useEffect(() => {
+    connectToProvider(false);
   }, []);
 
   function addMsg(type: ChatMessage["type"], text: string) {
@@ -347,10 +359,16 @@ function App() {
       setLoginPickerIndex(0);
       return;
     }
+    if (trimmed === "/connect") {
+      addMsg("info", "🔄 Reconnecting...");
+      await connectToProvider(true);
+      return;
+    }
     if (trimmed === "/help") {
       addMsg("info", [
         "Commands:",
         "  /help      — show this",
+        "  /connect   — retry LLM connection",
         "  /login     — authentication setup (run codemaxxing login in terminal)",
         "  /model     — switch model mid-session",
         "  /models    — list available models",
