@@ -23,13 +23,25 @@ if %ERRORLEVEL% EQU 0 (
     winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
     if %ERRORLEVEL% EQU 0 (
         echo.
-        echo [OK] Node.js installed!
+        echo [OK] Node.js installed! Refreshing PATH...
         echo.
-        echo ** IMPORTANT: Close this terminal and open a new one, then run: **
-        echo    npm install -g codemaxxing
-        echo.
-        pause
-        exit /b 0
+        :: Refresh PATH to pick up Node.js without reopening terminal
+        for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SYSPATH=%%b"
+        for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USRPATH=%%b"
+        set "PATH=%SYSPATH%;%USRPATH%"
+        :: Check if npm is now available
+        where npm >nul 2>nul
+        if %ERRORLEVEL% EQU 0 (
+            goto install_codemaxxing
+        ) else (
+            echo.
+            echo ** Node.js installed but PATH needs a refresh. **
+            echo    Close this terminal, open a new one, and run:
+            echo    npm install -g codemaxxing
+            echo.
+            pause
+            exit /b 0
+        )
     )
 )
 
