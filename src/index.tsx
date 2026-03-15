@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
 import { appendFileSync } from "node:fs";
 import TextInput from "ink-text-input";
-import { consumePendingPasteEndMarkerChunk } from "./utils/paste.js";
+import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris } from "./utils/paste.js";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
@@ -2278,7 +2278,9 @@ let inBracketedPaste = false;
 let burstBuffer = "";
 let burstTimer: NodeJS.Timeout | null = null;
 let pendingPasteEndMarker = { active: false, buffer: "" };
+let swallowPostPasteDebrisUntil = 0;
 const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish delivering paste
+const POST_PASTE_DEBRIS_WINDOW_MS = 1200;
 
 // Debug paste: set CODEMAXXING_DEBUG_PASTE=1 to log all stdin chunks to /tmp/codemaxxing-paste-debug.log
 const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
@@ -2301,6 +2303,7 @@ function handlePasteContent(content: string): void {
     // one character at a time *after* the paste payload. Arm a tiny
     // swallow-state so those trailing fragments never leak into the input.
     pendingPasteEndMarker = { active: true, buffer: "" };
+    swallowPostPasteDebrisUntil = Date.now() + POST_PASTE_DEBRIS_WINDOW_MS;
     pasteEvents.emit("paste", { content: normalized, lines: lineCount });
     return;
   }
@@ -2364,6 +2367,11 @@ function flushBurst(): void {
   data = pendingResult.remaining;
   if (!data) {
     pasteLog("PENDING END MARKER swallowed chunk");
+    return true;
+  }
+
+  if (Date.now() < swallowPostPasteDebrisUntil && shouldSwallowPostPasteDebris(data)) {
+    pasteLog(`POST-PASTE DEBRIS swallowed raw=${data}`);
     return true;
   }
 

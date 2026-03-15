@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { consumePendingPasteEndMarkerChunk } from "../src/utils/paste.js";
+import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris } from "../src/utils/paste.js";
 
 const idle = { active: false, buffer: "" };
 const armed = { active: true, buffer: "" };
+
+describe("shouldSwallowPostPasteDebris", () => {
+  it("swallows tiny bracketed-paste debris chunks", () => {
+    expect(shouldSwallowPostPasteDebris("[201~")).toBe(true);
+    expect(shouldSwallowPostPasteDebris("\x1b[201~")).toBe(true);
+    expect(shouldSwallowPostPasteDebris("2")).toBe(true);
+    expect(shouldSwallowPostPasteDebris("~")).toBe(true);
+  });
+
+  it("does not swallow real user text", () => {
+    expect(shouldSwallowPostPasteDebris("a")).toBe(false);
+    expect(shouldSwallowPostPasteDebris("and keep it simple")).toBe(false);
+    expect(shouldSwallowPostPasteDebris("hello")).toBe(false);
+  });
+});
 
 describe("consumePendingPasteEndMarkerChunk", () => {
   it("passes through normally when not armed", () => {

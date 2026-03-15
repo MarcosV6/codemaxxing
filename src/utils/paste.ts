@@ -3,6 +3,16 @@ export interface PendingPasteEndState {
   buffer: string;
 }
 
+export function shouldSwallowPostPasteDebris(chunk: string): boolean {
+  if (!chunk) return false;
+  if (chunk.length > 8) return false;
+
+  // Terminals sometimes leak tiny bracketed-paste marker fragments after the
+  // multiline payload is already complete. Be conservative: only swallow short
+  // chunks made entirely of characters that belong to those control fragments.
+  return /^[\x1b\[\]0-9;~]+$/.test(chunk);
+}
+
 const END_MARKERS = ["\x1b[201~", "[201~", "201~"] as const;
 
 function isPrefixOfAnyMarker(value: string): boolean {
