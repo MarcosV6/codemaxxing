@@ -56,8 +56,6 @@ const SLASH_COMMANDS = [
   { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
   { cmd: "/skills", desc: "manage skill packs" },
-  { cmd: "/skills on", desc: "enable skill for session" },
-  { cmd: "/skills off", desc: "disable skill for session" },
   { cmd: "/architect", desc: "toggle architect mode" },
   { cmd: "/lint", desc: "show auto-lint status" },
   { cmd: "/lint on", desc: "enable auto-lint" },
@@ -462,8 +460,7 @@ function App() {
       if (selected) {
         // Commands that need args (like /commit, /model) — fill input instead of executing
         if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
-            selected.cmd === "/skills on" ||
-            selected.cmd === "/skills off" || selected.cmd === "/architect") {
+            selected.cmd === "/architect") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -538,7 +535,6 @@ function App() {
         "  /git on    — enable auto-commits",
         "  /git off   — disable auto-commits",
         "  /skills    — manage skill packs",
-        "  /skills on/off <name> — toggle a skill for this session",
         "  /architect — toggle architect mode (plan then execute)",
         "  /lint      — show auto-lint status & detected linter",
         "  /lint on   — enable auto-lint",
