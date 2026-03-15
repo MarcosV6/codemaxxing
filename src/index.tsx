@@ -9,6 +9,7 @@ import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetaile
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { isGitRepo, getBranch, getStatus } from "./utils/git.js";
 import { tryHandleGitCommand } from "./commands/git.js";
+import { tryHandleOllamaCommand } from "./commands/ollama.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
@@ -715,170 +716,17 @@ function App() {
     }
 
     // ── Ollama commands (work without agent) ──
-    if (trimmed === "/ollama" || trimmed === "/ollama status") {
-      const running = await isOllamaRunning();
-      const lines: string[] = [`Ollama: ${running ? "running" : "stopped"}`];
-      if (running) {
-        const models = await listInstalledModelsDetailed();
-        if (models.length > 0) {
-          lines.push(`Installed models (${models.length}):`);
-          for (const m of models) {
-            const sizeGB = (m.size / (1024 * 1024 * 1024)).toFixed(1);
-            lines.push(`  ${m.name}  (${sizeGB} GB)`);
-          }
-        } else {
-          lines.push("No models installed.");
-        }
-        const gpuMem = getGPUMemoryUsage();
-        if (gpuMem) lines.push(`GPU: ${gpuMem}`);
-      } else {
-        lines.push("Start with: /ollama start");
-      }
-      addMsg("info", lines.join("\n"));
-      return;
-    }
-    if (trimmed === "/ollama list") {
-      const running = await isOllamaRunning();
-      if (!running) {
-        addMsg("info", "Ollama is not running. Start with /ollama start");
-        return;
-      }
-      const models = await listInstalledModelsDetailed();
-      if (models.length === 0) {
-        addMsg("info", "No models installed. Pull one with /ollama pull <model>");
-      } else {
-        const lines = models.map((m) => {
-          const sizeGB = (m.size / (1024 * 1024 * 1024)).toFixed(1);
-          return `  ${m.name}  (${sizeGB} GB)`;
-        });
-        addMsg("info", `Installed models:\n${lines.join("\n")}`);
-      }
-      return;
-    }
-    if (trimmed === "/ollama start") {
-      const running = await isOllamaRunning();
-      if (running) {
-        addMsg("info", "Ollama is already running.");
-        return;
-      }
-      if (!isOllamaInstalled()) {
-        addMsg("error", `Ollama is not installed. Install with: ${getOllamaInstallCommand(process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux")}`);
-        return;
-      }
-      startOllama();
-      addMsg("info", "Starting Ollama server...");
-      // Wait for it to come up
-      for (let i = 0; i < 10; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        if (await isOllamaRunning()) {
-          addMsg("info", "Ollama is running.");
-          await refreshConnectionBanner();
-          return;
-        }
-      }
-      addMsg("error", "Ollama did not start in time. Try running 'ollama serve' manually.");
-      return;
-    }
-    if (trimmed === "/ollama stop") {
-      const running = await isOllamaRunning();
-      if (!running) {
-        addMsg("info", "Ollama is not running.");
-        return;
-      }
-      addMsg("info", "Stopping Ollama...");
-      const result = await stopOllama();
-      addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
-      if (result.ok) await refreshConnectionBanner();
-      return;
-    }
-    if (trimmed === "/ollama pull") {
-      // No model specified — show picker
-      setOllamaPullPicker(true);
-      setOllamaPullPickerIndex(0);
-      return;
-    }
-    if (trimmed.startsWith("/ollama pull ")) {
-      const modelId = trimmed.replace("/ollama pull ", "").trim();
-      if (!modelId) {
-        setOllamaPullPicker(true);
-        setOllamaPullPickerIndex(0);
-        return;
-      }
-      if (!isOllamaInstalled()) {
-        addMsg("error", "Ollama is not installed.");
-        return;
-      }
-      // Ensure ollama is running
-      let running = await isOllamaRunning();
-      if (!running) {
-        startOllama();
-        addMsg("info", "Starting Ollama server...");
-        for (let i = 0; i < 10; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          if (await isOllamaRunning()) { running = true; break; }
-        }
-        if (!running) {
-          addMsg("error", "Could not start Ollama. Run 'ollama serve' manually.");
-          return;
-        }
-      }
-      setOllamaPulling({ model: modelId, progress: { status: "starting", percent: 0 } });
-      try {
-        await pullModel(modelId, (p) => {
-          setOllamaPulling({ model: modelId, progress: p });
-        });
-        setOllamaPulling(null);
-        addMsg("info", `\u2705 Downloaded ${modelId}`);
-      } catch (err: any) {
-        setOllamaPulling(null);
-        addMsg("error", `Failed to pull ${modelId}: ${err.message}`);
-      }
-      return;
-    }
-    if (trimmed === "/ollama delete") {
-      // Ensure Ollama is running so we can list models
-      let running = await isOllamaRunning();
-      if (!running) {
-        addMsg("info", "Starting Ollama to list models...");
-        startOllama();
-        for (let i = 0; i < 10; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          if (await isOllamaRunning()) { running = true; break; }
-        }
-        if (!running) {
-          addMsg("error", "Could not start Ollama. Start it manually first.");
-          return;
-        }
-      }
-      const models = await listInstalledModelsDetailed();
-      if (models.length === 0) {
-        addMsg("info", "No models installed.");
-        return;
-      }
-      setOllamaDeletePicker({ models: models.map(m => ({ name: m.name, size: m.size })) });
-      setOllamaDeletePickerIndex(0);
-      return;
-    }
-    if (trimmed.startsWith("/ollama delete ")) {
-      const modelId = trimmed.replace("/ollama delete ", "").trim();
-      if (!modelId) {
-        const models = await listInstalledModelsDetailed();
-        if (models.length === 0) {
-          addMsg("info", "No models installed.");
-          return;
-        }
-        setOllamaDeletePicker({ models: models.map(m => ({ name: m.name, size: m.size })) });
-        setOllamaDeletePickerIndex(0);
-        return;
-      }
-      // Look up size for confirmation
-      const models = await listInstalledModelsDetailed();
-      const found = models.find((m) => m.name === modelId || m.name.startsWith(modelId));
-      if (!found) {
-        addMsg("error", `Model "${modelId}" not found. Use /ollama list to see installed models.`);
-        return;
-      }
-      setOllamaDeleteConfirm({ model: found.name, size: found.size });
+    if (await tryHandleOllamaCommand({
+      trimmed,
+      addMsg,
+      refreshConnectionBanner,
+      setOllamaPullPicker,
+      setOllamaPullPickerIndex,
+      setOllamaPulling,
+      setOllamaDeletePicker,
+      setOllamaDeletePickerIndex,
+      setOllamaDeleteConfirm,
+    })) {
       return;
     }
 
