@@ -12,7 +12,7 @@ Open-source terminal coding agent. Connect **any** LLM — local or remote — a
 
 ## Why?
 
-Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM Studio, Ollama, OpenRouter, OpenAI, or any OpenAI-compatible endpoint. Your machine, your model, your rules.
+Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM Studio, Ollama, OpenRouter, OpenAI, Anthropic, or any OpenAI-compatible endpoint. Your machine, your model, your rules.
 
 ## Install
 
@@ -48,29 +48,72 @@ curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.co
 npm update -g codemaxxing
 ```
 
-If that doesn't get the latest version:
+If that doesn't get the latest version, use the exact reinstall path:
 ```bash
 npm install -g codemaxxing@latest
 ```
 
+Then verify:
+```bash
+codemaxxing --version
+```
+
 ## Quick Start
 
-### 1. Start Your LLM
+### Option A — easiest local setup
 
-You need a local LLM server running. The easiest option:
+If you already have a local server running, Codemaxxing auto-detects common defaults:
+- **LM Studio** on `http://localhost:1234/v1`
+- **Ollama** on `http://localhost:11434`
+- **vLLM** on `http://localhost:8000`
 
+For LM Studio:
 1. Download [LM Studio](https://lmstudio.ai)
-2. Search for a model (e.g. **Qwen 2.5 Coder 7B Q4_K_M** — good for testing)
-3. Load the model
-4. Click **Start Server** (it runs on port 1234 by default)
-
-### 2. Run It
+2. Load a coding model (for example **Qwen 2.5 Coder 7B** for a lightweight test)
+3. Start the local server
+4. Run:
 
 ```bash
 codemaxxing
 ```
 
-That's it. Codemaxxing auto-detects LM Studio and connects. Start coding.
+### Option B — no local model yet
+
+Just run:
+
+```bash
+codemaxxing
+```
+
+If no LLM is available, Codemaxxing can guide you through:
+- detecting your hardware
+- recommending a model
+- installing Ollama
+- downloading the model
+- connecting automatically
+
+### Option C — cloud provider
+
+Authenticate first:
+
+```bash
+codemaxxing login
+```
+
+Then run:
+
+```bash
+codemaxxing
+```
+
+## First-run sanity check
+
+Once it launches, a quick smoke test is:
+- type `/`
+- open `/theme`
+- open `/skills`
+- paste a multiline block and confirm it becomes a paste badge
+- send one normal prompt
 
 ---
 
@@ -138,7 +181,7 @@ Dual-model planning. A "planner" model reasons through the approach, then your e
 - Great for pairing expensive reasoning models with fast editors
 
 ### 🧠 Skills System (21 Built-In)
-Downloadable skill packs that teach the agent domain expertise. Ships with 21 built-in skills:
+Downloadable skill packs that teach the agent domain expertise. Ships with 21 built-in skills and a menu-first `/skills` flow so you can browse instead of memorizing names:
 
 | Category | Skills |
 |----------|--------|
@@ -226,14 +269,14 @@ Switch models mid-session with an interactive picker:
 - `/model gpt-5` — switch directly by name
 - Native Anthropic API support (not just OpenAI-compatible)
 
-### 🎨 15 Themes
-`/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rose-pine, synthwave, blood-moon, mono, solarized, hacker, hot-dog, acid
+### 🎨 14 Themes
+`/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rose-pine, synthwave, blood-moon, mono, solarized, hacker, acid
 
 ### 🔐 Authentication
 One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys.
 
 ### 📋 Smart Paste
-Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges.
+Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges instead of dumping raw text into the input box. This was specifically hardened for bracketed-paste terminal weirdness.
 
 ### ⌨️ Slash Commands
 Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to select.
@@ -351,8 +394,8 @@ Drop a `CODEMAXXING.md` file in your project root to give the model extra contex
 - **MCP:** [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)
 - **Sessions:** [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 - **Local LLM:** Ollama integration (auto-install, pull, manage)
-- **Tests:** Vitest — 26 tests across 8 test files covering commands, tools, config, and agent behavior
-- **Zero cloud dependencies** — everything runs locally
+- **Tests:** Vitest — 42 tests across 9 test files covering commands, tools, config, paste handling, and agent behavior
+- **Zero cloud dependencies** — everything runs locally unless you choose a remote provider
 
 ## Inspired By
 

@@ -2,26 +2,38 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
-import { EventEmitter } from "events";
-import { appendFileSync } from "node:fs";
 import TextInput from "ink-text-input";
-import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris, sanitizeInputArtifacts } from "./utils/paste.js";
-import { CodingAgent } from "./agent.js";
-import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
+import { sanitizeInputArtifacts } from "./utils/paste.js";
+import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
+import type { CodingAgent } from "./agent.js";
+import { loadConfig, saveConfig, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
-import { isGitRepo, getBranch, getStatus } from "./utils/git.js";
 import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
 import { dispatchRegisteredCommands } from "./commands/registry.js";
-import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
+import { getTheme, DEFAULT_THEME, type Theme } from "./themes.js";
 import { tryHandleUiCommand } from "./commands/ui.js";
-import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
-import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
 import { tryHandleSkillsCommand } from "./commands/skills.js";
-import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware.js";
-import { getRecommendations, getRecommendationsWithLlmfit, getFitIcon, isLlmfitAvailable, type ScoredModel } from "./utils/models.js";
-import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, stopOllama, pullModel, listInstalledModelsDetailed, deleteModel, getGPUMemoryUsage, type PullProgress } from "./utils/ollama.js";
+import type { HardwareInfo } from "./utils/hardware.js";
+import type { ScoredModel } from "./utils/models.js";
+import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
+import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
+import type { WizardScreen } from "./ui/wizard-types.js";
+import { Banner, ConnectionInfo } from "./ui/banner.js";
+import { StatusBar } from "./ui/status-bar.js";
+import type { ChatMessage } from "./ui/connection-types.js";
+import {
+  refreshConnectionBanner as refreshConnectionBannerImpl,
+  connectToProvider as connectToProviderImpl,
+} from "./ui/connection.js";
+import {
+  CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
+  SkillsInstalled, SkillsRemove, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  DeleteSessionConfirm, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
+  OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
+  WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
+} from "./ui/pickers.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -158,14 +170,8 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   );
 }
 
-// ── Message Types ──
-interface ChatMessage {
-  id: number;
-  type: "user" | "response" | "tool" | "tool-result" | "error" | "info";
-  text: string;
-}
-
 let msgId = 0;
+function nextMsgId(): number { return msgId++; }
 
 // ── Main App ──
 function App() {
@@ -222,7 +228,6 @@ function App() {
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
 
   // ── Setup Wizard State ──
-  type WizardScreen = "connection" | "models" | "install-ollama" | "pulling" | null;
   const [wizardScreen, setWizardScreen] = useState<WizardScreen>(null);
   const [wizardIndex, setWizardIndex] = useState(0);
   const [wizardHardware, setWizardHardware] = useState<HardwareInfo | null>(null);
@@ -246,185 +251,27 @@ function App() {
 
   // Refresh the connection banner to reflect current provider status
   const refreshConnectionBanner = useCallback(async () => {
-    const info: string[] = [];
-    const cliArgs = parseCLIArgs();
-    const rawConfig = loadConfig();
-    const config = applyOverrides(rawConfig, cliArgs);
-    const provider = config.provider;
-
-    if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
-      const detected = await detectLocalProvider();
-      if (detected) {
-        info.push(`✔ Connected to ${detected.baseUrl} → ${detected.model}`);
-      } else {
-        const ollamaUp = await isOllamaRunning();
-        info.push(ollamaUp ? "Ollama running (no model loaded)" : "✗ No local LLM server found");
-      }
-    } else {
-      info.push(`Provider: ${provider.baseUrl}`);
-      info.push(`Model: ${provider.model}`);
-    }
-
-    const cwd = process.cwd();
-    if (isGitRepo(cwd)) {
-      const branch = getBranch(cwd);
-      const status = getStatus(cwd);
-      info.push(`Git: ${branch} (${status})`);
-    }
-
-    setConnectionInfo(info);
+    await refreshConnectionBannerImpl(setConnectionInfo);
   }, []);
 
   // Connect/reconnect to LLM provider
   const connectToProvider = useCallback(async (isRetry = false) => {
-    const cliArgs = parseCLIArgs();
-    const rawConfig = loadConfig();
-    const config = applyOverrides(rawConfig, cliArgs);
-    let provider = config.provider;
-    const info: string[] = [];
-
-    if (isRetry) {
-      info.push("Retrying connection...");
-      setConnectionInfo([...info]);
-    }
-
-    if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
-      info.push("Detecting local LLM server...");
-      setConnectionInfo([...info]);
-      const detection = await detectLocalProviderDetailed();
-      if (detection.status === "connected") {
-        // Keep CLI model override if specified
-        if (cliArgs.model) detection.provider.model = cliArgs.model;
-        provider = detection.provider;
-        info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
-        setConnectionInfo([...info]);
-      } else if (detection.status === "no-models") {
-        info.push(`⚠ ${detection.serverName} is running but has no models. Use /ollama pull to download one.`);
-        setConnectionInfo([...info]);
-        setReady(true);
-        return;
-      } else {
-        info.push("✗ No local LLM server found.");
-        setConnectionInfo([...info]);
-        setReady(true);
-        // Show the setup wizard on first run
-        setWizardScreen("connection");
-        setWizardIndex(0);
-        return;
-      }
-    } else {
-      info.push(`Provider: ${provider.baseUrl}`);
-      info.push(`Model: ${provider.model}`);
-      setConnectionInfo([...info]);
-    }
-
-    const cwd = process.cwd();
-
-    // Git info
-    if (isGitRepo(cwd)) {
-      const branch = getBranch(cwd);
-      const status = getStatus(cwd);
-      info.push(`Git: ${branch} (${status})`);
-      setConnectionInfo([...info]);
-    }
-
-    const a = new CodingAgent({
-      provider,
-      cwd,
-      maxTokens: config.defaults.maxTokens,
-      autoApprove: config.defaults.autoApprove,
-      onToken: (token) => {
-        // Switch from big spinner to streaming mode
-        setLoading(false);
-        setStreaming(true);
-
-        // Update the current streaming response in-place
-        setMessages((prev) => {
-          const lastIdx = prev.length - 1;
-          const last = prev[lastIdx];
-
-          if (last && last.type === "response" && (last as any)._streaming) {
-            return [
-              ...prev.slice(0, lastIdx),
-              { ...last, text: last.text + token },
-            ];
-          }
-
-          // First token of a new response
-          return [...prev, { id: msgId++, type: "response" as const, text: token, _streaming: true } as any];
-        });
-      },
-      onToolCall: (name, args) => {
-        setLoading(true);
-        setSpinnerMsg("Executing tools...");
-        const argStr = Object.entries(args)
-          .map(([k, v]) => {
-            const val = String(v);
-            return val.length > 60 ? val.slice(0, 60) + "..." : val;
-          })
-          .join(", ");
-        addMsg("tool", `${name}(${argStr})`);
-      },
-      onToolResult: (_name, result) => {
-        const numLines = result.split("\n").length;
-        const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-        addMsg("tool-result", `└ ${numLines} lines (${size})`);
-      },
-      onThinking: (text) => {
-        if (text.length > 0) {
-          addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
-        }
-      },
-      onGitCommit: (message) => {
-        addMsg("info", `📝 Auto-committed: ${message}`);
-      },
-      onContextCompressed: (oldTokens, newTokens) => {
-        const saved = oldTokens - newTokens;
-        const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
-        addMsg("info", `📦 Context compressed (~${savedStr} tokens freed)`);
-      },
-      onArchitectPlan: (plan) => {
-        addMsg("info", `🏗️ Architect Plan:\n${plan}`);
-      },
-      onLintResult: (file, errors) => {
-        addMsg("info", `🔍 Lint errors in ${file}:\n${errors}`);
-      },
-      onMCPStatus: (server, status) => {
-        addMsg("info", `🔌 MCP ${server}: ${status}`);
-      },
-      contextCompressionThreshold: config.defaults.contextCompressionThreshold,
-      onToolApproval: (name, args, diff) => {
-        return new Promise((resolve) => {
-          setApproval({ tool: name, args, diff, resolve });
-          setLoading(false);
-        });
-      },
+    await connectToProviderImpl(isRetry, {
+      setConnectionInfo,
+      setReady,
+      setAgent,
+      setModelName,
+      providerRef,
+      setLoading,
+      setStreaming,
+      setSpinnerMsg,
+      setMessages,
+      addMsg,
+      nextMsgId,
+      setApproval,
+      setWizardScreen,
+      setWizardIndex,
     });
-
-    // Initialize async context (repo map)
-    await a.init();
-
-    // Show project rules in banner
-    const rulesSource = a.getProjectRulesSource();
-    if (rulesSource) {
-      info.push(`📋 ${rulesSource} loaded`);
-      setConnectionInfo([...info]);
-    }
-
-    // Show MCP server count
-    const mcpCount = a.getMCPServerCount();
-    if (mcpCount > 0) {
-      info.push(`🔌 ${mcpCount} MCP server${mcpCount > 1 ? "s" : ""} connected`);
-      setConnectionInfo([...info]);
-    }
-
-    setAgent(a);
-    setModelName(provider.model);
-    providerRef.current = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
-    setReady(true);
-    if (isRetry) {
-      addMsg("info", `✅ Connected to ${provider.model}`);
-    }
   }, []);
 
   // Initialize agent on mount
@@ -433,7 +280,7 @@ function App() {
   }, []);
 
   function addMsg(type: ChatMessage["type"], text: string) {
-    setMessages((prev) => [...prev, { id: msgId++, type, text }]);
+    setMessages((prev) => [...prev, { id: nextMsgId(), type, text }]);
   }
 
   // Compute matching commands for suggestions
@@ -854,890 +701,100 @@ function App() {
   }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {
-    // Handle slash command navigation
-    if (showSuggestionsRef.current) {
-      const matches = cmdMatchesRef.current;
-      if (key.upArrow) {
-        setCmdIndex((prev) => (prev - 1 + matches.length) % matches.length);
-        return;
-      }
-      if (key.downArrow) {
-        setCmdIndex((prev) => (prev + 1) % matches.length);
-        return;
-      }
-      if (key.tab) {
-        const selected = matches[cmdIndexRef.current];
-        if (selected) {
-          setInput(selected.cmd + (selected.cmd === "/commit" ? " " : ""));
-          setCmdIndex(0);
-          setInputKey((k) => k + 1);
-        }
-        return;
-      }
-    }
-
-    // Login method picker navigation (second level — pick auth method)
-    if (loginMethodPicker) {
-      const methods = loginMethodPicker.methods;
-      if (key.upArrow) {
-        setLoginMethodIndex((prev: number) => (prev - 1 + methods.length) % methods.length);
-        return;
-      }
-      if (key.downArrow) {
-        setLoginMethodIndex((prev: number) => (prev + 1) % methods.length);
-        return;
-      }
-      if (key.escape) {
-        setLoginMethodPicker(null);
-        setLoginPicker(true); // go back to provider picker
-        return;
-      }
-      if (key.return) {
-        const method = methods[loginMethodIndex];
-        const providerId = loginMethodPicker.provider;
-        setLoginMethodPicker(null);
-
-        if (method === "oauth" && providerId === "openrouter") {
-          addMsg("info", "Starting OpenRouter OAuth — opening browser...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for authorization...");
-          openRouterOAuth((msg: string) => addMsg("info", msg))
-            .then(() => {
-              addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`);
-              setLoading(false);
-            })
-            .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
-        } else if (method === "setup-token") {
-          addMsg("info", "Starting setup-token flow — browser will open...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for Claude Code auth...");
-          anthropicSetupToken((msg: string) => addMsg("info", msg))
-            .then((cred) => { addMsg("info", `✅ Anthropic authenticated! (${cred.label})`); setLoading(false); })
-            .catch((err: any) => { addMsg("error", `Auth failed: ${err.message}`); setLoading(false); });
-        } else if (method === "cached-token" && providerId === "openai") {
-          const imported = importCodexToken((msg: string) => addMsg("info", msg));
-          if (imported) { addMsg("info", `✅ Imported Codex credentials! (${imported.label})`); }
-          else { addMsg("info", "No Codex CLI found. Install Codex CLI and sign in first."); }
-        } else if (method === "cached-token" && providerId === "qwen") {
-          const imported = importQwenToken((msg: string) => addMsg("info", msg));
-          if (imported) { addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`); }
-          else { addMsg("info", "No Qwen CLI found. Install Qwen CLI and sign in first."); }
-        } else if (method === "device-flow") {
-          addMsg("info", "Starting GitHub Copilot device flow...");
-          setLoading(true);
-          setSpinnerMsg("Waiting for GitHub authorization...");
-          copilotDeviceFlow((msg: string) => addMsg("info", msg))
-            .then(() => { addMsg("info", `✅ GitHub Copilot authenticated!`); setLoading(false); })
-            .catch((err: any) => { addMsg("error", `Copilot auth failed: ${err.message}`); setLoading(false); });
-        } else if (method === "api-key") {
-          const provider = PROVIDERS.find((p) => p.id === providerId);
-          addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${providerId} <your-key>\n  Get key at: ${provider?.consoleUrl ?? "your provider's dashboard"}`);
-        }
-        return;
-      }
-      return;
-    }
-
-    // Login picker navigation (first level — pick provider)
-    if (loginPicker) {
-      const loginProviders = PROVIDERS.filter((p) => p.id !== "local");
-      if (key.upArrow) {
-        setLoginPickerIndex((prev: number) => (prev - 1 + loginProviders.length) % loginProviders.length);
-        return;
-      }
-      if (key.downArrow) {
-        setLoginPickerIndex((prev: number) => (prev + 1) % loginProviders.length);
-        return;
-      }
-      if (key.return) {
-        const selected = loginProviders[loginPickerIndex];
-        setLoginPicker(false);
-
-        // Get available methods for this provider (filter out 'none')
-        const methods = selected.methods.filter((m) => m !== "none");
-
-        if (methods.length === 1) {
-          // Only one method — execute it directly
-          setLoginMethodPicker({ provider: selected.id, methods });
-          setLoginMethodIndex(0);
-          // Simulate Enter press on the single method
-          if (methods[0] === "oauth" && selected.id === "openrouter") {
-            setLoginMethodPicker(null);
-            addMsg("info", "Starting OpenRouter OAuth — opening browser...");
-            setLoading(true);
-            setSpinnerMsg("Waiting for authorization...");
-            openRouterOAuth((msg: string) => addMsg("info", msg))
-              .then(() => { addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`); setLoading(false); })
-              .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
-          } else if (methods[0] === "device-flow") {
-            setLoginMethodPicker(null);
-            addMsg("info", "Starting GitHub Copilot device flow...");
-            setLoading(true);
-            setSpinnerMsg("Waiting for GitHub authorization...");
-            copilotDeviceFlow((msg: string) => addMsg("info", msg))
-              .then(() => { addMsg("info", `✅ GitHub Copilot authenticated!`); setLoading(false); })
-              .catch((err: any) => { addMsg("error", `Copilot auth failed: ${err.message}`); setLoading(false); });
-          } else if (methods[0] === "api-key") {
-            setLoginMethodPicker(null);
-            addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${selected.id} <your-key>\n  Get key at: ${selected.consoleUrl ?? "your provider's dashboard"}`);
-          }
-        } else {
-          // Multiple methods — show submenu
-          setLoginMethodPicker({ provider: selected.id, methods });
-          setLoginMethodIndex(0);
-        }
-        return;
-      }
-      if (key.escape) {
-        setLoginPicker(false);
-        return;
-      }
-      return;
-    }
-
-    // Skills picker navigation
-    if (skillsPicker) {
-      if (skillsPicker === "menu") {
-        const menuItems = ["browse", "installed", "create", "remove"];
-        if (key.upArrow) {
-          setSkillsPickerIndex((prev) => (prev - 1 + menuItems.length) % menuItems.length);
-          return;
-        }
-        if (key.downArrow) {
-          setSkillsPickerIndex((prev) => (prev + 1) % menuItems.length);
-          return;
-        }
-        if (key.escape) {
-          setSkillsPicker(null);
-          return;
-        }
-        if (key.return) {
-          const selected = menuItems[skillsPickerIndex];
-          if (selected === "browse") {
-            setSkillsPicker("browse");
-            setSkillsPickerIndex(0);
-          } else if (selected === "installed") {
-            setSkillsPicker("installed");
-            setSkillsPickerIndex(0);
-          } else if (selected === "create") {
-            setSkillsPicker(null);
-            setInput("/skills create ");
-            setInputKey((k) => k + 1);
-          } else if (selected === "remove") {
-            const installed = listInstalledSkills();
-            if (installed.length === 0) {
-              setSkillsPicker(null);
-              addMsg("info", "No skills installed to remove.");
-            } else {
-              setSkillsPicker("remove");
-              setSkillsPickerIndex(0);
-            }
-          }
-          return;
-        }
-        return;
-      }
-      if (skillsPicker === "browse") {
-        const registry = getRegistrySkills();
-        if (key.upArrow) {
-          setSkillsPickerIndex((prev) => (prev - 1 + registry.length) % registry.length);
-          return;
-        }
-        if (key.downArrow) {
-          setSkillsPickerIndex((prev) => (prev + 1) % registry.length);
-          return;
-        }
-        if (key.escape) {
-          setSkillsPicker("menu");
-          setSkillsPickerIndex(0);
-          return;
-        }
-        if (key.return) {
-          const selected = registry[skillsPickerIndex];
-          if (selected) {
-            const result = installSkill(selected.name);
-            addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
-          }
-          setSkillsPicker(null);
-          return;
-        }
-        return;
-      }
-      if (skillsPicker === "installed") {
-        const installed = listInstalledSkills();
-        if (installed.length === 0) {
-          setSkillsPicker("menu");
-          setSkillsPickerIndex(0);
-          addMsg("info", "No skills installed.");
-          return;
-        }
-        if (key.upArrow) {
-          setSkillsPickerIndex((prev) => (prev - 1 + installed.length) % installed.length);
-          return;
-        }
-        if (key.downArrow) {
-          setSkillsPickerIndex((prev) => (prev + 1) % installed.length);
-          return;
-        }
-        if (key.escape) {
-          setSkillsPicker("menu");
-          setSkillsPickerIndex(0);
-          return;
-        }
-        if (key.return) {
-          // Toggle on/off for session
-          const selected = installed[skillsPickerIndex];
-          if (selected) {
-            const isDisabled = sessionDisabledSkills.has(selected.name);
-            if (isDisabled) {
-              setSessionDisabledSkills((prev) => { const next = new Set(prev); next.delete(selected.name); return next; });
-              if (agent) agent.enableSkill(selected.name);
-              addMsg("info", `✅ Enabled: ${selected.name}`);
-            } else {
-              setSessionDisabledSkills((prev) => { const next = new Set(prev); next.add(selected.name); return next; });
-              if (agent) agent.disableSkill(selected.name);
-              addMsg("info", `✅ Disabled: ${selected.name} (session only)`);
-            }
-          }
-          setSkillsPicker(null);
-          return;
-        }
-        return;
-      }
-      if (skillsPicker === "remove") {
-        const installed = listInstalledSkills();
-        if (installed.length === 0) {
-          setSkillsPicker(null);
-          return;
-        }
-        if (key.upArrow) {
-          setSkillsPickerIndex((prev) => (prev - 1 + installed.length) % installed.length);
-          return;
-        }
-        if (key.downArrow) {
-          setSkillsPickerIndex((prev) => (prev + 1) % installed.length);
-          return;
-        }
-        if (key.escape) {
-          setSkillsPicker("menu");
-          setSkillsPickerIndex(0);
-          return;
-        }
-        if (key.return) {
-          const selected = installed[skillsPickerIndex];
-          if (selected) {
-            const result = removeSkill(selected.name);
-            addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
-          }
-          setSkillsPicker(null);
-          return;
-        }
-        return;
-      }
-      return;
-    }
-
-    // ── Model picker ──
-    if (modelPicker) {
-      if (key.upArrow) {
-        setModelPickerIndex((prev) => (prev - 1 + modelPicker.length) % modelPicker.length);
-        return;
-      }
-      if (key.downArrow) {
-        setModelPickerIndex((prev) => (prev + 1) % modelPicker.length);
-        return;
-      }
-      if (key.escape) {
-        setModelPicker(null);
-        return;
-      }
-      if (key.return) {
-        const selected = modelPicker[modelPickerIndex];
-        if (selected && agent) {
-          agent.switchModel(selected);
-          setModelName(selected);
-          addMsg("info", `✅ Switched to: ${selected}`);
-          refreshConnectionBanner();
-        }
-        setModelPicker(null);
-        return;
-      }
-      return;
-    }
-
-    // ── Ollama delete picker ──
-    if (ollamaDeletePicker) {
-      if (key.upArrow) {
-        setOllamaDeletePickerIndex((prev) => (prev - 1 + ollamaDeletePicker.models.length) % ollamaDeletePicker.models.length);
-        return;
-      }
-      if (key.downArrow) {
-        setOllamaDeletePickerIndex((prev) => (prev + 1) % ollamaDeletePicker.models.length);
-        return;
-      }
-      if (key.escape) {
-        setOllamaDeletePicker(null);
-        return;
-      }
-      if (key.return) {
-        const selected = ollamaDeletePicker.models[ollamaDeletePickerIndex];
-        if (selected) {
-          setOllamaDeletePicker(null);
-          setOllamaDeleteConfirm({ model: selected.name, size: selected.size });
-        }
-        return;
-      }
-      return;
-    }
-
-    // ── Ollama pull picker ──
-    if (ollamaPullPicker) {
-      const pullModels = [
-        { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
-        { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
-        { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "\u26A0\uFE0F Basic \u2014 may struggle with tool calls" },
-        { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs 48GB+" },
-        { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
-        { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
-        { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Code completion focused" },
-      ];
-      if (key.upArrow) {
-        setOllamaPullPickerIndex((prev) => (prev - 1 + pullModels.length) % pullModels.length);
-        return;
-      }
-      if (key.downArrow) {
-        setOllamaPullPickerIndex((prev) => (prev + 1) % pullModels.length);
-        return;
-      }
-      if (key.escape) {
-        setOllamaPullPicker(false);
-        return;
-      }
-      if (key.return) {
-        const selected = pullModels[ollamaPullPickerIndex];
-        if (selected) {
-          setOllamaPullPicker(false);
-          // Trigger the pull
-          setInput(`/ollama pull ${selected.id}`);
-          setInputKey((k) => k + 1);
-          // Submit it
-          setTimeout(() => {
-            const submitInput = `/ollama pull ${selected.id}`;
-            setInput("");
-            handleSubmit(submitInput);
-          }, 50);
-        }
-        return;
-      }
-      return;
-    }
-
-    // ── Ollama delete confirmation ──
-    if (ollamaDeleteConfirm) {
-      if (inputChar === "y" || inputChar === "Y") {
-        const model = ollamaDeleteConfirm.model;
-        setOllamaDeleteConfirm(null);
-        const result = deleteModel(model);
-        addMsg(result.ok ? "info" : "error", result.ok ? `\u2705 ${result.message}` : `\u274C ${result.message}`);
-        return;
-      }
-      if (inputChar === "n" || inputChar === "N" || key.escape) {
-        setOllamaDeleteConfirm(null);
-        addMsg("info", "Delete cancelled.");
-        return;
-      }
-      return;
-    }
-
-    // ── Ollama exit prompt ──
-    if (ollamaExitPrompt) {
-      if (inputChar === "y" || inputChar === "Y") {
-        setOllamaExitPrompt(false);
-        stopOllama().then(() => exit());
-        return;
-      }
-      if (inputChar === "n" || inputChar === "N") {
-        setOllamaExitPrompt(false);
-        exit();
-        return;
-      }
-      if (inputChar === "a" || inputChar === "A") {
-        setOllamaExitPrompt(false);
-        saveConfig({ defaults: { ...loadConfig().defaults, stopOllamaOnExit: true } });
-        addMsg("info", "Saved preference: always stop Ollama on exit.");
-        stopOllama().then(() => exit());
-        return;
-      }
-      if (key.escape) {
-        setOllamaExitPrompt(false);
-        return;
-      }
-      return;
-    }
-
-    // ── Setup Wizard Navigation ──
-    if (wizardScreen) {
-      if (wizardScreen === "connection") {
-        const items = ["local", "openrouter", "apikey", "existing"];
-        if (key.upArrow) {
-          setWizardIndex((prev) => (prev - 1 + items.length) % items.length);
-          return;
-        }
-        if (key.downArrow) {
-          setWizardIndex((prev) => (prev + 1) % items.length);
-          return;
-        }
-        if (key.escape) {
-          setWizardScreen(null);
-          return;
-        }
-        if (key.return) {
-          const selected = items[wizardIndex];
-          if (selected === "local") {
-            // Scan hardware and show model picker (use llmfit if available)
-            const hw = detectHardware();
-            setWizardHardware(hw);
-            const { models: recs } = getRecommendationsWithLlmfit(hw);
-            setWizardModels(recs.filter(m => m.fit !== "skip"));
-            setWizardScreen("models");
-            setWizardIndex(0);
-          } else if (selected === "openrouter") {
-            setWizardScreen(null);
-            addMsg("info", "Starting OpenRouter OAuth — opening browser...");
-            setLoading(true);
-            setSpinnerMsg("Waiting for authorization...");
-            openRouterOAuth((msg: string) => addMsg("info", msg))
-              .then(() => {
-                addMsg("info", "✅ OpenRouter authenticated! Use /connect to connect.");
-                setLoading(false);
-              })
-              .catch((err: any) => { addMsg("error", `OAuth failed: ${err.message}`); setLoading(false); });
-          } else if (selected === "apikey") {
-            setWizardScreen(null);
-            setLoginPicker(true);
-            setLoginPickerIndex(0);
-          } else if (selected === "existing") {
-            setWizardScreen(null);
-            addMsg("info", "Start your LLM server, then type /connect to retry.");
-          }
-          return;
-        }
-        return;
-      }
-
-      if (wizardScreen === "models") {
-        const models = wizardModels;
-        if (key.upArrow) {
-          setWizardIndex((prev) => (prev - 1 + models.length) % models.length);
-          return;
-        }
-        if (key.downArrow) {
-          setWizardIndex((prev) => (prev + 1) % models.length);
-          return;
-        }
-        if (key.escape) {
-          setWizardScreen("connection");
-          setWizardIndex(0);
-          return;
-        }
-        if (key.return) {
-          const selected = models[wizardIndex];
-          if (selected) {
-            setWizardSelectedModel(selected);
-            // Check if Ollama is installed
-            if (!isOllamaInstalled()) {
-              setWizardScreen("install-ollama");
-            } else {
-              // Start pulling the model
-              setWizardScreen("pulling");
-              setWizardPullProgress({ status: "starting", percent: 0 });
-              setWizardPullError(null);
-
-              (async () => {
-                try {
-                  // Ensure ollama is running
-                  const running = await isOllamaRunning();
-                  if (!running) {
-                    setWizardPullProgress({ status: "Starting Ollama server...", percent: 0 });
-                    startOllama();
-                    // Wait for it to come up
-                    for (let i = 0; i < 15; i++) {
-                      await new Promise(r => setTimeout(r, 1000));
-                      if (await isOllamaRunning()) break;
-                    }
-                    if (!(await isOllamaRunning())) {
-                      setWizardPullError("Could not start Ollama server. Run 'ollama serve' manually, then press Enter.");
-                      return;
-                    }
-                  }
-
-                  await pullModel(selected.ollamaId, (p) => {
-                    setWizardPullProgress(p);
-                  });
-
-                  setWizardPullProgress({ status: "success", percent: 100 });
-
-                  // Wait briefly then connect
-                  await new Promise(r => setTimeout(r, 500));
-                  setWizardScreen(null);
-                  setWizardPullProgress(null);
-                  setWizardSelectedModel(null);
-                  addMsg("info", `✅ ${selected.name} installed! Connecting...`);
-                  await connectToProvider(true);
-                } catch (err: any) {
-                  setWizardPullError(err.message);
-                }
-              })();
-            }
-          }
-          return;
-        }
-        return;
-      }
-
-      if (wizardScreen === "install-ollama") {
-        if (key.escape) {
-          setWizardScreen("models");
-          setWizardIndex(0);
-          return;
-        }
-        if (key.return) {
-          // Auto-install Ollama if not present
-          if (!isOllamaInstalled()) {
-            setLoading(true);
-            setSpinnerMsg("Installing Ollama... this may take a minute");
-
-            // Run install async so the UI can update
-            const installCmd = getOllamaInstallCommand(wizardHardware?.os ?? "linux");
-            (async () => {
-              try {
-                const { exec } = _require("child_process");
-                await new Promise<void>((resolve, reject) => {
-                  exec(installCmd, { timeout: 180000 }, (err: any, _stdout: string, stderr: string) => {
-                    if (err) reject(new Error(stderr || err.message));
-                    else resolve();
-                  });
-                });
-                addMsg("info", "✅ Ollama installed! Proceeding to model download...");
-                setLoading(false);
-                // Small delay for PATH to update on Windows
-                await new Promise(r => setTimeout(r, 2000));
-                // Go back to models screen so user can pick and it'll proceed to pull
-                setWizardScreen("models");
-              } catch (e: any) {
-                addMsg("error", `Install failed: ${e.message}`);
-                addMsg("info", `Try manually in a separate terminal: ${installCmd}`);
-                setLoading(false);
-                setWizardScreen("install-ollama");
-              }
-            })();
-            return;
-          }
-          // Ollama already installed — proceed to pull
-          {
-            const selected = wizardSelectedModel;
-            if (selected) {
-              setWizardScreen("pulling");
-              setWizardPullProgress({ status: "starting", percent: 0 });
-              setWizardPullError(null);
-
-              (async () => {
-                try {
-                  const running = await isOllamaRunning();
-                  if (!running) {
-                    setWizardPullProgress({ status: "Starting Ollama server...", percent: 0 });
-                    startOllama();
-                    for (let i = 0; i < 15; i++) {
-                      await new Promise(r => setTimeout(r, 1000));
-                      if (await isOllamaRunning()) break;
-                    }
-                    if (!(await isOllamaRunning())) {
-                      setWizardPullError("Could not start Ollama server. Run 'ollama serve' manually, then press Enter.");
-                      return;
-                    }
-                  }
-                  await pullModel(selected.ollamaId, (p) => setWizardPullProgress(p));
-                  setWizardPullProgress({ status: "success", percent: 100 });
-                  await new Promise(r => setTimeout(r, 500));
-                  setWizardScreen(null);
-                  setWizardPullProgress(null);
-                  setWizardSelectedModel(null);
-                  addMsg("info", `✅ ${selected.name} installed! Connecting...`);
-                  await connectToProvider(true);
-                } catch (err: any) {
-                  setWizardPullError(err.message);
-                }
-              })();
-            }
-          }
-          return;
-        }
-        return;
-      }
-
-      if (wizardScreen === "pulling") {
-        // Allow retry on error
-        if (wizardPullError && key.return) {
-          const selected = wizardSelectedModel;
-          if (selected) {
-            setWizardPullError(null);
-            setWizardPullProgress({ status: "retrying", percent: 0 });
-            (async () => {
-              try {
-                const running = await isOllamaRunning();
-                if (!running) {
-                  startOllama();
-                  for (let i = 0; i < 15; i++) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    if (await isOllamaRunning()) break;
-                  }
-                }
-                await pullModel(selected.ollamaId, (p) => setWizardPullProgress(p));
-                setWizardPullProgress({ status: "success", percent: 100 });
-                await new Promise(r => setTimeout(r, 500));
-                setWizardScreen(null);
-                setWizardPullProgress(null);
-                setWizardSelectedModel(null);
-                addMsg("info", `✅ ${selected.name} installed! Connecting...`);
-                await connectToProvider(true);
-              } catch (err: any) {
-                setWizardPullError(err.message);
-              }
-            })();
-          }
-          return;
-        }
-        if (wizardPullError && key.escape) {
-          setWizardScreen("models");
-          setWizardIndex(0);
-          setWizardPullError(null);
-          setWizardPullProgress(null);
-          return;
-        }
-        return; // Ignore keys while pulling
-      }
-
-      return;
-    }
-
-    // Theme picker navigation
-    if (themePicker) {
-      const themeKeys = listThemes();
-      if (key.upArrow) {
-        setThemePickerIndex((prev) => (prev - 1 + themeKeys.length) % themeKeys.length);
-        return;
-      }
-      if (key.downArrow) {
-        setThemePickerIndex((prev) => (prev + 1) % themeKeys.length);
-        return;
-      }
-      if (key.return) {
-        const selected = themeKeys[themePickerIndex];
-        setTheme(getTheme(selected));
-        setThemePicker(false);
-        addMsg("info", `✅ Switched to theme: ${THEMES[selected].name}`);
-        return;
-      }
-      if (key.escape) {
-        setThemePicker(false);
-        return;
-      }
-      return;
-    }
-
-    // Session picker navigation
-    if (sessionPicker) {
-      if (key.upArrow) {
-        setSessionPickerIndex((prev) => (prev - 1 + sessionPicker.length) % sessionPicker.length);
-        return;
-      }
-      if (key.downArrow) {
-        setSessionPickerIndex((prev) => (prev + 1) % sessionPicker.length);
-        return;
-      }
-      if (key.return) {
-        const selected = sessionPicker[sessionPickerIndex];
-        if (selected && agent) {
-          const session = getSession(selected.id);
-          if (session) {
-            agent.resume(selected.id).then(() => {
-              const dir = session.cwd.split("/").pop() || session.cwd;
-              // Find last user message for context
-              const msgs = loadMessages(selected.id);
-              const lastUserMsg = [...msgs].reverse().find(m => m.role === "user");
-              const lastText = lastUserMsg && typeof lastUserMsg.content === "string"
-                ? lastUserMsg.content.slice(0, 80) + (lastUserMsg.content.length > 80 ? "..." : "")
-                : null;
-              let info = `✅ Resumed session ${selected.id} (${dir}/, ${session.message_count} messages)`;
-              if (lastText) info += `\n  Last: "${lastText}"`;
-              addMsg("info", info);
-            }).catch((e: any) => {
-              addMsg("error", `Failed to resume: ${e.message}`);
-            });
-          }
-        }
-        setSessionPicker(null);
-        setSessionPickerIndex(0);
-        return;
-      }
-      if (key.escape) {
-        setSessionPicker(null);
-        setSessionPickerIndex(0);
-        addMsg("info", "Resume cancelled.");
-        return;
-      }
-      return; // Ignore other keys during session picker
-    }
-
-    // Delete session confirmation (y/n)
-    if (deleteSessionConfirm) {
-      if (inputChar === "y" || inputChar === "Y") {
-        const deleted = deleteSession(deleteSessionConfirm.id);
-        if (deleted) {
-          addMsg("info", `✅ Deleted session ${deleteSessionConfirm.id}`);
-        } else {
-          addMsg("error", `Failed to delete session ${deleteSessionConfirm.id}`);
-        }
-        setDeleteSessionConfirm(null);
-        return;
-      }
-      if (inputChar === "n" || inputChar === "N" || key.escape) {
-        addMsg("info", "Delete cancelled.");
-        setDeleteSessionConfirm(null);
-        return;
-      }
-      return;
-    }
-
-    // Delete session picker navigation
-    if (deleteSessionPicker) {
-      if (key.upArrow) {
-        setDeleteSessionPickerIndex((prev) => (prev - 1 + deleteSessionPicker.length) % deleteSessionPicker.length);
-        return;
-      }
-      if (key.downArrow) {
-        setDeleteSessionPickerIndex((prev) => (prev + 1) % deleteSessionPicker.length);
-        return;
-      }
-      if (key.return) {
-        const selected = deleteSessionPicker[deleteSessionPickerIndex];
-        if (selected) {
-          setDeleteSessionPicker(null);
-          setDeleteSessionPickerIndex(0);
-          setDeleteSessionConfirm(selected);
-        }
-        return;
-      }
-      if (key.escape) {
-        setDeleteSessionPicker(null);
-        setDeleteSessionPickerIndex(0);
-        addMsg("info", "Delete cancelled.");
-        return;
-      }
-      return;
-    }
-
-    // Backspace with empty input → remove last paste chunk
-    if (key.backspace || key.delete) {
-      if (input === "" && pastedChunksRef.current.length > 0) {
-        setPastedChunks((prev) => prev.slice(0, -1));
-        return;
-      }
-    }
-
-    // Handle approval prompts
-    if (approval) {
-      if (inputChar === "y" || inputChar === "Y") {
-        const r = approval.resolve;
-        setApproval(null);
-        setLoading(true);
-        setSpinnerMsg("Executing...");
-        r("yes");
-        return;
-      }
-      if (inputChar === "n" || inputChar === "N") {
-        const r = approval.resolve;
-        setApproval(null);
-        addMsg("info", "✗ Denied");
-        r("no");
-        return;
-      }
-      if (inputChar === "a" || inputChar === "A") {
-        const r = approval.resolve;
-        setApproval(null);
-        setLoading(true);
-        setSpinnerMsg("Executing...");
-        addMsg("info", `✔ Always allow ${approval.tool} for this session`);
-        r("always");
-        return;
-      }
-      return; // Ignore other keys during approval
-    }
-
-    if (key.ctrl && inputChar === "c") {
-      if (ctrlCPressed) {
-        // Force quit on second Ctrl+C — don't block
-        const config = loadConfig();
-        if (config.defaults.stopOllamaOnExit) {
-          stopOllama().finally(() => exit());
-        } else {
-          exit();
-        }
-      } else {
-        setCtrlCPressed(true);
-        addMsg("info", "Press Ctrl+C again to exit.");
-        setTimeout(() => setCtrlCPressed(false), 3000);
-      }
-    }
+    routeKeyPress(inputChar, key, {
+      showSuggestionsRef,
+      cmdMatchesRef,
+      cmdIndexRef,
+      setCmdIndex,
+      setInput,
+      setInputKey,
+      loginMethodPicker,
+      loginMethodIndex,
+      setLoginMethodIndex,
+      setLoginMethodPicker,
+      loginPicker,
+      loginPickerIndex,
+      setLoginPickerIndex,
+      setLoginPicker,
+      skillsPicker,
+      skillsPickerIndex,
+      setSkillsPickerIndex,
+      setSkillsPicker,
+      sessionDisabledSkills,
+      setSessionDisabledSkills,
+      modelPicker,
+      modelPickerIndex,
+      setModelPickerIndex,
+      setModelPicker,
+      ollamaDeletePicker,
+      ollamaDeletePickerIndex,
+      setOllamaDeletePickerIndex,
+      setOllamaDeletePicker,
+      ollamaPullPicker,
+      ollamaPullPickerIndex,
+      setOllamaPullPickerIndex,
+      setOllamaPullPicker,
+      ollamaDeleteConfirm,
+      setOllamaDeleteConfirm,
+      ollamaExitPrompt,
+      setOllamaExitPrompt,
+      wizardScreen,
+      wizardIndex,
+      wizardModels,
+      wizardHardware,
+      wizardPullProgress,
+      wizardPullError,
+      wizardSelectedModel,
+      setWizardScreen,
+      setWizardIndex,
+      setWizardHardware,
+      setWizardModels,
+      setWizardPullProgress,
+      setWizardPullError,
+      setWizardSelectedModel,
+      themePicker,
+      themePickerIndex,
+      setThemePickerIndex,
+      setThemePicker,
+      setTheme,
+      sessionPicker,
+      sessionPickerIndex,
+      setSessionPickerIndex,
+      setSessionPicker,
+      deleteSessionConfirm,
+      setDeleteSessionConfirm,
+      deleteSessionPicker,
+      deleteSessionPickerIndex,
+      setDeleteSessionPickerIndex,
+      setDeleteSessionPicker,
+      input,
+      pastedChunksRef,
+      setPastedChunks,
+      approval,
+      setApproval,
+      ctrlCPressed,
+      setCtrlCPressed,
+      setLoading,
+      setSpinnerMsg,
+      agent,
+      setModelName,
+      addMsg,
+      exit,
+      refreshConnectionBanner,
+      connectToProvider,
+      handleSubmit,
+      _require,
+    });
   });
-
-  // CODE banner lines
-  const codeLines = [
-    "                     _(`-')    (`-')  _ ",
-    " _             .->  ( (OO ).-> ( OO).-/ ",
-    " \\-,-----.(`-')----. \\    .'_ (,------. ",
-    "  |  .--./( OO).-.  ''`'-..__) |  .---' ",
-    " /_) (`-')( _) | |  ||  |  ' |(|  '--.  ",
-    " ||  |OO ) \\|  |)|  ||  |  / : |  .--'  ",
-    "(_'  '--'\\  '  '-'  '|  '-'  / |  `---. ",
-    "   `-----'   `-----' `------'  `------' ",
-  ];
-  const maxxingLines = [
-    "<-. (`-')   (`-')  _  (`-')      (`-')      _     <-. (`-')_            ",
-    "   \\(OO )_  (OO ).-/  (OO )_.->  (OO )_.-> (_)       \\( OO) )    .->    ",
-    ",--./  ,-.) / ,---.   (_| \\_)--. (_| \\_)--.,-(`-'),--./ ,--/  ,---(`-') ",
-    "|   `.'   | | \\ /`.\\  \\  `.'  /  \\  `.'  / | ( OO)|   \\ |  | '  .-(OO ) ",
-    "|  |'.'|  | '-'|_.' |  \\    .')   \\    .') |  |  )|  . '|  |)|  | .-, \\ ",
-    "|  |   |  |(|  .-.  |  .'    \\    .'    \\ (|  |_/ |  |\\    | |  | '.(_/ ",
-    "|  |   |  | |  | |  | /  .'.  \\  /  .'.  \\ |  |'->|  | \\   | |  '-'  |  ",
-    "`--'   `--' `--' `--'`--'   '--'`--'   '--'`--'   `--'  `--'  `-----'   ",
-  ];
 
   return (
     <Box flexDirection="column">
       {/* ═══ BANNER BOX ═══ */}
-      <Box flexDirection="column" borderStyle="round" borderColor={theme.colors.border} paddingX={1}>
-        {codeLines.map((line, i) => (
-          <Text key={`c${i}`} color={theme.colors.primary}>{line}</Text>
-        ))}
-        {maxxingLines.map((line, i) => (
-          <Text key={`m${i}`} color={theme.colors.secondary}>{line}</Text>
-        ))}
-        <Text>
-          <Text color={theme.colors.muted}>{"                            v" + VERSION}</Text>
-          {"  "}<Text color={theme.colors.primary}>💪</Text>
-          {"  "}<Text dimColor>your code. your model. no excuses.</Text>
-        </Text>
-        <Text dimColor>{"  Type "}<Text color={theme.colors.muted}>/help</Text>{" for commands · "}<Text color={theme.colors.muted}>Ctrl+C</Text>{" twice to exit"}</Text>
-      </Box>
+      <Banner version={VERSION} colors={theme.colors} />
 
       {/* ═══ CONNECTION INFO BOX ═══ */}
       {connectionInfo.length > 0 && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.muted} paddingX={1} marginBottom={1}>
-          {connectionInfo.map((line, i) => (
-            <Text key={i} color={line.startsWith("✔") ? theme.colors.primary : line.startsWith("✗") ? theme.colors.error : theme.colors.muted}>{line}</Text>
-          ))}
-        </Box>
+        <ConnectionInfo connectionInfo={connectionInfo} colors={theme.colors} />
       )}
 
       {/* ═══ CHAT MESSAGES ═══ */}
@@ -1786,422 +843,100 @@ function App() {
 
       {/* ═══ APPROVAL PROMPT ═══ */}
       {approval && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginTop={1}>
-          <Text bold color={theme.colors.warning}>⚠ Approve {approval.tool}?</Text>
-          {approval.tool === "write_file" && approval.args.path ? (
-            <Text color={theme.colors.muted}>{"  📄 "}{String(approval.args.path)}</Text>
-          ) : null}
-          {approval.tool === "write_file" && approval.args.content ? (
-            <Text color={theme.colors.muted}>{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
-          ) : null}
-          {approval.diff ? (
-            <Box flexDirection="column" marginTop={0} marginLeft={2}>
-              {approval.diff.split("\n").slice(0, 40).map((line, i) => (
-                <Text key={i} color={
-                  line.startsWith("+") ? theme.colors.success :
-                  line.startsWith("-") ? theme.colors.error :
-                  line.startsWith("@@") ? theme.colors.primary :
-                  theme.colors.muted
-                }>{line}</Text>
-              ))}
-              {approval.diff.split("\n").length > 40 ? (
-                <Text color={theme.colors.muted}>... ({approval.diff.split("\n").length - 40} more lines)</Text>
-              ) : null}
-            </Box>
-          ) : null}
-          {approval.tool === "run_command" && approval.args.command ? (
-            <Text color={theme.colors.muted}>{"  $ "}{String(approval.args.command)}</Text>
-          ) : null}
-          <Text>
-            <Text color={theme.colors.success} bold> [y]</Text><Text>es  </Text>
-            <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
-            <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
-          </Text>
-        </Box>
+        <ApprovalPrompt approval={approval} colors={theme.colors} />
       )}
 
       {/* ═══ LOGIN PICKER ═══ */}
       {loginPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>💪 Choose a provider:</Text>
-          {PROVIDERS.filter((p) => p.id !== "local").map((p, i) => (
-            <Text key={p.id}>
-              {i === loginPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === loginPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{p.name}</Text>
-              <Text color={theme.colors.muted}>{" — "}{p.description}</Text>
-              {getCredentials().some((c) => c.provider === p.id) ? <Text color={theme.colors.success}> ✓</Text> : null}
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
-        </Box>
+        <LoginPicker loginPickerIndex={loginPickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ LOGIN METHOD PICKER ═══ */}
       {loginMethodPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>How do you want to authenticate?</Text>
-          {loginMethodPicker.methods.map((method, i) => {
-            const labels: Record<string, string> = {
-              "oauth": "🌐 Browser login (OAuth)",
-              "setup-token": "🔑 Link subscription (via Claude Code CLI)",
-              "cached-token": "📦 Import from existing CLI",
-              "api-key": "🔒 Enter API key manually",
-              "device-flow": "📱 Device flow (GitHub)",
-            };
-            return (
-              <Text key={method}>
-                {i === loginMethodIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-                <Text color={i === loginMethodIndex ? theme.colors.suggestion : theme.colors.primary} bold>{labels[method] ?? method}</Text>
-              </Text>
-            );
-          })}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc back"}</Text>
-        </Box>
+        <LoginMethodPickerUI loginMethodPicker={loginMethodPicker} loginMethodIndex={loginMethodIndex} colors={theme.colors} />
       )}
 
       {/* ═══ SKILLS PICKER ═══ */}
       {skillsPicker === "menu" && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Skills:</Text>
-          {[
-            { key: "browse", label: "Browse & Install", icon: "📦" },
-            { key: "installed", label: "Installed Skills", icon: "📋" },
-            { key: "create", label: "Create Custom Skill", icon: "➕" },
-            { key: "remove", label: "Remove Skill", icon: "🗑️" },
-          ].map((item, i) => (
-            <Text key={item.key}>
-              {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{item.icon} {item.label}</Text>
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
-        </Box>
+        <SkillsMenu skillsPickerIndex={skillsPickerIndex} colors={theme.colors} />
       )}
-      {skillsPicker === "browse" && (() => {
-        const registry = getRegistrySkills();
-        const installed = listInstalledSkills().map((s) => s.name);
-        return (
-          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-            <Text bold color={theme.colors.secondary}>Browse Skills Registry:</Text>
-            {registry.map((s, i) => (
-              <Text key={s.name}>
-                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{s.name}</Text>
-                <Text color={theme.colors.muted}>{" — "}{s.description}</Text>
-                {installed.includes(s.name) ? <Text color={theme.colors.success}> ✓</Text> : null}
-              </Text>
-            ))}
-            <Text dimColor>{"  ↑↓ navigate · Enter install · Esc back"}</Text>
-          </Box>
-        );
-      })()}
-      {skillsPicker === "installed" && (() => {
-        const installed = listInstalledSkills();
-        const active = getActiveSkills(process.cwd(), sessionDisabledSkills);
-        return (
-          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-            <Text bold color={theme.colors.secondary}>Installed Skills:</Text>
-            {installed.length === 0 ? (
-              <Text color={theme.colors.muted}>  No skills installed. Use Browse & Install.</Text>
-            ) : installed.map((s, i) => (
-              <Text key={s.name}>
-                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{s.name}</Text>
-                <Text color={theme.colors.muted}>{" — "}{s.description}</Text>
-                {active.includes(s.name) ? <Text color={theme.colors.success}> (on)</Text> : <Text color={theme.colors.muted}> (off)</Text>}
-              </Text>
-            ))}
-            <Text dimColor>{"  ↑↓ navigate · Enter toggle · Esc back"}</Text>
-          </Box>
-        );
-      })()}
-      {skillsPicker === "remove" && (() => {
-        const installed = listInstalledSkills();
-        return (
-          <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.error} paddingX={1} marginBottom={0}>
-            <Text bold color={theme.colors.error}>Remove a skill:</Text>
-            {installed.map((s, i) => (
-              <Text key={s.name}>
-                {i === skillsPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-                <Text color={i === skillsPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.name} — {s.description}</Text>
-              </Text>
-            ))}
-            <Text dimColor>{"  ↑↓ navigate · Enter remove · Esc back"}</Text>
-          </Box>
-        );
-      })()}
+      {skillsPicker === "browse" && (
+        <SkillsBrowse skillsPickerIndex={skillsPickerIndex} colors={theme.colors} />
+      )}
+      {skillsPicker === "installed" && (
+        <SkillsInstalled skillsPickerIndex={skillsPickerIndex} sessionDisabledSkills={sessionDisabledSkills} colors={theme.colors} />
+      )}
+      {skillsPicker === "remove" && (
+        <SkillsRemove skillsPickerIndex={skillsPickerIndex} colors={theme.colors} />
+      )}
 
       {/* ═══ THEME PICKER ═══ */}
       {themePicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Choose a theme:</Text>
-          {listThemes().map((key, i) => (
-            <Text key={key}>
-              {i === themePickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === themePickerIndex ? theme.colors.suggestion : theme.colors.primary} bold>{key}</Text>
-              <Text color={theme.colors.muted}>{" — "}{THEMES[key].description}</Text>
-              {key === theme.name.toLowerCase() ? <Text color={theme.colors.muted}> (current)</Text> : null}
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
-        </Box>
+        <ThemePickerUI themePickerIndex={themePickerIndex} theme={theme} />
       )}
 
       {/* ═══ SESSION PICKER ═══ */}
       {sessionPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.secondary} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Resume a session:</Text>
-          {sessionPicker.map((s, i) => (
-            <Text key={s.id}>
-              {i === sessionPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === sessionPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.display}</Text>
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
-        </Box>
+        <SessionPicker sessions={sessionPicker} selectedIndex={sessionPickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ DELETE SESSION PICKER ═══ */}
       {deleteSessionPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.error} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.error}>Delete a session:</Text>
-          {deleteSessionPicker.map((s, i) => (
-            <Text key={s.id}>
-              {i === deleteSessionPickerIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === deleteSessionPickerIndex ? theme.colors.suggestion : theme.colors.muted}>{s.display}</Text>
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
-        </Box>
+        <DeleteSessionPicker sessions={deleteSessionPicker} selectedIndex={deleteSessionPickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ DELETE SESSION CONFIRM ═══ */}
       {deleteSessionConfirm && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.warning}>Delete session {deleteSessionConfirm.id}?</Text>
-          <Text color={theme.colors.muted}>{"  "}{deleteSessionConfirm.display}</Text>
-          <Text>
-            <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
-            <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
-          </Text>
-        </Box>
+        <DeleteSessionConfirm session={deleteSessionConfirm} colors={theme.colors} />
       )}
 
       {/* ═══ MODEL PICKER ═══ */}
       {modelPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Switch model:</Text>
-          <Text>{""}</Text>
-          {modelPicker.map((m, i) => (
-            <Text key={m}>
-              {"  "}{i === modelPickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
-              <Text color={i === modelPickerIndex ? theme.colors.primary : undefined}>{m}</Text>
-              {m === modelName ? <Text color={theme.colors.success}>{" (active)"}</Text> : null}
-            </Text>
-          ))}
-          <Text>{""}</Text>
-          <Text dimColor>{"  ↑↓ navigate · Enter to switch · Esc cancel"}</Text>
-        </Box>
+        <ModelPicker models={modelPicker} selectedIndex={modelPickerIndex} activeModel={modelName} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA DELETE PICKER ═══ */}
       {ollamaDeletePicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Delete which model?</Text>
-          <Text>{""}</Text>
-          {ollamaDeletePicker.models.map((m, i) => (
-            <Text key={m.name}>
-              {"  "}{i === ollamaDeletePickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
-              <Text color={i === ollamaDeletePickerIndex ? theme.colors.primary : undefined}>{m.name}</Text>
-              <Text color={theme.colors.muted}>{" ("}{(m.size / (1024 * 1024 * 1024)).toFixed(1)}{" GB)"}</Text>
-            </Text>
-          ))}
-          <Text>{""}</Text>
-          <Text dimColor>{"  ↑↓ navigate · Enter to delete · Esc cancel"}</Text>
-        </Box>
+        <OllamaDeletePicker models={ollamaDeletePicker.models} selectedIndex={ollamaDeletePickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA PULL PICKER ═══ */}
       {ollamaPullPicker && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Download which model?</Text>
-          <Text>{""}</Text>
-          {[
-            { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
-            { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
-            { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "\u26A0\uFE0F Basic \u2014 may struggle with tool calls" },
-            { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium, needs 48GB+" },
-            { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
-            { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
-            { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Code completion focused" },
-          ].map((m, i) => (
-            <Text key={m.id}>
-              {"  "}{i === ollamaPullPickerIndex ? <Text color={theme.colors.primary} bold>{"▸ "}</Text> : "  "}
-              <Text color={i === ollamaPullPickerIndex ? theme.colors.primary : undefined} bold>{m.name}</Text>
-              <Text color={theme.colors.muted}>{" · "}{m.size}{" · "}{m.desc}</Text>
-            </Text>
-          ))}
-          <Text>{""}</Text>
-          <Text dimColor>{"  ↑↓ navigate · Enter to download · Esc cancel"}</Text>
-        </Box>
+        <OllamaPullPicker selectedIndex={ollamaPullPickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA DELETE CONFIRM ═══ */}
       {ollamaDeleteConfirm && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.warning}>Delete {ollamaDeleteConfirm.model} ({(ollamaDeleteConfirm.size / (1024 * 1024 * 1024)).toFixed(1)} GB)?</Text>
-          <Text>
-            <Text color={theme.colors.error} bold> [y]</Text><Text>es  </Text>
-            <Text color={theme.colors.success} bold>[n]</Text><Text>o</Text>
-          </Text>
-        </Box>
+        <OllamaDeleteConfirm model={ollamaDeleteConfirm.model} size={ollamaDeleteConfirm.size} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA PULL PROGRESS ═══ */}
       {ollamaPulling && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>{"  Downloading "}{ollamaPulling.model}{"..."}</Text>
-          {ollamaPulling.progress.status === "downloading" || ollamaPulling.progress.percent > 0 ? (
-            <Text>
-              {"  "}
-              <Text color={theme.colors.primary}>
-                {"\u2588".repeat(Math.floor(ollamaPulling.progress.percent / 5))}
-                {"\u2591".repeat(20 - Math.floor(ollamaPulling.progress.percent / 5))}
-              </Text>
-              {"  "}<Text bold>{ollamaPulling.progress.percent}%</Text>
-              {ollamaPulling.progress.completed != null && ollamaPulling.progress.total != null ? (
-                <Text color={theme.colors.muted}>{" \u00B7 "}{formatBytes(ollamaPulling.progress.completed)}{" / "}{formatBytes(ollamaPulling.progress.total)}</Text>
-              ) : null}
-            </Text>
-          ) : (
-            <Text color={theme.colors.muted}>{"  "}{ollamaPulling.progress.status}...</Text>
-          )}
-        </Box>
+        <OllamaPullProgress model={ollamaPulling.model} progress={ollamaPulling.progress} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA EXIT PROMPT ═══ */}
       {ollamaExitPrompt && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.warning}>Ollama is still running.</Text>
-          <Text color={theme.colors.muted}>Stop it to free GPU memory?</Text>
-          <Text>
-            <Text color={theme.colors.success} bold> [y]</Text><Text>es  </Text>
-            <Text color={theme.colors.error} bold>[n]</Text><Text>o  </Text>
-            <Text color={theme.colors.primary} bold>[a]</Text><Text>lways</Text>
-          </Text>
-        </Box>
+        <OllamaExitPrompt colors={theme.colors} />
       )}
 
       {/* ═══ SETUP WIZARD ═══ */}
       {wizardScreen === "connection" && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>No LLM detected. How do you want to connect?</Text>
-          <Text>{""}</Text>
-          {[
-            { key: "local",      icon: "\uD83D\uDDA5\uFE0F",  label: "Set up a local model", desc: "free, runs on your machine" },
-            { key: "openrouter", icon: "\uD83C\uDF10", label: "OpenRouter", desc: "200+ cloud models, browser login" },
-            { key: "apikey",     icon: "\uD83D\uDD11", label: "Enter API key manually", desc: "" },
-            { key: "existing",   icon: "\u2699\uFE0F",  label: "I already have a server running", desc: "" },
-          ].map((item, i) => (
-            <Text key={item.key}>
-              {i === wizardIndex ? <Text color={theme.colors.suggestion} bold>{"  \u25B8 "}</Text> : <Text>{"    "}</Text>}
-              <Text color={i === wizardIndex ? theme.colors.suggestion : theme.colors.primary} bold>{item.icon}  {item.label}</Text>
-              {item.desc ? <Text color={theme.colors.muted}>{" ("}{item.desc}{")"}</Text> : null}
-            </Text>
-          ))}
-          <Text>{""}</Text>
-          <Text dimColor>{"  \u2191\u2193 navigate \u00B7 Enter to select"}</Text>
-        </Box>
+        <WizardConnection wizardIndex={wizardIndex} colors={theme.colors} />
       )}
-
       {wizardScreen === "models" && wizardHardware && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.secondary}>Your hardware:</Text>
-          <Text color={theme.colors.muted}>{"  CPU: "}{wizardHardware.cpu.name}{" ("}{wizardHardware.cpu.cores}{" cores)"}</Text>
-          <Text color={theme.colors.muted}>{"  RAM: "}{formatBytes(wizardHardware.ram)}</Text>
-          {wizardHardware.gpu ? (
-            <Text color={theme.colors.muted}>{"  GPU: "}{wizardHardware.gpu.name}{wizardHardware.gpu.vram > 0 ? ` (${formatBytes(wizardHardware.gpu.vram)})` : ""}</Text>
-          ) : (
-            <Text color={theme.colors.muted}>{"  GPU: none detected"}</Text>
-          )}
-          {!isLlmfitAvailable() && (
-            <Text dimColor>{"  Tip: Install llmfit for smarter recommendations: brew install llmfit"}</Text>
-          )}
-          <Text>{""}</Text>
-          <Text bold color={theme.colors.secondary}>Recommended models:</Text>
-          <Text>{""}</Text>
-          {wizardModels.map((m, i) => (
-            <Text key={m.ollamaId}>
-              {i === wizardIndex ? <Text color={theme.colors.suggestion} bold>{"  \u25B8 "}</Text> : <Text>{"    "}</Text>}
-              <Text>{getFitIcon(m.fit)} </Text>
-              <Text color={i === wizardIndex ? theme.colors.suggestion : theme.colors.primary} bold>{m.name}</Text>
-              <Text color={theme.colors.muted}>{"     ~"}{m.size}{" GB \u00B7 "}{m.quality === "best" ? "Best" : m.quality === "great" ? "Great" : "Good"}{" quality \u00B7 "}{m.speed}</Text>
-            </Text>
-          ))}
-          {wizardModels.length === 0 && (
-            <Text color={theme.colors.error}>{"  No suitable models found for your hardware."}</Text>
-          )}
-          <Text>{""}</Text>
-          <Text dimColor>{"  \u2191\u2193 navigate \u00B7 Enter to install \u00B7 Esc back"}</Text>
-        </Box>
+        <WizardModels wizardIndex={wizardIndex} wizardHardware={wizardHardware} wizardModels={wizardModels} colors={theme.colors} />
       )}
-
       {wizardScreen === "install-ollama" && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.warning} paddingX={1} marginBottom={0}>
-          <Text bold color={theme.colors.warning}>Ollama is required for local models.</Text>
-          <Text>{""}</Text>
-          <Text color={theme.colors.primary}>{"  Press Enter to install Ollama automatically"}</Text>
-          <Text dimColor>{"  Or install manually: "}<Text>{getOllamaInstallCommand(wizardHardware?.os ?? "linux")}</Text></Text>
-          <Text>{""}</Text>
-          <Text dimColor>{"  Enter to install · Esc to go back"}</Text>
-        </Box>
+        <WizardInstallOllama wizardHardware={wizardHardware} colors={theme.colors} />
       )}
-
       {wizardScreen === "pulling" && (wizardSelectedModel || wizardPullProgress) && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.border} paddingX={1} marginBottom={0}>
-          {wizardPullError ? (
-            <>
-              <Text color={theme.colors.error} bold>{"  \u274C Error: "}{wizardPullError}</Text>
-              <Text>{""}</Text>
-              <Text dimColor>{"  Press Enter to retry \u00B7 Esc to go back"}</Text>
-            </>
-          ) : wizardPullProgress ? (
-            <>
-              <Text bold color={theme.colors.secondary}>{"  "}{wizardSelectedModel ? `Downloading ${wizardSelectedModel.name}...` : wizardPullProgress?.status || "Working..."}</Text>
-              {wizardPullProgress.status === "downloading" || wizardPullProgress.percent > 0 ? (
-                <>
-                  <Text>
-                    {"  "}
-                    <Text color={theme.colors.primary}>
-                      {"\u2588".repeat(Math.floor(wizardPullProgress.percent / 5))}
-                      {"\u2591".repeat(20 - Math.floor(wizardPullProgress.percent / 5))}
-                    </Text>
-                    {"  "}<Text bold>{wizardPullProgress.percent}%</Text>
-                    {wizardPullProgress.completed != null && wizardPullProgress.total != null ? (
-                      <Text color={theme.colors.muted}>{" \u00B7 "}{formatBytes(wizardPullProgress.completed)}{" / "}{formatBytes(wizardPullProgress.total)}</Text>
-                    ) : null}
-                  </Text>
-                </>
-              ) : (
-                <Text color={theme.colors.muted}>{"  "}{wizardPullProgress.status}...</Text>
-              )}
-            </>
-          ) : null}
-        </Box>
+        <WizardPulling wizardSelectedModel={wizardSelectedModel} wizardPullProgress={wizardPullProgress} wizardPullError={wizardPullError} colors={theme.colors} />
       )}
 
       {/* ═══ COMMAND SUGGESTIONS ═══ */}
       {showSuggestions && (
-        <Box flexDirection="column" borderStyle="single" borderColor={theme.colors.muted} paddingX={1} marginBottom={0}>
-          {cmdMatches.slice(0, 6).map((c, i) => (
-            <Text key={i}>
-              {i === cmdIndex ? <Text color={theme.colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-              <Text color={i === cmdIndex ? theme.colors.suggestion : theme.colors.primary} bold>{c.cmd}</Text>
-              <Text color={theme.colors.muted}>{" — "}{c.desc}</Text>
-            </Text>
-          ))}
-          <Text dimColor>{"  ↑↓ navigate · Tab select"}</Text>
-        </Box>
+        <CommandSuggestions cmdMatches={cmdMatches} cmdIndex={cmdIndex} colors={theme.colors} />
       )}
 
       {/* ═══ INPUT BOX (always at bottom) ═══ */}
@@ -2228,29 +963,7 @@ function App() {
 
       {/* ═══ STATUS BAR ═══ */}
       {agent && (
-        <Box paddingX={2}>
-          <Text dimColor>
-            {"💬 "}{agent.getContextLength()}{" messages · ~"}
-            {(() => {
-              const tokens = agent.estimateTokens();
-              return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
-            })()}
-            {" tokens"}
-            {(() => {
-              const { totalCost } = agent.getCostInfo();
-              if (totalCost > 0) {
-                return ` · 💰 $${totalCost < 0.01 ? totalCost.toFixed(4) : totalCost.toFixed(2)}`;
-              }
-              return "";
-            })()}
-            {modelName ? ` · 🤖 ${modelName}` : ""}
-            {(() => {
-              const count = getActiveSkillCount(process.cwd(), sessionDisabledSkills);
-              return count > 0 ? ` · 🧠 ${count} skill${count !== 1 ? "s" : ""}` : "";
-            })()}
-            {agent.getArchitectModel() ? " · 🏗️ architect" : ""}
-          </Text>
-        </Box>
+        <StatusBar agent={agent} modelName={modelName} sessionDisabledSkills={sessionDisabledSkills} />
       )}
     </Box>
   );
@@ -2259,188 +972,8 @@ function App() {
 // Clear screen before render
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
 
-// Paste event bus — communicates between stdin interceptor and React
-const pasteEvents = new EventEmitter();
-
-// Enable bracketed paste mode — terminal wraps pastes in escape sequences
-process.stdout.write("\x1b[?2004h");
-
-// Intercept stdin to handle pasted content
-// Strategy: patch emit('data') instead of push() — this is the ONE path all data
-// must travel through to reach Ink's listeners, regardless of how the TTY/stream
-// delivers it internally.
-//
-// Two detection layers:
-// 1. Bracketed paste escape sequences (\x1b[200~ ... \x1b[201~)
-// 2. Burst buffering — accumulate rapid-fire chunks over a short window and check
-//    whether the combined content looks like a multiline paste.
-
-let bracketedBuffer = "";
-let inBracketedPaste = false;
-let burstBuffer = "";
-let burstTimer: NodeJS.Timeout | null = null;
-let pendingPasteEndMarker = { active: false, buffer: "" };
-let swallowPostPasteDebrisUntil = 0;
-const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish delivering paste
-const POST_PASTE_DEBRIS_WINDOW_MS = 1200;
-
-// Debug paste: set CODEMAXXING_DEBUG_PASTE=1 to log all stdin chunks to /tmp/codemaxxing-paste-debug.log
-const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
-function pasteLog(msg: string): void {
-  if (!PASTE_DEBUG) return;
-  const escaped = msg.replace(/\x1b/g, "\\x1b").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-  try { appendFileSync("/tmp/codemaxxing-paste-debug.log", `[${Date.now()}] ${escaped}\n`); } catch {}
-}
-
-const origEmit = process.stdin.emit.bind(process.stdin);
-
-function handlePasteContent(content: string): void {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!normalized) return;
-
-  const lineCount = normalized.split("\n").length;
-  if (lineCount > 2) {
-    // Real multiline paste → badge it
-    // Some terminals dribble the closing bracketed-paste marker (`[201~`)
-    // one character at a time *after* the paste payload. Arm a tiny
-    // swallow-state so those trailing fragments never leak into the input.
-    pendingPasteEndMarker = { active: true, buffer: "" };
-    swallowPostPasteDebrisUntil = Date.now() + POST_PASTE_DEBRIS_WINDOW_MS;
-    pasteEvents.emit("paste", { content: normalized, lines: lineCount });
-    return;
-  }
-
-  // Short paste (1-2 lines) → collapse to single line and forward as normal input
-  const sanitized = normalized.replace(/\n/g, " ");
-  if (sanitized) {
-    origEmit("data", sanitized);
-  }
-}
-
-function looksLikeMultilinePaste(data: string): boolean {
-  const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ""); // Strip all ANSI escapes
-  // Count \r\n, \n, and bare \r as line breaks (macOS terminals often use bare \r)
-  const normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const newlines = (normalized.match(/\n/g) ?? []).length;
-  const printable = normalized.replace(/\n/g, "").trim().length;
-
-  return newlines >= 2 || (newlines >= 1 && printable >= 40);
-}
-
-function flushBurst(): void {
-  if (!burstBuffer) return;
-  let buffered = burstBuffer;
-  burstBuffer = "";
-
-  // Strip any bracketed paste marker fragments that accumulated across
-  // individual character chunks (terminal sends [, 2, 0, 1, ~ separately)
-  buffered = buffered.replace(/\x1b?\[?20[01]~/g, "");
-  buffered = buffered.replace(/20[01]~/g, "");
-
-  if (!buffered || !buffered.trim()) {
-    pasteLog("BURST FLUSH stripped to empty — swallowed marker");
-    return;
-  }
-
-  const isMultiline = looksLikeMultilinePaste(buffered);
-  pasteLog(`BURST FLUSH len=${buffered.length} multiline=${isMultiline}`);
-
-  if (isMultiline) {
-    handlePasteContent(buffered);
-  } else {
-    // Normal typing — forward to Ink
-    origEmit("data", buffered);
-  }
-}
-
-(process.stdin as any).emit = function (event: string, ...args: any[]): boolean {
-  // Pass through non-data events untouched
-  if (event !== "data") {
-    return origEmit(event, ...args);
-  }
-
-  const chunk = args[0];
-  let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
-
-  pasteLog(`CHUNK len=${data.length} raw=${data.substring(0, 200)}`);
-
-  const pendingResult = consumePendingPasteEndMarkerChunk(data, pendingPasteEndMarker);
-  pendingPasteEndMarker = pendingResult.nextState;
-  data = pendingResult.remaining;
-  if (!data) {
-    pasteLog("PENDING END MARKER swallowed chunk");
-    return true;
-  }
-
-  if (Date.now() < swallowPostPasteDebrisUntil && shouldSwallowPostPasteDebris(data)) {
-    pasteLog(`POST-PASTE DEBRIS swallowed raw=${data}`);
-    return true;
-  }
-
-  // Aggressively strip ALL bracketed paste escape sequences from every chunk,
-  // regardless of context. Some terminals split markers across chunks or send
-  // them in unexpected positions. We never want \x1b[200~ or \x1b[201~ (or
-  // partial fragments like [200~ / [201~) to reach the input component.
-  const hadStart = data.includes("\x1b[200~") || data.includes("[200~") || data.includes("200~");
-  const hadEnd = data.includes("\x1b[201~") || data.includes("[201~") || data.includes("201~");
-
-  pasteLog(`MARKERS start=${hadStart} end=${hadEnd} inBracketed=${inBracketedPaste}`);
-
-  // Strip full and partial bracketed paste markers — catch every possible fragment
-  // Full: \x1b[200~ / \x1b[201~  Partial: [200~ / [201~  Bare: 200~ / 201~
-  data = data.replace(/\x1b?\[?20[01]~/g, "");
-  // Belt-and-suspenders: catch any residual marker fragments with multiple passes
-  data = data.replace(/\[20[01]~/g, "");      // [200~ or [201~
-  data = data.replace(/20[01]~/g, "");        // 200~ or 201~
-  data = data.replace(/\[\d01~/g, "");        // any [Xdigit01~
-  // Final paranoia pass: remove anything that looks like a closing bracket-tilde
-  if (data.includes("[201") || data.includes("[200")) {
-    data = data.replace(/\[[0-9]*0?[01]~?/g, "");
-  }
-
-  // ── Bracketed paste handling ──
-  if (hadStart) {
-    // Flush any pending burst before entering bracketed mode
-    if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
-    flushBurst();
-
-    inBracketedPaste = true;
-    pasteLog("ENTERED bracketed paste mode");
-  }
-
-  if (hadEnd) {
-    bracketedBuffer += data;
-    inBracketedPaste = false;
-
-    const content = bracketedBuffer;
-    bracketedBuffer = "";
-    pasteLog(`BRACKETED COMPLETE len=${content.length} lines=${content.split("\\n").length}`);
-    handlePasteContent(content);
-    return true;
-  }
-
-  if (inBracketedPaste) {
-    bracketedBuffer += data;
-    pasteLog(`BRACKETED BUFFERING total=${bracketedBuffer.length}`);
-    return true;
-  }
-
-  // ── Burst buffering for non-bracketed paste ──
-
-  burstBuffer += data;
-  if (burstTimer) clearTimeout(burstTimer);
-  burstTimer = setTimeout(() => {
-    burstTimer = null;
-    flushBurst();
-  }, BURST_WINDOW_MS);
-
-  return true;
-};
-
-// Disable bracketed paste on exit
-process.on("exit", () => {
-  process.stdout.write("\x1b[?2004l");
-});
+// Set up paste interception (bracketed paste, burst buffering, debris swallowing)
+const pasteEvents = setupPasteInterceptor();
 
 // Handle terminal resize — clear ghost artifacts
 process.stdout.on("resize", () => {
