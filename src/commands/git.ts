@@ -2,6 +2,7 @@ import { exec as execAsync } from "child_process";
 import { promisify } from "util";
 import { getDiff, undoLastCommit } from "../utils/git.js";
 import type { AddMsg } from "./types.js";
+import { compactCommandOutput, getCommandErrorMessage } from "./output.js";
 
 const execPromise = promisify(execAsync);
 
@@ -26,11 +27,12 @@ export function tryHandleGitCommand(
     addMsg("info", "⏳ Pushing to remote...");
     execPromise("git push", { cwd })
       .then(({ stdout, stderr }) => {
-        const out = (stdout + stderr).trim();
-        addMsg("info", `✅ Pushed to remote${out ? "\n" + out : ""}`);
+        const out = compactCommandOutput(stdout + stderr);
+        addMsg("info", `✅ Pushed to remote${out ? ` — ${out}` : ""}`);
       })
       .catch((e: any) => {
-        addMsg("error", `Push failed: ${e.stderr || e.message}`);
+        const message = getCommandErrorMessage(e);
+        addMsg("error", `Push failed${message ? ` — ${message}` : ""}`);
       });
     return true;
   }
@@ -45,11 +47,13 @@ export function tryHandleGitCommand(
     addMsg("info", "⏳ Committing...");
     execPromise("git add -A", { cwd })
       .then(() => execPromise(`git commit -m ${JSON.stringify(msg)}`, { cwd }))
-      .then(() => {
-        addMsg("info", `✅ Committed: ${msg}`);
+      .then(({ stdout, stderr }) => {
+        const out = compactCommandOutput(stdout + stderr);
+        addMsg("info", `✅ Committed: ${msg}${out ? ` — ${out}` : ""}`);
       })
       .catch((e: any) => {
-        addMsg("error", `Commit failed: ${e.stderr || e.message}`);
+        const message = getCommandErrorMessage(e);
+        addMsg("error", `Commit failed${message ? ` — ${message}` : ""}`);
       });
     return true;
   }
