@@ -77,8 +77,17 @@ export function tryHandleSkillsCommand(options: HandleSkillsCommandOptions): boo
     return true;
   }
 
+  if (trimmed === "/skills search") {
+    addMsg("info", "Usage: /skills search <query>");
+    return true;
+  }
+
   if (trimmed.startsWith("/skills search ")) {
     const query = trimmed.replace("/skills search ", "").trim();
+    if (!query) {
+      addMsg("info", "Usage: /skills search <query>");
+      return true;
+    }
     const results = searchRegistry(query);
     if (results.length === 0) {
       addMsg("info", `No skills found matching "${query}".`);
@@ -107,6 +116,11 @@ export function tryHandleSkillsCommand(options: HandleSkillsCommandOptions): boo
     return true;
   }
 
+  if (trimmed === "/skills on") {
+    addMsg("info", "Usage: /skills on <name>");
+    return true;
+  }
+
   if (trimmed.startsWith("/skills on ")) {
     const name = trimmed.replace("/skills on ", "").trim();
     const installed = listInstalledSkills().map((skill) => skill.name);
@@ -121,6 +135,11 @@ export function tryHandleSkillsCommand(options: HandleSkillsCommandOptions): boo
     });
     if (agent) agent.enableSkill(name);
     addMsg("info", `✅ Enabled skill: ${name}`);
+    return true;
+  }
+
+  if (trimmed === "/skills off") {
+    addMsg("info", "Usage: /skills off <name>");
     return true;
   }
 

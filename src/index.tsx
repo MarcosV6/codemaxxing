@@ -56,9 +56,6 @@ const SLASH_COMMANDS = [
   { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
   { cmd: "/skills", desc: "manage skill packs" },
-  { cmd: "/skills install", desc: "install a skill" },
-  { cmd: "/skills remove", desc: "remove a skill" },
-  { cmd: "/skills list", desc: "show installed skills" },
   { cmd: "/skills search", desc: "search registry" },
   { cmd: "/skills on", desc: "enable skill for session" },
   { cmd: "/skills off", desc: "disable skill for session" },
@@ -466,8 +463,8 @@ function App() {
       if (selected) {
         // Commands that need args (like /commit, /model) — fill input instead of executing
         if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
-            selected.cmd === "/skills install" || selected.cmd === "/skills remove" || selected.cmd === "/skills search" ||
-            selected.cmd === "/skills on" || selected.cmd === "/skills off" || selected.cmd === "/architect") {
+            selected.cmd === "/skills search" || selected.cmd === "/skills on" ||
+            selected.cmd === "/skills off" || selected.cmd === "/architect") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
           setInputKey((k) => k + 1);
@@ -542,6 +539,8 @@ function App() {
         "  /git on    — enable auto-commits",
         "  /git off   — disable auto-commits",
         "  /skills    — manage skill packs",
+        "  /skills search <query> — search registry",
+        "  /skills on/off <name> — toggle a skill for this session",
         "  /architect — toggle architect mode (plan then execute)",
         "  /lint      — show auto-lint status & detected linter",
         "  /lint on   — enable auto-lint",
