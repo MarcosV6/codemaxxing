@@ -71,6 +71,7 @@ const SLASH_COMMANDS = [
   { cmd: "/mcp remove", desc: "remove MCP server" },
   { cmd: "/mcp reconnect", desc: "reconnect MCP servers" },
   { cmd: "/ollama", desc: "Ollama status & models" },
+  { cmd: "/ollama status", desc: "show Ollama status & models" },
   { cmd: "/ollama list", desc: "list installed models" },
   { cmd: "/ollama start", desc: "start Ollama server" },
   { cmd: "/ollama stop", desc: "stop Ollama server" },
