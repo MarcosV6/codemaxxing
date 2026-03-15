@@ -140,12 +140,14 @@ Dual-model planning. A "planner" model reasons through the approach, then your e
 ### 🧠 Skills System (21 Built-In)
 Downloadable skill packs that teach the agent domain expertise. Ships with 21 built-in skills:
 
-**Frontend:** react-expert, nextjs-app, tailwind-ui, svelte-kit
-**Mobile:** react-native, swift-ios, flutter
-**Backend:** python-pro, node-backend, go-backend, rust-systems
-**Data:** sql-master, supabase
-**Practices:** typescript-strict, api-designer, test-engineer, doc-writer, security-audit, devops-toolkit, git-workflow
-**Game Dev:** unity-csharp
+| Category | Skills |
+|----------|--------|
+| **Frontend** | react-expert, nextjs-app, tailwind-ui, svelte-kit |
+| **Mobile** | react-native, swift-ios, flutter |
+| **Backend** | python-pro, node-backend, go-backend, rust-systems |
+| **Data** | sql-master, supabase |
+| **Practices** | typescript-strict, api-designer, test-engineer, doc-writer, security-audit, devops-toolkit, git-workflow |
+| **Game Dev** | unity-csharp |
 
 ```
 /skills              # Browse & install from registry
@@ -224,8 +226,8 @@ Switch models mid-session with an interactive picker:
 - `/model gpt-5` — switch directly by name
 - Native Anthropic API support (not just OpenAI-compatible)
 
-### 🎨 14 Themes
-`/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rosé-pine, synthwave, blood-moon, mono, solarized, hacker, acid
+### 🎨 15 Themes
+`/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rose-pine, synthwave, blood-moon, mono, solarized, hacker, hot-dog, acid
 
 ### 🔐 Authentication
 One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys.
@@ -330,6 +332,7 @@ Built-in tools:
 
 - **read_file** — Read file contents (safe)
 - **write_file** — Write/create files (requires approval, shows diff)
+- **edit_file** — Apply surgical patches to files (preferred for targeted changes)
 - **list_files** — List directory contents (safe)
 - **search_files** — Search for patterns across files (safe)
 - **run_command** — Execute shell commands (requires approval)
@@ -348,6 +351,7 @@ Drop a `CODEMAXXING.md` file in your project root to give the model extra contex
 - **MCP:** [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)
 - **Sessions:** [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 - **Local LLM:** Ollama integration (auto-install, pull, manage)
+- **Tests:** Vitest — 26 tests across 8 test files covering commands, tools, config, and agent behavior
 - **Zero cloud dependencies** — everything runs locally
 
 ## Inspired By
