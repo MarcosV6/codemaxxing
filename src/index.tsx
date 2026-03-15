@@ -2265,6 +2265,9 @@ process.stdout.write("\x1b[?2004h");
 // Bracketed paste: \x1b[200~ ... \x1b[201~
 let pasteBuffer = "";
 let inPaste = false;
+let rawBurstBuffer = "";
+let rawBurstTimer: NodeJS.Timeout | null = null;
+const RAW_PASTE_WINDOW_MS = 35;
 
 function emitPasteChunk(content: string): true {
   const normalized = content.replace(/\r\n/g, "\n").trim();
@@ -2289,19 +2292,55 @@ function looksLikeRawMultilinePaste(data: string): boolean {
   const newlineCount = newlineMatches.length;
   const contentLength = normalized.replace(/[\r\n]/g, "").trim().length;
 
-  // Avoid swallowing normal Enter presses while still catching terminals that
-  // don't support bracketed paste and dump the whole paste as one raw chunk.
+  // Catch real multiline pastes while avoiding normal Enter presses.
   return newlineCount >= 2 || (newlineCount >= 1 && contentLength >= 40);
+}
+
+function flushRawBurstBuffer(): void {
+  if (!rawBurstBuffer) return;
+
+  const buffered = rawBurstBuffer;
+  rawBurstBuffer = "";
+
+  if (looksLikeRawMultilinePaste(buffered)) {
+    emitPasteChunk(buffered);
+    return;
+  }
+
+  origPush(Buffer.from(buffered), undefined as any);
+}
+
+function scheduleRawBurstFlush(): void {
+  if (rawBurstTimer) clearTimeout(rawBurstTimer);
+  rawBurstTimer = setTimeout(() => {
+    rawBurstTimer = null;
+    flushRawBurstBuffer();
+  }, RAW_PASTE_WINDOW_MS);
 }
 
 const origPush = process.stdin.push.bind(process.stdin);
 (process.stdin as any).push = function (chunk: any, encoding?: any) {
-  if (chunk === null) return origPush(chunk, encoding);
+  if (chunk === null) {
+    if (rawBurstTimer) {
+      clearTimeout(rawBurstTimer);
+      rawBurstTimer = null;
+    }
+    flushRawBurstBuffer();
+    return origPush(chunk, encoding);
+  }
 
   let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
 
   const hasStart = data.includes("\x1b[200~");
   const hasEnd = data.includes("\x1b[201~");
+
+  if (hasStart || hasEnd || inPaste) {
+    if (rawBurstTimer) {
+      clearTimeout(rawBurstTimer);
+      rawBurstTimer = null;
+    }
+    flushRawBurstBuffer();
+  }
 
   if (hasStart) {
     inPaste = true;
@@ -2325,11 +2364,9 @@ const origPush = process.stdin.push.bind(process.stdin);
 
   data = data.replace(/\x1b\[20[01]~/g, "");
 
-  if (looksLikeRawMultilinePaste(data)) {
-    return emitPasteChunk(data);
-  }
-
-  return origPush(typeof chunk === "string" ? data : Buffer.from(data), encoding);
+  rawBurstBuffer += data;
+  scheduleRawBurstFlush();
+  return true;
 };
 
 // Disable bracketed paste on exit
