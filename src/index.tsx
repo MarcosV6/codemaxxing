@@ -7,7 +7,9 @@ import TextInput from "ink-text-input";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
-import { execSync } from "child_process";
+import { exec as execAsync } from "child_process";
+import { promisify } from "util";
+const execPromise = promisify(execAsync);
 import { isGitRepo, getBranch, getStatus, getDiff, undoLastCommit } from "./utils/git.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
@@ -1131,12 +1133,15 @@ function App() {
       return;
     }
     if (trimmed === "/push") {
-      try {
-        const output = execSync("git push", { cwd: process.cwd(), encoding: "utf-8", stdio: "pipe" });
-        addMsg("info", `✅ Pushed to remote${output.trim() ? "\n" + output.trim() : ""}`);
-      } catch (e: any) {
-        addMsg("error", `Push failed: ${e.stderr || e.message}`);
-      }
+      addMsg("info", "⏳ Pushing to remote...");
+      execPromise("git push", { cwd: process.cwd() })
+        .then(({ stdout, stderr }) => {
+          const out = (stdout + stderr).trim();
+          addMsg("info", `✅ Pushed to remote${out ? "\n" + out : ""}`);
+        })
+        .catch((e: any) => {
+          addMsg("error", `Push failed: ${e.stderr || e.message}`);
+        });
       return;
     }
     if (trimmed.startsWith("/commit")) {
@@ -1145,13 +1150,15 @@ function App() {
         addMsg("info", "Usage: /commit your commit message here");
         return;
       }
-      try {
-        execSync("git add -A", { cwd: process.cwd(), stdio: "pipe" });
-        execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, { cwd: process.cwd(), stdio: "pipe" });
-        addMsg("info", `✅ Committed: ${msg}`);
-      } catch (e: any) {
-        addMsg("error", `Commit failed: ${e.stderr || e.message}`);
-      }
+      addMsg("info", "⏳ Committing...");
+      execPromise("git add -A", { cwd: process.cwd() })
+        .then(() => execPromise(`git commit -m ${JSON.stringify(msg)}`, { cwd: process.cwd() }))
+        .then(() => {
+          addMsg("info", `✅ Committed: ${msg}`);
+        })
+        .catch((e: any) => {
+          addMsg("error", `Commit failed: ${e.stderr || e.message}`);
+        });
       return;
     }
 

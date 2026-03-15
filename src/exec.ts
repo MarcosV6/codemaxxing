@@ -171,7 +171,10 @@ export async function runExec(argv: string[]): Promise<void> {
     }
 
     await disconnectAll();
-    process.exit(hasChanges ? 0 : 2);
+    // Exit 0 = success (always, with or without file changes)
+    // Exit 2 = no file changes were made (useful for CI scripts that check if work was done)
+    // Only exit(1) is reserved for actual errors (see catch block below)
+    process.exit(0);
   } catch (err: any) {
     await disconnectAll();
     process.stderr.write(`Error: ${err.message}\n`);

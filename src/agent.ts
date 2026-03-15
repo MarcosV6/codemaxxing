@@ -18,8 +18,9 @@ import type { ProviderConfig } from "./config.js";
 const DANGEROUS_TOOLS = new Set(["write_file", "run_command"]);
 
 // Cost per 1M tokens (input/output) for common models
+// Prices as of mid-2025; update when providers change pricing.
 const MODEL_COSTS: Record<string, { input: number; output: number }> = {
-  // OpenAI
+  // ── OpenAI ──────────────────────────────────────────────────────────────
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "gpt-4-turbo": { input: 10, output: 30 },
@@ -27,26 +28,86 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "gpt-3.5-turbo": { input: 0.5, output: 1.5 },
   "o1": { input: 15, output: 60 },
   "o1-mini": { input: 3, output: 12 },
+  "o1-pro": { input: 150, output: 600 },
+  "o3": { input: 10, output: 40 },
   "o3-mini": { input: 1.1, output: 4.4 },
-  // Anthropic
+  "o4-mini": { input: 1.1, output: 4.4 },
+  // Provider-prefixed variants (OpenRouter / LM Studio style)
+  "openai/gpt-4o": { input: 2.5, output: 10 },
+  "openai/gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "openai/o3-mini": { input: 1.1, output: 4.4 },
+  "openai/o4-mini": { input: 1.1, output: 4.4 },
+  "openai/o1": { input: 15, output: 60 },
+  "openai/o3": { input: 10, output: 40 },
+
+  // ── Anthropic ────────────────────────────────────────────────────────────
+  // Claude 3.5 family
   "claude-3-5-sonnet-20241022": { input: 3, output: 15 },
   "claude-3-5-sonnet": { input: 3, output: 15 },
-  "claude-sonnet-4-20250514": { input: 3, output: 15 },
   "claude-3-5-haiku-20241022": { input: 0.8, output: 4 },
+  "claude-3-5-haiku": { input: 0.8, output: 4 },
+  // Claude 3 family
   "claude-3-opus-20240229": { input: 15, output: 75 },
+  "claude-3-opus": { input: 15, output: 75 },
+  "claude-3-sonnet-20240229": { input: 3, output: 15 },
   "claude-3-haiku-20240307": { input: 0.25, output: 1.25 },
-  // Qwen (typically free/cheap on local, but OpenRouter pricing)
-  "qwen/qwen-2.5-coder-32b-instruct": { input: 0.2, output: 0.2 },
-  "qwen/qwen-2.5-72b-instruct": { input: 0.35, output: 0.4 },
-  // DeepSeek
-  "deepseek/deepseek-chat": { input: 0.14, output: 0.28 },
-  "deepseek/deepseek-coder": { input: 0.14, output: 0.28 },
-  // Llama
-  "meta-llama/llama-3.1-70b-instruct": { input: 0.52, output: 0.75 },
-  "meta-llama/llama-3.1-8b-instruct": { input: 0.055, output: 0.055 },
-  // Google
+  "claude-3-haiku": { input: 0.25, output: 1.25 },
+  // Claude 4 family (2025)
+  "claude-sonnet-4-20250514": { input: 3, output: 15 },
+  "claude-sonnet-4": { input: 3, output: 15 },
+  "claude-opus-4-20250514": { input: 15, output: 75 },
+  "claude-opus-4": { input: 15, output: 75 },
+  "claude-haiku-4": { input: 0.8, output: 4 },
+  // Provider-prefixed (OpenRouter)
+  "anthropic/claude-3-5-sonnet": { input: 3, output: 15 },
+  "anthropic/claude-3-5-haiku": { input: 0.8, output: 4 },
+  "anthropic/claude-3-opus": { input: 15, output: 75 },
+  "anthropic/claude-sonnet-4-20250514": { input: 3, output: 15 },
+  "anthropic/claude-opus-4-20250514": { input: 15, output: 75 },
+
+  // ── Google Gemini ────────────────────────────────────────────────────────
+  // Gemini 1.5
+  "gemini-1.5-pro": { input: 1.25, output: 5 },
+  "gemini-1.5-flash": { input: 0.075, output: 0.3 },
+  "gemini-1.5-flash-8b": { input: 0.0375, output: 0.15 },
+  // Gemini 2.0
+  "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+  "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
+  "gemini-2.0-pro": { input: 1.25, output: 10 },
+  // Gemini 2.5
+  "gemini-2.5-pro": { input: 1.25, output: 10 },
+  "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+  // Provider-prefixed (OpenRouter / LM Studio)
   "google/gemini-pro-1.5": { input: 1.25, output: 5 },
   "google/gemini-flash-1.5": { input: 0.075, output: 0.3 },
+  "google/gemini-2.0-flash": { input: 0.1, output: 0.4 },
+  "google/gemini-2.5-pro": { input: 1.25, output: 10 },
+  "google/gemini-2.5-flash": { input: 0.15, output: 0.6 },
+
+  // ── Qwen ─────────────────────────────────────────────────────────────────
+  "qwen/qwen-2.5-coder-32b-instruct": { input: 0.2, output: 0.2 },
+  "qwen/qwen-2.5-72b-instruct": { input: 0.35, output: 0.4 },
+  "qwen/qwq-32b": { input: 0.15, output: 0.2 },
+  "qwen/qwen3-235b-a22b": { input: 0.2, output: 0.4 },
+
+  // ── DeepSeek ─────────────────────────────────────────────────────────────
+  "deepseek/deepseek-chat": { input: 0.14, output: 0.28 },
+  "deepseek/deepseek-coder": { input: 0.14, output: 0.28 },
+  "deepseek/deepseek-r1": { input: 0.55, output: 2.19 },
+  "deepseek-chat": { input: 0.14, output: 0.28 },
+  "deepseek-reasoner": { input: 0.55, output: 2.19 },
+
+  // ── Meta Llama ───────────────────────────────────────────────────────────
+  "meta-llama/llama-3.1-70b-instruct": { input: 0.52, output: 0.75 },
+  "meta-llama/llama-3.1-8b-instruct": { input: 0.055, output: 0.055 },
+  "meta-llama/llama-3.3-70b-instruct": { input: 0.12, output: 0.3 },
+  "meta-llama/llama-4-scout": { input: 0.11, output: 0.34 },
+  "meta-llama/llama-4-maverick": { input: 0.22, output: 0.88 },
+
+  // ── Mistral ──────────────────────────────────────────────────────────────
+  "mistral/mistral-large": { input: 2, output: 6 },
+  "mistral/mistral-small": { input: 0.1, output: 0.3 },
+  "mistral/codestral": { input: 0.3, output: 0.9 },
 };
 
 function getModelCost(model: string): { input: number; output: number } {
