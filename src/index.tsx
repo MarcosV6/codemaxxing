@@ -2347,13 +2347,14 @@ function flushBurst(): void {
   // regardless of context. Some terminals split markers across chunks or send
   // them in unexpected positions. We never want \x1b[200~ or \x1b[201~ (or
   // partial fragments like [200~ / [201~) to reach the input component.
-  const hadStart = data.includes("\x1b[200~") || data.includes("[200~");
-  const hadEnd = data.includes("\x1b[201~") || data.includes("[201~");
+  const hadStart = data.includes("\x1b[200~") || data.includes("[200~") || data.includes("200~");
+  const hadEnd = data.includes("\x1b[201~") || data.includes("[201~") || data.includes("201~");
 
   pasteLog(`MARKERS start=${hadStart} end=${hadEnd} inBracketed=${inBracketedPaste}`);
 
-  // Strip full and partial bracketed paste markers
-  data = data.replace(/\x1b?\[20[01]~/g, "");
+  // Strip full and partial bracketed paste markers — catch every possible fragment
+  // Full: \x1b[200~ / \x1b[201~  Partial: [200~ / [201~  Bare: 200~ / 201~
+  data = data.replace(/\x1b?\[?20[01]~/g, "");
 
   // ── Bracketed paste handling ──
   if (hadStart) {
