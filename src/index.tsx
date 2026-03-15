@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
+import { appendFileSync } from "node:fs";
 import TextInput from "ink-text-input";
 import { consumePendingPasteEndMarkerChunk } from "./utils/paste.js";
 import { CodingAgent } from "./agent.js";
@@ -2283,7 +2284,6 @@ const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish deliveri
 const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
 function pasteLog(msg: string): void {
   if (!PASTE_DEBUG) return;
-  const { appendFileSync } = require("node:fs");
   const escaped = msg.replace(/\x1b/g, "\\x1b").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
   try { appendFileSync("/tmp/codemaxxing-paste-debug.log", `[${Date.now()}] ${escaped}\n`); } catch {}
 }
