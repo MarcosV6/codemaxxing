@@ -10,6 +10,7 @@ import { listSessions, getSession, loadMessages, deleteSession } from "./utils/s
 import { isGitRepo, getBranch, getStatus } from "./utils/git.js";
 import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
+import { dispatchRegisteredCommands } from "./commands/registry.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
@@ -554,19 +555,32 @@ function App() {
       ].join("\n"));
       return;
     }
-    // ── Skills commands (work without agent) ──
-    if (tryHandleSkillsCommand({
-      trimmed,
-      cwd: process.cwd(),
-      addMsg,
-      agent,
-      sessionDisabledSkills,
-      setSkillsPicker,
-      setSkillsPickerIndex,
-      setSessionDisabledSkills,
-      setInput,
-      setInputKey,
-    })) {
+    if (await dispatchRegisteredCommands([
+      () => tryHandleSkillsCommand({
+        trimmed,
+        cwd: process.cwd(),
+        addMsg,
+        agent,
+        sessionDisabledSkills,
+        setSkillsPicker,
+        setSkillsPickerIndex,
+        setSessionDisabledSkills,
+        setInput,
+        setInputKey,
+      }),
+      () => tryHandleOllamaCommand({
+        trimmed,
+        addMsg,
+        refreshConnectionBanner,
+        setOllamaPullPicker,
+        setOllamaPullPickerIndex,
+        setOllamaPulling,
+        setOllamaDeletePicker,
+        setOllamaDeletePickerIndex,
+        setOllamaDeleteConfirm,
+      }),
+      () => tryHandleGitCommand(trimmed, process.cwd(), addMsg),
+    ], { trimmed })) {
       return;
     }
     if (trimmed.startsWith("/theme")) {
@@ -639,21 +653,6 @@ function App() {
     if (trimmed === "/lint off") {
       if (agent) agent.setAutoLint(false);
       addMsg("info", "🔍 Auto-lint OFF");
-      return;
-    }
-
-    // ── Ollama commands (work without agent) ──
-    if (await tryHandleOllamaCommand({
-      trimmed,
-      addMsg,
-      refreshConnectionBanner,
-      setOllamaPullPicker,
-      setOllamaPullPickerIndex,
-      setOllamaPulling,
-      setOllamaDeletePicker,
-      setOllamaDeletePickerIndex,
-      setOllamaDeleteConfirm,
-    })) {
       return;
     }
 
@@ -801,9 +800,6 @@ function App() {
         addMsg("info", newMap || "No repository map available.");
         setLoading(false);
       }
-      return;
-    }
-    if (tryHandleGitCommand(trimmed, process.cwd(), addMsg)) {
       return;
     }
     if (trimmed === "/git on") {

@@ -1,10 +1,9 @@
 import { exec as execAsync } from "child_process";
 import { promisify } from "util";
 import { getDiff, undoLastCommit } from "../utils/git.js";
+import type { AddMsg } from "./types.js";
 
 const execPromise = promisify(execAsync);
-
-type AddMsg = (type: "user" | "response" | "tool" | "tool-result" | "error" | "info", text: string) => void;
 
 export function tryHandleGitCommand(
   trimmed: string,

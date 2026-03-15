@@ -8,8 +8,7 @@ import {
   createSkillScaffold,
   getActiveSkills,
 } from "../utils/skills.js";
-
-type AddMsg = (type: "user" | "response" | "tool" | "tool-result" | "error" | "info", text: string) => void;
+import type { AddMsg } from "./types.js";
 
 type SkillsPickerMode = "menu" | "browse" | "installed" | "remove" | null;
 

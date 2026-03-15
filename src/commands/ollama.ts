@@ -9,8 +9,7 @@ import {
   getGPUMemoryUsage,
   type PullProgress,
 } from "../utils/ollama.js";
-
-type AddMsg = (type: "user" | "response" | "tool" | "tool-result" | "error" | "info", text: string) => void;
+import type { AddMsg } from "./types.js";
 
 type SetState<T> = (value: T) => void;
 
