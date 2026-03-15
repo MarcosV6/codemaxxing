@@ -110,7 +110,7 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "mistral/codestral": { input: 0.3, output: 0.9 },
 };
 
-function getModelCost(model: string): { input: number; output: number } {
+export function getModelCost(model: string): { input: number; output: number } {
   // Direct match
   if (MODEL_COSTS[model]) return MODEL_COSTS[model];
   // Partial match (model name contains a known key)

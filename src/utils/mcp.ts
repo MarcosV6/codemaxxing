@@ -142,6 +142,22 @@ export function getConnectedServers(): ConnectedServer[] {
 
 // ── Tool format conversion ──
 
+function encodeMcpSegment(value: string): string {
+  return Buffer.from(value, "utf-8").toString("base64url");
+}
+
+function decodeMcpSegment(value: string): string | null {
+  try {
+    return Buffer.from(value, "base64url").toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+export function buildMCPToolName(serverName: string, toolName: string): string {
+  return `mcp_${encodeMcpSegment(serverName)}__${encodeMcpSegment(toolName)}`;
+}
+
 export function getAllMCPTools(servers: ConnectedServer[]): ChatCompletionTool[] {
   const tools: ChatCompletionTool[] = [];
 
@@ -150,7 +166,7 @@ export function getAllMCPTools(servers: ConnectedServer[]): ChatCompletionTool[]
       tools.push({
         type: "function",
         function: {
-          name: `mcp_${server.name}_${tool.name}`,
+          name: buildMCPToolName(server.name, tool.name),
           description: `[MCP: ${server.name}] ${tool.description ?? tool.name}`,
           parameters: tool.inputSchema as any,
         },
@@ -163,14 +179,29 @@ export function getAllMCPTools(servers: ConnectedServer[]): ChatCompletionTool[]
 
 /**
  * Parse an MCP tool call name to extract server name and tool name.
- * Format: mcp_<serverName>_<toolName>
- * Server names can contain hyphens but not underscores (by convention).
+ *
+ * New format (collision-safe):
+ *   mcp_<base64url(server)>__<base64url(tool)>
+ *
+ * Legacy format still supported for backwards compatibility:
+ *   mcp_<serverName>_<toolName>
  */
 export function parseMCPToolName(fullName: string): { serverName: string; toolName: string } | null {
   if (!fullName.startsWith("mcp_")) return null;
-  const rest = fullName.slice(4); // Remove "mcp_"
+  const rest = fullName.slice(4);
 
-  // Find the server by matching known connected server names
+  const encodedSeparator = rest.indexOf("__");
+  if (encodedSeparator !== -1) {
+    const serverEncoded = rest.slice(0, encodedSeparator);
+    const toolEncoded = rest.slice(encodedSeparator + 2);
+    const serverName = decodeMcpSegment(serverEncoded);
+    const toolName = decodeMcpSegment(toolEncoded);
+    if (serverName && toolName) {
+      return { serverName, toolName };
+    }
+  }
+
+  // Legacy fallback: find the server by matching known connected server names.
   for (const server of connectedServers) {
     const prefix = server.name + "_";
     if (rest.startsWith(prefix)) {
@@ -178,7 +209,7 @@ export function parseMCPToolName(fullName: string): { serverName: string; toolNa
     }
   }
 
-  // Fallback: split on first underscore
+  // Legacy final fallback: split on first underscore.
   const idx = rest.indexOf("_");
   if (idx === -1) return null;
   return { serverName: rest.slice(0, idx), toolName: rest.slice(idx + 1) };

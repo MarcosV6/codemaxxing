@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { getCredential, type AuthCredential } from "./utils/auth.js";
+import { getCredential } from "./utils/auth.js";
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -342,11 +342,23 @@ export function resolveProvider(
 }
 
 /**
- * Detect provider type from ID or base URL
+ * Detect provider transport type.
+ *
+ * Important: model family does NOT decide this. OpenRouter, Gemini-compatible,
+ * Qwen-compatible, Copilot, LM Studio, Ollama, and custom OpenAI-compatible
+ * endpoints should all stay on the OpenAI-compatible transport even when the
+ * selected model is Claude.
  */
-function detectProviderType(providerId: string, baseUrl: string): "openai" | "anthropic" {
-  if (providerId === "anthropic" || baseUrl.includes("anthropic.com")) {
+export function detectProviderType(providerId: string, baseUrl: string): "openai" | "anthropic" {
+  const id = providerId.toLowerCase();
+  const url = baseUrl.toLowerCase();
+
+  if (id === "anthropic") return "anthropic";
+
+  // Only treat Anthropic's native API as anthropic transport.
+  if (url.includes("api.anthropic.com") || url.includes("api.us.anthropic.com")) {
     return "anthropic";
   }
+
   return "openai";
 }
