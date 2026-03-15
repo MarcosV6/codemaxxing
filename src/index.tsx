@@ -12,6 +12,7 @@ import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
 import { dispatchRegisteredCommands } from "./commands/registry.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
+import { tryHandleUiCommand } from "./commands/ui.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
@@ -580,79 +581,17 @@ function App() {
         setOllamaDeleteConfirm,
       }),
       () => tryHandleGitCommand(trimmed, process.cwd(), addMsg),
+      () => tryHandleUiCommand({
+        trimmed,
+        cwd: process.cwd(),
+        addMsg,
+        agent,
+        theme,
+        setTheme,
+        setThemePicker,
+        setThemePickerIndex,
+      }),
     ], { trimmed })) {
-      return;
-    }
-    if (trimmed.startsWith("/theme")) {
-      const themeName = trimmed.replace("/theme", "").trim();
-      if (!themeName) {
-        const themeKeys = listThemes();
-        const currentIdx = themeKeys.indexOf(theme.name.toLowerCase());
-        setThemePicker(true);
-        setThemePickerIndex(currentIdx >= 0 ? currentIdx : 0);
-        return;
-      }
-      if (!THEMES[themeName]) {
-        addMsg("error", `Theme "${themeName}" not found. Use /theme to see available themes.`);
-        return;
-      }
-      setTheme(getTheme(themeName));
-      addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
-      return;
-    }
-    // ── Architect commands (work without agent) ──
-    if (trimmed === "/architect") {
-      if (!agent) {
-        addMsg("info", "🏗️ Architect mode: no agent connected. Connect first with /login or /connect.");
-        return;
-      }
-      const current = agent.getArchitectModel();
-      if (current) {
-        agent.setArchitectModel(null);
-        addMsg("info", "🏗️ Architect mode OFF");
-      } else {
-        // Use config default or a sensible default
-        const defaultModel = loadConfig().defaults.architectModel || agent.getModel();
-        agent.setArchitectModel(defaultModel);
-        addMsg("info", `🏗️ Architect mode ON (planner: ${defaultModel})`);
-      }
-      return;
-    }
-    if (trimmed.startsWith("/architect ")) {
-      const model = trimmed.replace("/architect ", "").trim();
-      if (!model) {
-        addMsg("info", "Usage: /architect <model> or /architect to toggle");
-        return;
-      }
-      if (agent) {
-        agent.setArchitectModel(model);
-        addMsg("info", `🏗️ Architect mode ON (planner: ${model})`);
-      } else {
-        addMsg("info", "⚠ No agent connected. Connect first.");
-      }
-      return;
-    }
-
-    // ── Lint commands (work without agent) ──
-    if (trimmed === "/lint") {
-      const { detectLinter } = await import("./utils/lint.js");
-      const linter = detectLinter(process.cwd());
-      const enabled = agent ? agent.isAutoLintEnabled() : true;
-      if (linter) {
-        addMsg("info", `🔍 Auto-lint: ${enabled ? "ON" : "OFF"}\n  Detected: ${linter.name}\n  Command: ${linter.command} <file>`);
-      } else {
-        addMsg("info", `🔍 Auto-lint: ${enabled ? "ON" : "OFF"}\n  No linter detected in this project.`);
-      }
-      return;
-    }
-    if (trimmed === "/lint on") {
-      if (agent) agent.setAutoLint(true);
-      addMsg("info", "🔍 Auto-lint ON");
-      return;
-    }
-    if (trimmed === "/lint off") {
-      if (agent) agent.setAutoLint(false);
-      addMsg("info", "🔍 Auto-lint OFF");
       return;
     }
 
