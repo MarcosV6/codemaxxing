@@ -15,7 +15,7 @@ import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMC
 import type { ProviderConfig } from "./config.js";
 
 // Tools that can modify your project — require approval
-const DANGEROUS_TOOLS = new Set(["write_file", "run_command"]);
+const DANGEROUS_TOOLS = new Set(["write_file", "edit_file", "run_command"]);
 
 // Cost per 1M tokens (input/output) for common models
 // Prices as of mid-2025; update when providers change pricing.
@@ -404,12 +404,22 @@ export class CodingAgent {
         // Check approval for dangerous tools
         if (DANGEROUS_TOOLS.has(toolCall.name) && !this.autoApprove && !this.alwaysApproved.has(toolCall.name)) {
           if (this.options.onToolApproval) {
-            // Generate diff for write_file if file already exists
+            // Generate diff preview for file-modifying tools
             let diff: string | undefined;
             if (toolCall.name === "write_file" && args.path && args.content) {
               const existing = getExistingContent(String(args.path), this.cwd);
               if (existing !== null) {
                 diff = generateDiff(existing, String(args.content), String(args.path));
+              }
+            }
+            if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+              const existing = getExistingContent(String(args.path), this.cwd);
+              if (existing !== null) {
+                const oldText = String(args.oldText);
+                const newText = String(args.newText);
+                const replaceAll = Boolean(args.replaceAll);
+                const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                diff = generateDiff(existing, next, String(args.path));
               }
             }
             const decision = await this.options.onToolApproval(toolCall.name, args, diff);
@@ -442,7 +452,7 @@ export class CodingAgent {
         this.options.onToolResult?.(toolCall.name, result);
 
         // Auto-commit after successful write_file (only if enabled)
-        if (this.gitEnabled && this.autoCommitEnabled && toolCall.name === "write_file" && result.startsWith("✅")) {
+        if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
           const path = String(args.path ?? "unknown");
           const committed = autoCommit(this.cwd, path, "write");
           if (committed) {
@@ -451,7 +461,7 @@ export class CodingAgent {
         }
 
         // Auto-lint after successful write_file
-        if (this.autoLintEnabled && this.detectedLinter && toolCall.name === "write_file" && result.startsWith("✅")) {
+        if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
           const filePath = String(args.path ?? "");
           const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
           if (lintErrors) {
@@ -631,6 +641,16 @@ export class CodingAgent {
                 diff = generateDiff(existing, String(args.content), String(args.path));
               }
             }
+            if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+              const existing = getExistingContent(String(args.path), this.cwd);
+              if (existing !== null) {
+                const oldText = String(args.oldText);
+                const newText = String(args.newText);
+                const replaceAll = Boolean(args.replaceAll);
+                const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                diff = generateDiff(existing, next, String(args.path));
+              }
+            }
             const decision = await this.options.onToolApproval(toolCall.name, args, diff);
             if (decision === "no") {
               const denied = `Tool call "${toolCall.name}" was denied by the user.`;
@@ -661,7 +681,7 @@ export class CodingAgent {
         this.options.onToolResult?.(toolCall.name, result);
 
         // Auto-commit after successful write_file
-        if (this.gitEnabled && this.autoCommitEnabled && toolCall.name === "write_file" && result.startsWith("✅")) {
+        if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
           const path = String(args.path ?? "unknown");
           const committed = autoCommit(this.cwd, path, "write");
           if (committed) {
@@ -670,7 +690,7 @@ export class CodingAgent {
         }
 
         // Auto-lint after successful write_file
-        if (this.autoLintEnabled && this.detectedLinter && toolCall.name === "write_file" && result.startsWith("✅")) {
+        if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
           const filePath = String(args.path ?? "");
           const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
           if (lintErrors) {

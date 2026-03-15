@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "fs";
-import { join, relative } from "path";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
+import { join, relative, dirname } from "path";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 /**
@@ -28,7 +28,7 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "write_file",
       description:
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Use this for new files or full rewrites only.",
       parameters: {
         type: "object",
         properties: {
@@ -42,6 +42,36 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
           },
         },
         required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description:
+        "Edit an existing file by replacing exact text. Prefer this over write_file for small or localized changes.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to the file to edit (relative to project root)",
+          },
+          oldText: {
+            type: "string",
+            description: "Exact text to find in the file",
+          },
+          newText: {
+            type: "string",
+            description: "Replacement text",
+          },
+          replaceAll: {
+            type: "boolean",
+            description: "Replace all exact matches instead of only the first one (default: false)",
+          },
+        },
+        required: ["path", "oldText", "newText"],
       },
     },
   },
@@ -130,10 +160,36 @@ export async function executeTool(
     case "write_file": {
       const filePath = join(cwd, args.path as string);
       try {
+        mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, args.content as string, "utf-8");
         return `✅ Wrote ${(args.content as string).length} bytes to ${args.path}`;
       } catch (e) {
         return `Error writing file: ${e}`;
+      }
+    }
+
+    case "edit_file": {
+      const filePath = join(cwd, args.path as string);
+      if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
+      try {
+        const oldText = String(args.oldText ?? "");
+        const newText = String(args.newText ?? "");
+        const replaceAll = Boolean(args.replaceAll);
+        const content = readFileSync(filePath, "utf-8");
+        if (!oldText) return "Error: oldText cannot be empty.";
+        if (!content.includes(oldText)) {
+          return `Error: Could not find exact text in ${args.path}`;
+        }
+
+        const matchCount = content.split(oldText).length - 1;
+        const nextContent = replaceAll
+          ? content.split(oldText).join(newText)
+          : content.replace(oldText, newText);
+
+        writeFileSync(filePath, nextContent, "utf-8");
+        return `✅ Edited ${args.path} (${replaceAll ? matchCount : 1} replacement${replaceAll ? (matchCount === 1 ? "" : "s") : ""})`;
+      } catch (e) {
+        return `Error editing file: ${e}`;
       }
     }
 
