@@ -2318,8 +2318,18 @@ function looksLikeMultilinePaste(data: string): boolean {
 
 function flushBurst(): void {
   if (!burstBuffer) return;
-  const buffered = burstBuffer;
+  let buffered = burstBuffer;
   burstBuffer = "";
+
+  // Strip any bracketed paste marker fragments that accumulated across
+  // individual character chunks (terminal sends [, 2, 0, 1, ~ separately)
+  buffered = buffered.replace(/\x1b?\[?20[01]~/g, "");
+  buffered = buffered.replace(/20[01]~/g, "");
+
+  if (!buffered || !buffered.trim()) {
+    pasteLog("BURST FLUSH stripped to empty — swallowed marker");
+    return;
+  }
 
   const isMultiline = looksLikeMultilinePaste(buffered);
   pasteLog(`BURST FLUSH len=${buffered.length} multiline=${isMultiline}`);
