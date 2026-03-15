@@ -106,14 +106,6 @@ Then run:
 codemaxxing
 ```
 
-## First-run sanity check
-
-Once it launches, a quick smoke test is:
-- type `/`
-- open `/theme`
-- open `/skills`
-- paste a multiline block and confirm it becomes a paste badge
-- send one normal prompt
 
 ---
 
@@ -198,10 +190,9 @@ Downloadable skill packs that teach the agent domain expertise. Ships with 21 bu
 /skills on/off X     # Toggle per session
 ```
 
-Project-level config: add `.codemaxxing/skills.json` to scope skills per project.
 
 ### 📋 CODEMAXXING.md — Project Rules
-Drop a `CODEMAXXING.md` in your project root for project-specific instructions. Auto-loaded every session. Also supports `.cursorrules` for Cursor migrants.
+Drop a `CODEMAXXING.md` in your project root for project-specific instructions. It gets loaded automatically for that project.
 
 ### 🔧 Auto-Lint
 Automatically runs your linter after every file edit and feeds errors back to the model for auto-fix. Detects eslint, biome, ruff, clippy, golangci-lint, and more.
@@ -211,7 +202,7 @@ Automatically runs your linter after every file edit and feeds errors back to th
 Scans your codebase and builds a map of functions, classes, and types. The model knows what exists where without reading every file.
 
 ### 📦 Context Compression
-When conversation history exceeds 80k tokens, older messages are automatically summarized to free up context. Configurable via `contextCompressionThreshold`.
+When conversation history gets too large, older messages are automatically summarized to free up context.
 
 ### 💰 Cost Tracking
 Per-session token usage and estimated cost in the status bar. Pricing for 20+ common models. Saved to session history.
@@ -239,11 +230,10 @@ Conversations auto-save to SQLite. Pick up where you left off:
 - `/resume` — interactive session picker
 
 ### 🔌 MCP Support (Model Context Protocol)
-Connect to external tools via the industry-standard MCP protocol. Databases, GitHub, Slack, browsers — anything with an MCP server.
-- Compatible with `.cursor/mcp.json` and `opencode.json` configs
+Connect to external tools via the MCP standard: databases, GitHub, Slack, browsers, and more.
 - `/mcp` — show connected servers
 - `/mcp add github npx -y @modelcontextprotocol/server-github` — add a server
-- `/mcp tools` — list all available MCP tools
+- `/mcp tools` — list available MCP tools
 
 ### 🖥️ Zero-Setup Local LLM
 First time with no LLM? Codemaxxing walks you through it:
@@ -394,7 +384,6 @@ Drop a `CODEMAXXING.md` file in your project root to give the model extra contex
 - **MCP:** [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)
 - **Sessions:** [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 - **Local LLM:** Ollama integration (auto-install, pull, manage)
-- **Tests:** Vitest — 42 tests across 9 test files covering commands, tools, config, paste handling, and agent behavior
 - **Zero cloud dependencies** — everything runs locally unless you choose a remote provider
 
 ## Inspired By
