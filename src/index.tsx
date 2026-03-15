@@ -2266,6 +2266,34 @@ process.stdout.write("\x1b[?2004h");
 let pasteBuffer = "";
 let inPaste = false;
 
+function emitPasteChunk(content: string): true {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return true;
+
+  const lineCount = normalized.split("\n").length;
+  if (lineCount > 2) {
+    pasteEvents.emit("paste", { content: normalized, lines: lineCount });
+    return true;
+  }
+
+  const sanitized = normalized.replace(/\n/g, " ");
+  if (sanitized) {
+    origPush(sanitized, "utf-8" as any);
+  }
+  return true;
+}
+
+function looksLikeRawMultilinePaste(data: string): boolean {
+  const normalized = data.replace(/\x1b\[20[01]~/g, "");
+  const newlineMatches = normalized.match(/\r?\n/g) ?? [];
+  const newlineCount = newlineMatches.length;
+  const contentLength = normalized.replace(/[\r\n]/g, "").trim().length;
+
+  // Avoid swallowing normal Enter presses while still catching terminals that
+  // don't support bracketed paste and dump the whole paste as one raw chunk.
+  return newlineCount >= 2 || (newlineCount >= 1 && contentLength >= 40);
+}
+
 const origPush = process.stdin.push.bind(process.stdin);
 (process.stdin as any).push = function (chunk: any, encoding?: any) {
   if (chunk === null) return origPush(chunk, encoding);
@@ -2285,22 +2313,9 @@ const origPush = process.stdin.push.bind(process.stdin);
     pasteBuffer += data;
     inPaste = false;
 
-    const content = pasteBuffer.trim();
+    const content = pasteBuffer;
     pasteBuffer = "";
-    const lineCount = content.split("\n").length;
-
-    if (lineCount > 2) {
-      // Multi-line paste → store as chunk, don't send to input
-      pasteEvents.emit("paste", { content, lines: lineCount });
-      return true;
-    }
-
-    // Short paste (1-2 lines) — send as normal input
-    const sanitized = content.replace(/\r?\n/g, " ");
-    if (sanitized) {
-      return origPush(sanitized, "utf-8" as any);
-    }
-    return true;
+    return emitPasteChunk(content);
   }
 
   if (inPaste) {
@@ -2309,6 +2324,11 @@ const origPush = process.stdin.push.bind(process.stdin);
   }
 
   data = data.replace(/\x1b\[20[01]~/g, "");
+
+  if (looksLikeRawMultilinePaste(data)) {
+    return emitPasteChunk(data);
+  }
+
   return origPush(typeof chunk === "string" ? data : Buffer.from(data), encoding);
 };
 
