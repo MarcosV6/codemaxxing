@@ -2355,11 +2355,14 @@ function flushBurst(): void {
   // Strip full and partial bracketed paste markers — catch every possible fragment
   // Full: \x1b[200~ / \x1b[201~  Partial: [200~ / [201~  Bare: 200~ / 201~
   data = data.replace(/\x1b?\[?20[01]~/g, "");
-  // Belt-and-suspenders: literal string replacements for fragments that survive regex
-  if (data.includes("200~")) data = data.split("200~").join("");
-  if (data.includes("201~")) data = data.split("201~").join("");
-  if (data.includes("[200~")) data = data.split("[200~").join("");
-  if (data.includes("[201~")) data = data.split("[201~").join("");
+  // Belt-and-suspenders: catch any residual marker fragments with multiple passes
+  data = data.replace(/\[20[01]~/g, "");      // [200~ or [201~
+  data = data.replace(/20[01]~/g, "");        // 200~ or 201~
+  data = data.replace(/\[\d01~/g, "");        // any [Xdigit01~
+  // Final paranoia pass: remove anything that looks like a closing bracket-tilde
+  if (data.includes("[201") || data.includes("[200")) {
+    data = data.replace(/\[[0-9]*0?[01]~?/g, "");
+  }
 
   // ── Bracketed paste handling ──
   if (hadStart) {
