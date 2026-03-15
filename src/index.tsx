@@ -2279,9 +2279,9 @@ const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish deliveri
 
 // Debug paste: set CODEMAXXING_DEBUG_PASTE=1 to log all stdin chunks to /tmp/codemaxxing-paste-debug.log
 const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
-import { appendFileSync } from "node:fs";
 function pasteLog(msg: string): void {
   if (!PASTE_DEBUG) return;
+  const { appendFileSync } = require("node:fs");
   const escaped = msg.replace(/\x1b/g, "\\x1b").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
   try { appendFileSync("/tmp/codemaxxing-paste-debug.log", `[${Date.now()}] ${escaped}\n`); } catch {}
 }
