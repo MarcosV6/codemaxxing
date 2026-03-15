@@ -12,8 +12,9 @@ import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
 import { getTheme, listThemes, THEMES, DEFAULT_THEME, type Theme } from "./themes.js";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "./utils/auth.js";
-import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, searchRegistry, createSkillScaffold, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
+import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills, getActiveSkillCount } from "./utils/skills.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
+import { tryHandleSkillsCommand } from "./commands/skills.js";
 import { detectHardware, formatBytes, type HardwareInfo } from "./utils/hardware.js";
 import { getRecommendations, getRecommendationsWithLlmfit, getFitIcon, isLlmfitAvailable, type ScoredModel } from "./utils/models.js";
 import { isOllamaInstalled, isOllamaRunning, getOllamaInstallCommand, startOllama, stopOllama, pullModel, listInstalledModelsDetailed, deleteModel, getGPUMemoryUsage, type PullProgress } from "./utils/ollama.js";
@@ -561,86 +562,18 @@ function App() {
       return;
     }
     // ── Skills commands (work without agent) ──
-    if (trimmed === "/skills") {
-      setSkillsPicker("menu");
-      setSkillsPickerIndex(0);
-      return;
-    }
-    if (trimmed.startsWith("/skills install ")) {
-      const name = trimmed.replace("/skills install ", "").trim();
-      const result = installSkill(name);
-      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
-      return;
-    }
-    if (trimmed.startsWith("/skills remove ")) {
-      const name = trimmed.replace("/skills remove ", "").trim();
-      const result = removeSkill(name);
-      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}` : `✗ ${result.message}`);
-      return;
-    }
-    if (trimmed === "/skills list") {
-      const installed = listInstalledSkills();
-      if (installed.length === 0) {
-        addMsg("info", "No skills installed. Use /skills to browse & install.");
-      } else {
-        const active = getActiveSkills(process.cwd(), sessionDisabledSkills);
-        const lines = installed.map((s) => {
-          const isActive = active.includes(s.name);
-          const disabledBySession = sessionDisabledSkills.has(s.name);
-          const status = disabledBySession ? " (off)" : isActive ? " (on)" : "";
-          return `  ${isActive ? "●" : "○"} ${s.name} — ${s.description}${status}`;
-        });
-        addMsg("info", `Installed skills:\n${lines.join("\n")}`);
-      }
-      return;
-    }
-    if (trimmed.startsWith("/skills search ")) {
-      const query = trimmed.replace("/skills search ", "").trim();
-      const results = searchRegistry(query);
-      if (results.length === 0) {
-        addMsg("info", `No skills found matching "${query}".`);
-      } else {
-        const installed = listInstalledSkills().map((s) => s.name);
-        const lines = results.map((s) => {
-          const mark = installed.includes(s.name) ? " ✓" : "";
-          return `  ${s.name} — ${s.description}${mark}`;
-        });
-        addMsg("info", `Registry matches:\n${lines.join("\n")}`);
-      }
-      return;
-    }
-    if (trimmed.startsWith("/skills create ")) {
-      const name = trimmed.replace("/skills create ", "").trim();
-      if (!name) {
-        addMsg("info", "Usage: /skills create <name>");
-        return;
-      }
-      const result = createSkillScaffold(name);
-      addMsg(result.ok ? "info" : "error", result.ok ? `✅ ${result.message}\n  Edit: ${result.path}/prompt.md` : `✗ ${result.message}`);
-      return;
-    }
-    if (trimmed.startsWith("/skills on ")) {
-      const name = trimmed.replace("/skills on ", "").trim();
-      const installed = listInstalledSkills().map((s) => s.name);
-      if (!installed.includes(name)) {
-        addMsg("error", `Skill "${name}" is not installed.`);
-        return;
-      }
-      setSessionDisabledSkills((prev) => { const next = new Set(prev); next.delete(name); return next; });
-      if (agent) agent.enableSkill(name);
-      addMsg("info", `✅ Enabled skill: ${name}`);
-      return;
-    }
-    if (trimmed.startsWith("/skills off ")) {
-      const name = trimmed.replace("/skills off ", "").trim();
-      const installed = listInstalledSkills().map((s) => s.name);
-      if (!installed.includes(name)) {
-        addMsg("error", `Skill "${name}" is not installed.`);
-        return;
-      }
-      setSessionDisabledSkills((prev) => { const next = new Set(prev); next.add(name); return next; });
-      if (agent) agent.disableSkill(name);
-      addMsg("info", `✅ Disabled skill: ${name} (session only)`);
+    if (tryHandleSkillsCommand({
+      trimmed,
+      cwd: process.cwd(),
+      addMsg,
+      agent,
+      sessionDisabledSkills,
+      setSkillsPicker,
+      setSkillsPickerIndex,
+      setSessionDisabledSkills,
+      setInput,
+      setInputKey,
+    })) {
       return;
     }
     if (trimmed.startsWith("/theme")) {
