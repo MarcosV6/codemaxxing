@@ -2262,110 +2262,111 @@ const pasteEvents = new EventEmitter();
 process.stdout.write("\x1b[?2004h");
 
 // Intercept stdin to handle pasted content
-// Bracketed paste: \x1b[200~ ... \x1b[201~
-let pasteBuffer = "";
-let inPaste = false;
-let rawBurstBuffer = "";
-let rawBurstTimer: NodeJS.Timeout | null = null;
-const RAW_PASTE_WINDOW_MS = 35;
+// Strategy: patch emit('data') instead of push() — this is the ONE path all data
+// must travel through to reach Ink's listeners, regardless of how the TTY/stream
+// delivers it internally.
+//
+// Two detection layers:
+// 1. Bracketed paste escape sequences (\x1b[200~ ... \x1b[201~)
+// 2. Burst buffering — accumulate rapid-fire chunks over a short window and check
+//    whether the combined content looks like a multiline paste.
 
-function emitPasteChunk(content: string): true {
+let bracketedBuffer = "";
+let inBracketedPaste = false;
+let burstBuffer = "";
+let burstTimer: NodeJS.Timeout | null = null;
+const BURST_WINDOW_MS = 25; // Short enough to feel instant, long enough to catch paste bursts
+
+const origEmit = process.stdin.emit.bind(process.stdin);
+
+function handlePasteContent(content: string): void {
   const normalized = content.replace(/\r\n/g, "\n").trim();
-  if (!normalized) return true;
+  if (!normalized) return;
 
   const lineCount = normalized.split("\n").length;
   if (lineCount > 2) {
+    // Real multiline paste → badge it
     pasteEvents.emit("paste", { content: normalized, lines: lineCount });
-    return true;
-  }
-
-  const sanitized = normalized.replace(/\n/g, " ");
-  if (sanitized) {
-    origPush(sanitized, "utf-8" as any);
-  }
-  return true;
-}
-
-function looksLikeRawMultilinePaste(data: string): boolean {
-  const normalized = data.replace(/\x1b\[20[01]~/g, "");
-  const newlineMatches = normalized.match(/\r?\n/g) ?? [];
-  const newlineCount = newlineMatches.length;
-  const contentLength = normalized.replace(/[\r\n]/g, "").trim().length;
-
-  // Catch real multiline pastes while avoiding normal Enter presses.
-  return newlineCount >= 2 || (newlineCount >= 1 && contentLength >= 40);
-}
-
-function flushRawBurstBuffer(): void {
-  if (!rawBurstBuffer) return;
-
-  const buffered = rawBurstBuffer;
-  rawBurstBuffer = "";
-
-  if (looksLikeRawMultilinePaste(buffered)) {
-    emitPasteChunk(buffered);
     return;
   }
 
-  origPush(Buffer.from(buffered), undefined as any);
+  // Short paste (1-2 lines) → collapse to single line and forward as normal input
+  const sanitized = normalized.replace(/\n/g, " ");
+  if (sanitized) {
+    origEmit("data", sanitized);
+  }
 }
 
-function scheduleRawBurstFlush(): void {
-  if (rawBurstTimer) clearTimeout(rawBurstTimer);
-  rawBurstTimer = setTimeout(() => {
-    rawBurstTimer = null;
-    flushRawBurstBuffer();
-  }, RAW_PASTE_WINDOW_MS);
+function looksLikeMultilinePaste(data: string): boolean {
+  const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ""); // Strip all ANSI escapes
+  const newlines = (clean.match(/\r?\n/g) ?? []).length;
+  const printable = clean.replace(/[\r\n]/g, "").trim().length;
+
+  return newlines >= 2 || (newlines >= 1 && printable >= 40);
 }
 
-const origPush = process.stdin.push.bind(process.stdin);
-(process.stdin as any).push = function (chunk: any, encoding?: any) {
-  if (chunk === null) {
-    if (rawBurstTimer) {
-      clearTimeout(rawBurstTimer);
-      rawBurstTimer = null;
-    }
-    flushRawBurstBuffer();
-    return origPush(chunk, encoding);
+function flushBurst(): void {
+  if (!burstBuffer) return;
+  const buffered = burstBuffer;
+  burstBuffer = "";
+
+  if (looksLikeMultilinePaste(buffered)) {
+    handlePasteContent(buffered);
+  } else {
+    // Normal typing — forward to Ink
+    origEmit("data", buffered);
+  }
+}
+
+(process.stdin as any).emit = function (event: string, ...args: any[]): boolean {
+  // Pass through non-data events untouched
+  if (event !== "data") {
+    return origEmit(event, ...args);
   }
 
+  const chunk = args[0];
   let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
 
+  // ── Bracketed paste handling ──
   const hasStart = data.includes("\x1b[200~");
   const hasEnd = data.includes("\x1b[201~");
 
-  if (hasStart || hasEnd || inPaste) {
-    if (rawBurstTimer) {
-      clearTimeout(rawBurstTimer);
-      rawBurstTimer = null;
-    }
-    flushRawBurstBuffer();
-  }
-
   if (hasStart) {
-    inPaste = true;
+    // Flush any pending burst before entering bracketed mode
+    if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+    flushBurst();
+
+    inBracketedPaste = true;
     data = data.replace(/\x1b\[200~/g, "");
   }
 
   if (hasEnd) {
     data = data.replace(/\x1b\[201~/g, "");
-    pasteBuffer += data;
-    inPaste = false;
+    bracketedBuffer += data;
+    inBracketedPaste = false;
 
-    const content = pasteBuffer;
-    pasteBuffer = "";
-    return emitPasteChunk(content);
-  }
-
-  if (inPaste) {
-    pasteBuffer += data;
+    const content = bracketedBuffer;
+    bracketedBuffer = "";
+    handlePasteContent(content);
     return true;
   }
 
+  if (inBracketedPaste) {
+    bracketedBuffer += data;
+    return true;
+  }
+
+  // ── Burst buffering for non-bracketed paste ──
+  // Strip stray bracketed paste markers that might appear outside a proper pair
   data = data.replace(/\x1b\[20[01]~/g, "");
 
-  rawBurstBuffer += data;
-  scheduleRawBurstFlush();
+  burstBuffer += data;
+  if (burstTimer) clearTimeout(burstTimer);
+  burstTimer = setTimeout(() => {
+    burstTimer = null;
+    flushBurst();
+  }, BURST_WINDOW_MS);
+
   return true;
 };
 
