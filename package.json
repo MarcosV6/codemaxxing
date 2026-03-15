@@ -1,6 +1,6 @@
 {
   "name": "codemaxxing",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Open-source terminal coding agent. Connect any LLM. Max your code.",
   "main": "dist/index.js",
   "bin": {
