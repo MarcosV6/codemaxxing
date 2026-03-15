@@ -2289,7 +2289,7 @@ function pasteLog(msg: string): void {
 const origEmit = process.stdin.emit.bind(process.stdin);
 
 function handlePasteContent(content: string): void {
-  const normalized = content.replace(/\r\n/g, "\n").trim();
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return;
 
   const lineCount = normalized.split("\n").length;
@@ -2308,8 +2308,10 @@ function handlePasteContent(content: string): void {
 
 function looksLikeMultilinePaste(data: string): boolean {
   const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ""); // Strip all ANSI escapes
-  const newlines = (clean.match(/\r?\n/g) ?? []).length;
-  const printable = clean.replace(/[\r\n]/g, "").trim().length;
+  // Count \r\n, \n, and bare \r as line breaks (macOS terminals often use bare \r)
+  const normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const newlines = (normalized.match(/\n/g) ?? []).length;
+  const printable = normalized.replace(/\n/g, "").trim().length;
 
   return newlines >= 2 || (newlines >= 1 && printable >= 40);
 }
