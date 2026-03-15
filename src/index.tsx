@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
 import TextInput from "ink-text-input";
+import { consumePendingPasteEndMarkerChunk } from "./utils/paste.js";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
@@ -2275,6 +2276,7 @@ let bracketedBuffer = "";
 let inBracketedPaste = false;
 let burstBuffer = "";
 let burstTimer: NodeJS.Timeout | null = null;
+let pendingPasteEndMarker = { active: false, buffer: "" };
 const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish delivering paste
 
 // Debug paste: set CODEMAXXING_DEBUG_PASTE=1 to log all stdin chunks to /tmp/codemaxxing-paste-debug.log
@@ -2295,6 +2297,10 @@ function handlePasteContent(content: string): void {
   const lineCount = normalized.split("\n").length;
   if (lineCount > 2) {
     // Real multiline paste → badge it
+    // Some terminals dribble the closing bracketed-paste marker (`[201~`)
+    // one character at a time *after* the paste payload. Arm a tiny
+    // swallow-state so those trailing fragments never leak into the input.
+    pendingPasteEndMarker = { active: true, buffer: "" };
     pasteEvents.emit("paste", { content: normalized, lines: lineCount });
     return;
   }
@@ -2352,6 +2358,14 @@ function flushBurst(): void {
   let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
 
   pasteLog(`CHUNK len=${data.length} raw=${data.substring(0, 200)}`);
+
+  const pendingResult = consumePendingPasteEndMarkerChunk(data, pendingPasteEndMarker);
+  pendingPasteEndMarker = pendingResult.nextState;
+  data = pendingResult.remaining;
+  if (!data) {
+    pasteLog("PENDING END MARKER swallowed chunk");
+    return true;
+  }
 
   // Aggressively strip ALL bracketed paste escape sequences from every chunk,
   // regardless of context. Some terminals split markers across chunks or send
