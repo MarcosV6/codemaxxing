@@ -13,6 +13,26 @@ export function shouldSwallowPostPasteDebris(chunk: string): boolean {
   return /^[\x1b\[\]0-9;~]+$/.test(chunk);
 }
 
+export function sanitizeInputArtifacts(value: string): string {
+  if (!value) return value;
+
+  let out = value;
+
+  // Remove full bracketed-paste markers wherever they appear.
+  out = out.replace(/\x1b\[20[01]~/g, "");
+  out = out.replace(/\[20[01]~/g, "");
+  out = out.replace(/(^|\s)20[01]~(?=\s|$)/g, "$1");
+
+  // Defensive UI-layer cleanup: if the entire current input consists only of
+  // tiny control-fragment characters, wipe it completely instead of rendering
+  // terminal debris like `[201~` to the user.
+  if (out.length <= 8 && /^[\x1b\[\]0-9;~]+$/.test(out)) {
+    return "";
+  }
+
+  return out;
+}
+
 const END_MARKERS = ["\x1b[201~", "[201~", "201~"] as const;
 
 function isPrefixOfAnyMarker(value: string): boolean {

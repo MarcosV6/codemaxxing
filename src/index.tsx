@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import { EventEmitter } from "events";
 import { appendFileSync } from "node:fs";
 import TextInput from "ink-text-input";
-import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris } from "./utils/paste.js";
+import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris, sanitizeInputArtifacts } from "./utils/paste.js";
 import { CodingAgent } from "./agent.js";
 import { loadConfig, saveConfig, detectLocalProvider, detectLocalProviderDetailed, parseCLIArgs, applyOverrides, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
@@ -453,6 +453,8 @@ function App() {
   pastedChunksRef.current = pastedChunks;
 
   const handleSubmit = useCallback(async (value: string) => {
+    value = sanitizeInputArtifacts(value);
+
     // Skip autocomplete if input exactly matches a command (e.g. /models vs /model)
     const isExactCommand = SLASH_COMMANDS.some(c => c.cmd === value.trim());
 
@@ -2215,7 +2217,7 @@ function App() {
             <TextInput
               key={inputKey}
               value={input}
-              onChange={(v) => { setInput(v); setCmdIndex(0); }}
+              onChange={(v) => { setInput(sanitizeInputArtifacts(v)); setCmdIndex(0); }}
               onSubmit={handleSubmit}
             />
           </Box>

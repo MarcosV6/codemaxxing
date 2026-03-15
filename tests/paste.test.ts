@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris } from "../src/utils/paste.js";
+import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris, sanitizeInputArtifacts } from "../src/utils/paste.js";
 
 const idle = { active: false, buffer: "" };
 const armed = { active: true, buffer: "" };
@@ -16,6 +16,22 @@ describe("shouldSwallowPostPasteDebris", () => {
     expect(shouldSwallowPostPasteDebris("a")).toBe(false);
     expect(shouldSwallowPostPasteDebris("and keep it simple")).toBe(false);
     expect(shouldSwallowPostPasteDebris("hello")).toBe(false);
+  });
+});
+
+describe("sanitizeInputArtifacts", () => {
+  it("removes leaked [201~ from the visible input value", () => {
+    expect(sanitizeInputArtifacts("[201~")).toBe("");
+    expect(sanitizeInputArtifacts("hello[201~")).toBe("hello");
+  });
+
+  it("removes ESC-form markers too", () => {
+    expect(sanitizeInputArtifacts("\x1b[201~")).toBe("");
+  });
+
+  it("keeps normal user text intact", () => {
+    expect(sanitizeInputArtifacts("and keep it simple")).toBe("and keep it simple");
+    expect(sanitizeInputArtifacts("[")).toBe("");
   });
 });
 
