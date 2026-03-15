@@ -2275,7 +2275,7 @@ let bracketedBuffer = "";
 let inBracketedPaste = false;
 let burstBuffer = "";
 let burstTimer: NodeJS.Timeout | null = null;
-const BURST_WINDOW_MS = 25; // Short enough to feel instant, long enough to catch paste bursts
+const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish delivering paste
 
 const origEmit = process.stdin.emit.bind(process.stdin);
 
@@ -2327,21 +2327,26 @@ function flushBurst(): void {
   const chunk = args[0];
   let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
 
-  // ── Bracketed paste handling ──
-  const hasStart = data.includes("\x1b[200~");
-  const hasEnd = data.includes("\x1b[201~");
+  // Aggressively strip ALL bracketed paste escape sequences from every chunk,
+  // regardless of context. Some terminals split markers across chunks or send
+  // them in unexpected positions. We never want \x1b[200~ or \x1b[201~ (or
+  // partial fragments like [200~ / [201~) to reach the input component.
+  const hadStart = data.includes("\x1b[200~") || data.includes("[200~");
+  const hadEnd = data.includes("\x1b[201~") || data.includes("[201~");
 
-  if (hasStart) {
+  // Strip full and partial bracketed paste markers
+  data = data.replace(/\x1b?\[20[01]~/g, "");
+
+  // ── Bracketed paste handling ──
+  if (hadStart) {
     // Flush any pending burst before entering bracketed mode
     if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
     flushBurst();
 
     inBracketedPaste = true;
-    data = data.replace(/\x1b\[200~/g, "");
   }
 
-  if (hasEnd) {
-    data = data.replace(/\x1b\[201~/g, "");
+  if (hadEnd) {
     bracketedBuffer += data;
     inBracketedPaste = false;
 
@@ -2357,8 +2362,6 @@ function flushBurst(): void {
   }
 
   // ── Burst buffering for non-bracketed paste ──
-  // Strip stray bracketed paste markers that might appear outside a proper pair
-  data = data.replace(/\x1b\[20[01]~/g, "");
 
   burstBuffer += data;
   if (burstTimer) clearTimeout(burstTimer);
