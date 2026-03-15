@@ -2277,6 +2277,15 @@ let burstBuffer = "";
 let burstTimer: NodeJS.Timeout | null = null;
 const BURST_WINDOW_MS = 50; // Long enough for slow terminals to finish delivering paste
 
+// Debug paste: set CODEMAXXING_DEBUG_PASTE=1 to log all stdin chunks to /tmp/codemaxxing-paste-debug.log
+const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
+import { appendFileSync } from "node:fs";
+function pasteLog(msg: string): void {
+  if (!PASTE_DEBUG) return;
+  const escaped = msg.replace(/\x1b/g, "\\x1b").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  try { appendFileSync("/tmp/codemaxxing-paste-debug.log", `[${Date.now()}] ${escaped}\n`); } catch {}
+}
+
 const origEmit = process.stdin.emit.bind(process.stdin);
 
 function handlePasteContent(content: string): void {
@@ -2310,7 +2319,10 @@ function flushBurst(): void {
   const buffered = burstBuffer;
   burstBuffer = "";
 
-  if (looksLikeMultilinePaste(buffered)) {
+  const isMultiline = looksLikeMultilinePaste(buffered);
+  pasteLog(`BURST FLUSH len=${buffered.length} multiline=${isMultiline}`);
+
+  if (isMultiline) {
     handlePasteContent(buffered);
   } else {
     // Normal typing — forward to Ink
@@ -2327,12 +2339,16 @@ function flushBurst(): void {
   const chunk = args[0];
   let data = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
 
+  pasteLog(`CHUNK len=${data.length} raw=${data.substring(0, 200)}`);
+
   // Aggressively strip ALL bracketed paste escape sequences from every chunk,
   // regardless of context. Some terminals split markers across chunks or send
   // them in unexpected positions. We never want \x1b[200~ or \x1b[201~ (or
   // partial fragments like [200~ / [201~) to reach the input component.
   const hadStart = data.includes("\x1b[200~") || data.includes("[200~");
   const hadEnd = data.includes("\x1b[201~") || data.includes("[201~");
+
+  pasteLog(`MARKERS start=${hadStart} end=${hadEnd} inBracketed=${inBracketedPaste}`);
 
   // Strip full and partial bracketed paste markers
   data = data.replace(/\x1b?\[20[01]~/g, "");
@@ -2344,6 +2360,7 @@ function flushBurst(): void {
     flushBurst();
 
     inBracketedPaste = true;
+    pasteLog("ENTERED bracketed paste mode");
   }
 
   if (hadEnd) {
@@ -2352,12 +2369,14 @@ function flushBurst(): void {
 
     const content = bracketedBuffer;
     bracketedBuffer = "";
+    pasteLog(`BRACKETED COMPLETE len=${content.length} lines=${content.split("\\n").length}`);
     handlePasteContent(content);
     return true;
   }
 
   if (inBracketedPaste) {
     bracketedBuffer += data;
+    pasteLog(`BRACKETED BUFFERING total=${bracketedBuffer.length}`);
     return true;
   }
 
