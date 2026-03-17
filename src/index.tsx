@@ -515,18 +515,22 @@ function App() {
       return;
     }
 
-    // Commands below require an active LLM connection
-    if (!agent) {
-      addMsg("info", "⚠ No LLM connected. Use /login to authenticate with a provider, or start a local server.");
+    // Commands that work without an agent (needed for first-time setup)
+    // /models and /login are handled below and don't need an agent
+    const agentlessCommands = ["/models", "/model", "/login"];
+    const isAgentlessCmd = agentlessCommands.some(cmd => trimmed === cmd || trimmed.startsWith(cmd + " "));
+    
+    if (!agent && !isAgentlessCmd) {
+      addMsg("info", "⚠ No LLM connected.\n  Use /login to authenticate, then /models to pick a model.");
       return;
     }
     if (trimmed === "/reset") {
-      agent.reset();
+      agent!.reset();
       addMsg("info", "✅ Conversation reset.");
       return;
     }
     if (trimmed === "/context") {
-      addMsg("info", `Messages in context: ${agent.getContextLength()}`);
+      addMsg("info", `Messages in context: ${agent!.getContextLength()}`);
       return;
     }
     if (trimmed === "/models" || trimmed === "/model") {
@@ -673,35 +677,35 @@ function App() {
         addMsg("info", `Current model: ${modelName}\n  Usage: /models`);
         return;
       }
-      agent.switchModel(newModel);
+      agent!.switchModel(newModel);
       setModelName(newModel);
       addMsg("info", `✅ Switched to model: ${newModel}`);
       return;
     }
     if (trimmed === "/map") {
-      const map = agent.getRepoMap();
+      const map = agent!.getRepoMap();
       if (map) {
         addMsg("info", map);
       } else {
         // Map hasn't been built yet, refresh it
         setLoading(true);
-        const newMap = await agent.refreshRepoMap();
+        const newMap = await agent!.refreshRepoMap();
         addMsg("info", newMap || "No repository map available.");
         setLoading(false);
       }
       return;
     }
     if (trimmed === "/git on") {
-      if (!agent.isGitEnabled()) {
+      if (!agent!.isGitEnabled()) {
         addMsg("info", "✗ Not a git repository");
       } else {
-        agent.setAutoCommit(true);
+        agent!.setAutoCommit(true);
         addMsg("info", "✅ Auto-commits enabled for this session");
       }
       return;
     }
     if (trimmed === "/git off") {
-      agent.setAutoCommit(false);
+      agent!.setAutoCommit(false);
       addMsg("info", "✅ Auto-commits disabled");
       return;
     }
@@ -790,7 +794,7 @@ function App() {
     try {
       // Response is built incrementally via onToken callback
       // send() routes through architect if enabled, otherwise direct chat
-      await agent.send(trimmed);
+      await agent!.send(trimmed);
     } catch (err: any) {
       addMsg("error", `Error: ${err.message}`);
     }

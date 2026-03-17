@@ -510,9 +510,24 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
       ctx.addMsg("info", `✅ Switched to: ${selected.name}`);
       ctx.refreshConnectionBanner();
     } else if (selected && !ctx.agent) {
-      // First-time: trigger reconnect which will create the agent
+      // First-time: save model selection to config, then reconnect
       ctx.addMsg("info", `Initializing with ${selected.name}...`);
-      ctx.connectToProvider?.(false);
+      
+      // Save selected model to config so connectToProvider picks it up
+      import("../config.js").then(({ loadConfig, saveConfig }) => {
+        const config = loadConfig();
+        config.provider = {
+          baseUrl: selected.baseUrl,
+          apiKey: selected.apiKey,
+          model: selected.name,
+          type: selected.providerType === "anthropic" ? "anthropic" : "openai",
+        };
+        saveConfig(config);
+        // Now reconnect with the saved config
+        ctx.connectToProvider?.(false);
+      }).catch((err: any) => {
+        ctx.addMsg("error", `Failed to initialize: ${err.message}`);
+      });
     }
     ctx.setModelPickerGroups(null);
     ctx.setProviderPicker(null);
