@@ -73,6 +73,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
           inputItems.push({
             type: "function_call",
             id: tc.id,
+            call_id: tc.id,
             name: tc.function?.name || tc.name || "",
             arguments: typeof tc.function?.arguments === "string"
               ? tc.function.arguments
