@@ -216,7 +216,10 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Waiting for Anthropic authorization...");
       loginAnthropicOAuth((msg: string) => ctx.addMsg("info", msg))
-        .then((cred) => { ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})`); ctx.setLoading(false); })
+        .then((cred) => { 
+          ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})\n  Next: type /models to pick a model`); 
+          ctx.setLoading(false); 
+        })
         .catch((err: any) => {
           ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key anthropic <your-key>\n  Or set ANTHROPIC_API_KEY env var and restart.\n  Get key at: console.anthropic.com/settings/keys`);
           ctx.setLoading(false);
@@ -233,7 +236,7 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
         ctx.setSpinnerMsg("Waiting for OpenAI authorization...");
         loginOpenAICodexOAuth((msg: string) => ctx.addMsg("info", msg))
           .then((cred) => {
-            ctx.addMsg("info", `✅ OpenAI authenticated! (${cred.label})`);
+            ctx.addMsg("info", `✅ OpenAI authenticated! (${cred.label})\n  Next: type /models to pick a model`);
             ctx.setLoading(false);
           })
           .catch((err: any) => {
@@ -250,7 +253,7 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Waiting for GitHub authorization...");
       copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-        .then(() => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!`); ctx.setLoading(false); })
+        .then(() => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Next: type /models to pick a model`); ctx.setLoading(false); })
         .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
     } else if (method === "api-key") {
       const provider = PROVIDERS.find((p) => p.id === providerId);
@@ -287,7 +290,7 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for authorization...");
         openRouterOAuth((msg: string) => ctx.addMsg("info", msg))
-          .then(() => { ctx.addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`); ctx.setLoading(false); })
+          .then(() => { ctx.addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.\n  Next: type /models to pick a model`); ctx.setLoading(false); })
           .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "device-flow") {
         ctx.setLoginMethodPicker(null);
@@ -295,7 +298,7 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for GitHub authorization...");
         copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-          .then(() => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!`); ctx.setLoading(false); })
+          .then(() => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Next: type /models to pick a model`); ctx.setLoading(false); })
           .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "api-key") {
         ctx.setLoginMethodPicker(null);

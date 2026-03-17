@@ -77,8 +77,24 @@ export async function connectToProvider(
     } else {
       info.push("✗ No local LLM server found.");
       ctx.setConnectionInfo([...info]);
+      
+      // Check if user has saved credentials — if so, auto-show model picker
+      const { getCredential } = await import("../utils/auth.js");
+      const hasAnyCreds = !!getCredential("anthropic") || !!getCredential("openai") || 
+                          !!getCredential("openrouter") || !!getCredential("qwen") || 
+                          !!getCredential("copilot");
+      
+      if (hasAnyCreds) {
+        // User has auth'd before — skip wizard, go straight to /models picker
+        info.push("✔ Found saved credentials. Use /models to pick a model and start coding.");
+        ctx.setConnectionInfo([...info]);
+        ctx.setReady(true);
+        // The user will run /models, which now works without an agent
+        return;
+      }
+      
+      // No creds found — show the setup wizard
       ctx.setReady(true);
-      // Show the setup wizard on first run
       ctx.setWizardScreen("connection");
       ctx.setWizardIndex(0);
       return;
