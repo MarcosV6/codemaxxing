@@ -1,5 +1,6 @@
 import type { Key } from "ink";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "../utils/auth.js";
+import { loginOpenAICodexOAuth } from "../utils/openai-oauth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills } from "../utils/skills.js";
 import { listThemes, getTheme, THEMES } from "../themes.js";
 import { getSession, loadMessages, deleteSession } from "../utils/sessions.js";
@@ -205,10 +206,26 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
       anthropicSetupToken((msg: string) => ctx.addMsg("info", msg))
         .then((cred) => { ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})`); ctx.setLoading(false); })
         .catch((err: any) => { ctx.addMsg("error", `Auth failed: ${err.message}`); ctx.setLoading(false); });
-    } else if (method === "cached-token" && providerId === "openai") {
+    } else if (method === "oauth" && providerId === "openai") {
+      // Try cached Codex token first as a quick path
       const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
-      if (imported) { ctx.addMsg("info", `✅ Imported Codex credentials! (${imported.label})`); }
-      else { ctx.addMsg("info", "Could not auto-detect Codex CLI credentials.\n  Set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys"); }
+      if (imported) {
+        ctx.addMsg("info", `✅ Imported Codex credentials! (${imported.label})`);
+      } else {
+        // Primary flow: browser OAuth
+        ctx.addMsg("info", "Opening browser for ChatGPT login...");
+        ctx.setLoading(true);
+        ctx.setSpinnerMsg("Waiting for OpenAI authorization...");
+        loginOpenAICodexOAuth((msg: string) => ctx.addMsg("info", msg))
+          .then((cred) => {
+            ctx.addMsg("info", `✅ OpenAI authenticated! (${cred.label})`);
+            ctx.setLoading(false);
+          })
+          .catch((err: any) => {
+            ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys`);
+            ctx.setLoading(false);
+          });
+      }
     } else if (method === "cached-token" && providerId === "qwen") {
       const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
       if (imported) { ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`); }

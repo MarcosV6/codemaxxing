@@ -18,6 +18,7 @@ import { join } from "path";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { randomBytes, createHash } from "crypto";
 import { execSync, exec } from "child_process";
+import { detectOpenAICodexOAuth } from "./openai-oauth.js";
 
 // ── Types ──
 
@@ -28,6 +29,8 @@ export interface AuthCredential {
   baseUrl: string;
   label?: string; // Human-readable label (e.g. "OpenRouter (OAuth)", "Anthropic (Max subscription)")
   expiresAt?: string; // ISO date string, if applicable
+  refreshToken?: string; // OAuth refresh token (e.g. OpenAI Codex OAuth)
+  oauthExpires?: number; // OAuth token expiry timestamp in ms
   createdAt: string;
 }
 
@@ -72,7 +75,7 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: "openai",
     name: "OpenAI (ChatGPT)",
-    methods: ["cached-token", "api-key"],
+    methods: ["oauth", "api-key"],
     baseUrl: "https://api.openai.com/v1",
     consoleUrl: "https://platform.openai.com/api-keys",
     description: "GPT-4o, GPT-5, o1 — use your ChatGPT subscription or API key",
@@ -358,6 +361,16 @@ export async function anthropicSetupToken(onStatus?: (msg: string) => void): Pro
 // ── OpenAI / Codex CLI Cached Token ──
 
 export function detectCodexToken(): string | null {
+  // Check OpenClaw auth-profiles first (for Codex OAuth tokens)
+  try {
+    const oauthCreds = detectOpenAICodexOAuth();
+    if (oauthCreds?.access) {
+      return oauthCreds.access;
+    }
+  } catch {
+    // detection failed, fall through
+  }
+
   // Codex CLI stores OAuth tokens — check common locations
   const locations = [
     join(homedir(), ".codex", "auth.json"),
@@ -595,6 +608,13 @@ export function detectAvailableAuth(): Array<{ provider: string; method: string;
       description: "Claude Code CLI detected — can link your Anthropic subscription",
     });
   }
+
+  // OpenAI: always offer OAuth login, and note if cached tokens exist
+  available.push({
+    provider: "openai",
+    method: "oauth",
+    description: "Log in with your ChatGPT subscription (browser OAuth)",
+  });
 
   if (detectCodexToken()) {
     available.push({

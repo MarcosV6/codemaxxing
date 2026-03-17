@@ -68,6 +68,10 @@ interface LoginMethodPickerProps {
 }
 
 export function LoginMethodPickerUI({ loginMethodPicker, loginMethodIndex, colors }: LoginMethodPickerProps) {
+  // Provider-specific label overrides
+  const providerLabels: Record<string, Record<string, string>> = {
+    openai: { "oauth": "🔐 Login with ChatGPT (browser)" },
+  };
   const labels: Record<string, string> = {
     "oauth": "🌐 Browser login (OAuth)",
     "setup-token": "🔑 Link subscription (via Claude Code CLI)",
@@ -75,13 +79,15 @@ export function LoginMethodPickerUI({ loginMethodPicker, loginMethodIndex, color
     "api-key": "🔒 Enter API key manually",
     "device-flow": "📱 Device flow (GitHub)",
   };
+  const getLabel = (method: string) =>
+    providerLabels[loginMethodPicker.provider]?.[method] ?? labels[method] ?? method;
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
       <Text bold color={colors.secondary}>How do you want to authenticate?</Text>
       {loginMethodPicker.methods.map((method, i) => (
         <Text key={method}>
           {i === loginMethodIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-          <Text color={i === loginMethodIndex ? colors.suggestion : colors.primary} bold>{labels[method] ?? method}</Text>
+          <Text color={i === loginMethodIndex ? colors.suggestion : colors.primary} bold>{getLabel(method)}</Text>
         </Text>
       ))}
       <Text dimColor>{"  ↑↓ navigate · Enter select · Esc back"}</Text>
