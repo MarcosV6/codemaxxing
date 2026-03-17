@@ -10,6 +10,8 @@
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
+**🆕 v1.1.0:** Use GPT-5.4 with your ChatGPT Plus subscription — no API key needed. Just `/login` → OpenAI → OAuth. Same access as Codex CLI.
+
 ## Why?
 
 Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM Studio, Ollama, OpenRouter, OpenAI, Anthropic, or any OpenAI-compatible endpoint. Your machine, your model, your rules.
@@ -92,7 +94,24 @@ If no LLM is available, Codemaxxing can guide you through:
 - downloading the model
 - connecting automatically
 
-### Option C — cloud provider
+### Option C — ChatGPT Plus (GPT-5.4, easiest cloud option)
+
+If you have a ChatGPT Plus subscription, get instant access to GPT-5.4 with zero API costs:
+
+```bash
+codemaxxing login
+# → Pick "OpenAI"
+# → Pick "OpenAI (ChatGPT)" 
+# → Browser opens, log in with your ChatGPT account
+# → Done — you now have GPT-5.4, GPT-5, o3, o4-mini
+
+codemaxxing
+# → /model → pick gpt-5.4
+```
+
+No API key required. Uses your ChatGPT subscription limits instead.
+
+### Option D — other cloud providers
 
 Authenticate first:
 
