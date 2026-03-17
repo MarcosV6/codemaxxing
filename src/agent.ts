@@ -16,12 +16,16 @@ import type { ProviderConfig } from "./config.js";
 
 // ── Helper: Create Anthropic client with proper auth ──
 function createAnthropicClient(apiKey: string): Anthropic {
-  // OAuth tokens start with "sk-ant-oat" — set via environment variable
+  // OAuth tokens start with "sk-ant-oat" — need special handling
   if (apiKey.startsWith("sk-ant-oat")) {
-    process.env.ANTHROPIC_AUTH_TOKEN = apiKey;
     return new Anthropic({
+      apiKey: null,
+      authToken: apiKey,
       dangerouslyAllowBrowser: true,
-    });
+      defaultHeaders: {
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+      },
+    } as any);
   }
   // Regular API keys
   return new Anthropic({
