@@ -14,6 +14,13 @@ import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loa
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "./utils/mcp.js";
 import type { ProviderConfig } from "./config.js";
 
+// ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
+function sanitizeSurrogates(text: string): string {
+  // Removes unpaired Unicode surrogates that cause JSON serialization errors in APIs.
+  // Valid emoji (properly paired surrogates) are preserved.
+  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 // ── Helper: Create Anthropic client with proper auth ──
 function createAnthropicClient(apiKey: string): Anthropic {
   // OAuth tokens start with "sk-ant-oat" — need special handling
@@ -582,10 +589,28 @@ export class CodingAgent {
       const anthropicMessages = this.getAnthropicMessages();
       const anthropicTools = this.getAnthropicTools();
 
+      // For OAuth tokens, system prompt must be a structured array with Claude Code identity
+      const isOAuthToken = this.options.provider.apiKey?.startsWith("sk-ant-oat");
+      let systemPrompt: any = this.systemPrompt;
+      if (isOAuthToken) {
+        systemPrompt = [
+          {
+            type: "text" as const,
+            text: "You are Claude Code, Anthropic's official CLI for Claude.",
+          },
+          {
+            type: "text" as const,
+            text: sanitizeSurrogates(this.systemPrompt),
+          },
+        ];
+      } else {
+        systemPrompt = sanitizeSurrogates(this.systemPrompt);
+      }
+
       const stream = client.messages.stream({
         model: this.model,
         max_tokens: this.maxTokens,
-        system: this.systemPrompt,
+        system: systemPrompt,
         messages: anthropicMessages,
         tools: anthropicTools,
       });
