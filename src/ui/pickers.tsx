@@ -307,8 +307,14 @@ export interface GroupedModels {
 
 // ── Provider Picker (step 1) ──
 
+export interface ProviderPickerEntry {
+  name: string;
+  description: string;
+  authed: boolean;
+}
+
 interface ProviderPickerProps {
-  providers: string[];
+  providers: ProviderPickerEntry[];
   selectedIndex: number;
   colors: Theme["colors"];
 }
@@ -316,12 +322,14 @@ interface ProviderPickerProps {
 export function ProviderPicker({ providers, selectedIndex, colors }: ProviderPickerProps) {
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
-      <Text bold color={colors.secondary}>Select provider:</Text>
+      <Text bold color={colors.secondary}>Choose a provider:</Text>
       <Text>{""}</Text>
-      {providers.map((provider, i) => (
-        <Text key={provider}>
-          {"  "}{i === selectedIndex ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
-          <Text color={i === selectedIndex ? colors.primary : undefined}>{provider}</Text>
+      {providers.map((p, i) => (
+        <Text key={p.name}>
+          {i === selectedIndex ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
+          <Text color={i === selectedIndex ? colors.primary : undefined} bold>{p.name}</Text>
+          <Text dimColor>{" — "}{p.description}</Text>
+          {p.authed ? <Text color={colors.success}>{" ✓"}</Text> : null}
         </Text>
       ))}
       <Text>{""}</Text>

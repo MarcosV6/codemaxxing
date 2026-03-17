@@ -45,10 +45,10 @@ export interface InputRouterContext extends WizardContext {
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
   // Provider picker (step 1)
-  providerPicker: string[] | null;
+  providerPicker: Array<{ name: string; description: string; authed: boolean }> | null;
   providerPickerIndex: number;
   setProviderPickerIndex: (fn: (prev: number) => number) => void;
-  setProviderPicker: (val: string[] | null) => void;
+  setProviderPicker: (val: Array<{ name: string; description: string; authed: boolean }> | null) => void;
   selectedProvider: string | null;
   setSelectedProvider: (val: string | null) => void;
 
@@ -477,7 +477,7 @@ function handleProviderPicker(_inputChar: string, key: Key, ctx: InputRouterCont
   }
   if (key.return) {
     const selected = ctx.providerPicker[ctx.providerPickerIndex];
-    ctx.setSelectedProvider(selected);
+    ctx.setSelectedProvider(selected.name);
     ctx.setModelPickerIndex(() => 0);
     return true;
   }

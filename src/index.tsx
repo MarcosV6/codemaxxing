@@ -19,7 +19,7 @@ import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
 import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
-import type { GroupedModels, ModelEntry } from "./ui/pickers.js";
+import type { GroupedModels, ModelEntry, ProviderPickerEntry } from "./ui/pickers.js";
 import { getCredential } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
 import { Banner, ConnectionInfo } from "./ui/banner.js";
@@ -228,7 +228,7 @@ function App() {
   const [modelPickerGroups, setModelPickerGroups] = useState<GroupedModels | null>(null);
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
   const [flatModelList, setFlatModelList] = useState<ModelEntry[]>([]);
-  const [providerPicker, setProviderPicker] = useState<string[] | null>(null);
+  const [providerPicker, setProviderPicker] = useState<ProviderPickerEntry[] | null>(null);
   const [providerPickerIndex, setProviderPickerIndex] = useState(0);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
@@ -532,62 +532,96 @@ function App() {
     if (trimmed === "/models" || trimmed === "/model") {
       addMsg("info", "Fetching available models...");
       const groups: GroupedModels = {};
+      const providerEntries: ProviderPickerEntry[] = [];
 
-      // Collect local Ollama models (always available if running)
+      // Local LLM (Ollama/LM Studio) — always show, auto-detect
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
-          groups["Local (Ollama)"] = ollamaModels.map(m => ({
+          groups["Local (LM Studio / Ollama)"] = ollamaModels.map(m => ({
             name: m.name,
             baseUrl: "http://localhost:1234/v1",
             apiKey: "lm-studio",
             providerType: "openai" as const,
           }));
+          providerEntries.push({ name: "Local (LM Studio / Ollama)", description: "No auth needed — auto-detected", authed: true });
         }
       } catch {
-        // Ollama not available, skip
+        // not running
       }
 
-      // Collect Anthropic models (if authed)
+      // Anthropic
       const anthropicCred = getCredential("anthropic");
+      const claudeModels = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"];
       if (anthropicCred) {
-        const claudeModels = [
-          "claude-sonnet-4-6",
-          "claude-opus-4-6",
-          "claude-haiku-4-5-20251001",
-        ];
-        groups["Anthropic"] = claudeModels.map(m => ({
+        groups["Anthropic (Claude)"] = claudeModels.map(m => ({
           name: m,
           baseUrl: "https://api.anthropic.com",
           apiKey: anthropicCred.apiKey,
           providerType: "anthropic" as const,
         }));
       }
+      providerEntries.push({ name: "Anthropic (Claude)", description: "Claude Opus, Sonnet, Haiku — use your subscription or API key", authed: !!anthropicCred });
 
-      // Collect OpenAI models (if authed)
+      // OpenAI
       const openaiCred = getCredential("openai");
+      const openaiModels = ["gpt-5.4", "gpt-5", "gpt-4.1", "o3", "o4-mini"];
       if (openaiCred) {
         const baseUrl = openaiCred.baseUrl || "https://api.openai.com/v1";
-        const openaiModels = [
-          "gpt-5.4",
-          "gpt-5",
-          "gpt-4.1",
-          "o3",
-          "o4-mini",
-        ];
-        groups["OpenAI"] = openaiModels.map(m => ({
+        groups["OpenAI (ChatGPT)"] = openaiModels.map(m => ({
           name: m,
           baseUrl,
           apiKey: openaiCred.apiKey,
           providerType: "openai" as const,
         }));
       }
+      providerEntries.push({ name: "OpenAI (ChatGPT)", description: "GPT-5, GPT-4.1, o3 — use your ChatGPT subscription or API key", authed: !!openaiCred });
 
-      // Show provider picker first (step 1)
-      const providerNames = Object.keys(groups);
-      if (providerNames.length > 0) {
+      // OpenRouter
+      const openrouterCred = getCredential("openrouter");
+      if (openrouterCred) {
+        try {
+          const orModels = await listModels(openrouterCred.baseUrl || "https://openrouter.ai/api/v1", openrouterCred.apiKey);
+          if (orModels.length > 0) {
+            groups["OpenRouter"] = orModels.slice(0, 20).map(m => ({
+              name: m,
+              baseUrl: openrouterCred.baseUrl || "https://openrouter.ai/api/v1",
+              apiKey: openrouterCred.apiKey,
+              providerType: "openai" as const,
+            }));
+          }
+        } catch { /* skip */ }
+      }
+      providerEntries.push({ name: "OpenRouter", description: "200+ models (Claude, GPT, Gemini, Llama, etc.) — one login", authed: !!openrouterCred });
+
+      // Qwen
+      const qwenCred = getCredential("qwen");
+      if (qwenCred) {
+        groups["Qwen"] = ["qwen-max", "qwen-plus", "qwen-turbo"].map(m => ({
+          name: m,
+          baseUrl: qwenCred.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          apiKey: qwenCred.apiKey,
+          providerType: "openai" as const,
+        }));
+      }
+      providerEntries.push({ name: "Qwen", description: "Qwen 3.5, Qwen Coder — use your Qwen CLI login or API key", authed: !!qwenCred });
+
+      // GitHub Copilot
+      const copilotCred = getCredential("copilot");
+      if (copilotCred) {
+        groups["GitHub Copilot"] = ["gpt-4o", "claude-3.5-sonnet"].map(m => ({
+          name: m,
+          baseUrl: copilotCred.baseUrl || "https://api.githubcopilot.com",
+          apiKey: copilotCred.apiKey,
+          providerType: "openai" as const,
+        }));
+      }
+      providerEntries.push({ name: "GitHub Copilot", description: "Use your GitHub Copilot subscription", authed: !!copilotCred });
+
+      // Show provider picker (step 1)
+      if (providerEntries.length > 0) {
         setModelPickerGroups(groups);
-        setProviderPicker(providerNames);
+        setProviderPicker(providerEntries);
         setProviderPickerIndex(0);
         setSelectedProvider(null);
         return;
