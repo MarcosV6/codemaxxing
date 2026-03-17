@@ -67,8 +67,8 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: "anthropic",
     name: "Anthropic (Claude)",
-    methods: ["setup-token", "api-key"],
-    baseUrl: "https://api.anthropic.com/v1",
+    methods: ["oauth", "api-key"],
+    baseUrl: "https://api.anthropic.com",
     consoleUrl: "https://console.anthropic.com/settings/keys",
     description: "Claude Opus, Sonnet, Haiku — use your subscription or API key",
   },

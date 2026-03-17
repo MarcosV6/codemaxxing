@@ -1,6 +1,7 @@
 import type { Key } from "ink";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "../utils/auth.js";
 import { loginOpenAICodexOAuth } from "../utils/openai-oauth.js";
+import { loginAnthropicOAuth } from "../utils/anthropic-oauth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills } from "../utils/skills.js";
 import { listThemes, getTheme, THEMES } from "../themes.js";
 import { getSession, loadMessages, deleteSession } from "../utils/sessions.js";
@@ -201,13 +202,16 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
           ctx.setLoading(false);
         })
         .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
-    } else if (method === "setup-token") {
-      ctx.addMsg("info", "Starting setup-token flow — browser will open...");
+    } else if (method === "oauth" && providerId === "anthropic") {
+      ctx.addMsg("info", "Opening browser for Claude login...");
       ctx.setLoading(true);
-      ctx.setSpinnerMsg("Waiting for Claude Code auth...");
-      anthropicSetupToken((msg: string) => ctx.addMsg("info", msg))
+      ctx.setSpinnerMsg("Waiting for Anthropic authorization...");
+      loginAnthropicOAuth((msg: string) => ctx.addMsg("info", msg))
         .then((cred) => { ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})`); ctx.setLoading(false); })
-        .catch((err: any) => { ctx.addMsg("error", `Auth failed: ${err.message}`); ctx.setLoading(false); });
+        .catch((err: any) => {
+          ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key anthropic <your-key>\n  Or set ANTHROPIC_API_KEY env var and restart.\n  Get key at: console.anthropic.com/settings/keys`);
+          ctx.setLoading(false);
+        });
     } else if (method === "oauth" && providerId === "openai") {
       // Try cached Codex token first as a quick path
       const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));

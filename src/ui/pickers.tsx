@@ -70,6 +70,7 @@ interface LoginMethodPickerProps {
 export function LoginMethodPickerUI({ loginMethodPicker, loginMethodIndex, colors }: LoginMethodPickerProps) {
   // Provider-specific label overrides
   const providerLabels: Record<string, Record<string, string>> = {
+    anthropic: { "oauth": "🔐 Login with Claude Pro/Max (browser)" },
     openai: { "oauth": "🔐 Login with ChatGPT (browser)" },
   };
   const labels: Record<string, string> = {

@@ -31,6 +31,8 @@ function createAnthropicClient(apiKey: string): Anthropic {
       dangerouslyAllowBrowser: true,
       defaultHeaders: {
         "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+        "user-agent": "claude-cli/2.1.75",
+        "x-app": "cli",
       },
     } as any);
   }
@@ -215,7 +217,7 @@ export class CodingAgent {
     this.model = options.provider.model;
     // Default model for Anthropic
     if (this.providerType === "anthropic" && (this.model === "auto" || !this.model)) {
-      this.model = "claude-sonnet-4-20250514";
+      this.model = "claude-sonnet-4-6";
     }
     this.gitEnabled = isGitRepo(this.cwd);
     this.compressionThreshold = options.contextCompressionThreshold ?? 80000;

@@ -549,13 +549,13 @@ function App() {
       const anthropicCred = getCredential("anthropic");
       if (anthropicCred) {
         const claudeModels = [
-          "claude-sonnet-4-20250514",
-          "claude-haiku-4-20250414",
-          "claude-opus-4-20250514",
+          "claude-sonnet-4-6",
+          "claude-opus-4-6",
+          "claude-haiku-4-5-20251001",
         ];
         groups["Anthropic"] = claudeModels.map(m => ({
           name: m,
-          baseUrl: "https://api.anthropic.com/v1",
+          baseUrl: "https://api.anthropic.com",
           apiKey: anthropicCred.apiKey,
           providerType: "anthropic" as const,
         }));
