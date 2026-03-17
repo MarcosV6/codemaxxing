@@ -291,27 +291,48 @@ export function DeleteSessionConfirm({ session, colors }: DeleteSessionConfirmPr
   );
 }
 
-// ── Model Picker ──
+// ── Model Picker (grouped) ──
 
-interface ModelPickerProps {
-  models: string[];
+export interface GroupedModels {
+  [providerName: string]: string[];
+}
+
+interface GroupedModelPickerProps {
+  groups: GroupedModels;
   selectedIndex: number;
+  flatList: string[];
   activeModel: string;
   colors: Theme["colors"];
 }
 
-export function ModelPicker({ models, selectedIndex, activeModel, colors }: ModelPickerProps) {
+export function GroupedModelPicker({ groups, selectedIndex, flatList, activeModel, colors }: GroupedModelPickerProps) {
+  const providerOrder = Object.keys(groups);
+  let flatIdx = 0;
+
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
       <Text bold color={colors.secondary}>Switch model:</Text>
       <Text>{""}</Text>
-      {models.map((m, i) => (
-        <Text key={m}>
-          {"  "}{i === selectedIndex ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
-          <Text color={i === selectedIndex ? colors.primary : undefined}>{m}</Text>
-          {m === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
-        </Text>
-      ))}
+      {providerOrder.map((provider) => {
+        const models = groups[provider];
+        const headerAndModels = (
+          <Box key={provider} flexDirection="column">
+            <Text color={colors.muted} dimColor>{"  ── "}{provider}{" ──"}</Text>
+            {models.map((m) => {
+              const idx = flatIdx++;
+              const isSelected = idx === selectedIndex;
+              return (
+                <Text key={m}>
+                  {"  "}{isSelected ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
+                  <Text color={isSelected ? colors.primary : undefined}>{m}</Text>
+                  {m === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
+                </Text>
+              );
+            })}
+          </Box>
+        );
+        return headerAndModels;
+      })}
       <Text>{""}</Text>
       <Text dimColor>{"  ↑↓ navigate · Enter to switch · Esc cancel"}</Text>
     </Box>

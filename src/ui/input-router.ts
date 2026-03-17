@@ -43,11 +43,13 @@ export interface InputRouterContext extends WizardContext {
   sessionDisabledSkills: Set<string>;
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
-  // Model picker
-  modelPicker: string[] | null;
+  // Model picker (grouped)
+  modelPickerGroups: { [providerName: string]: string[] } | null;
   modelPickerIndex: number;
   setModelPickerIndex: (fn: (prev: number) => number) => void;
-  setModelPicker: (val: string[] | null) => void;
+  setModelPickerGroups: (val: { [providerName: string]: string[] } | null) => void;
+  flatModelList: string[];
+  setFlatModelList: (val: string[]) => void;
 
   // Ollama delete picker
   ollamaDeletePicker: { models: { name: string; size: number }[] } | null;
@@ -446,28 +448,29 @@ function handleSkillsPicker(_inputChar: string, key: Key, ctx: InputRouterContex
 }
 
 function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
-  if (!ctx.modelPicker) return false;
+  if (!ctx.modelPickerGroups) return false;
+  const len = ctx.flatModelList.length;
   if (key.upArrow) {
-    ctx.setModelPickerIndex((prev) => (prev - 1 + ctx.modelPicker!.length) % ctx.modelPicker!.length);
+    ctx.setModelPickerIndex((prev) => (prev - 1 + len) % len);
     return true;
   }
   if (key.downArrow) {
-    ctx.setModelPickerIndex((prev) => (prev + 1) % ctx.modelPicker!.length);
+    ctx.setModelPickerIndex((prev) => (prev + 1) % len);
     return true;
   }
   if (key.escape) {
-    ctx.setModelPicker(null);
+    ctx.setModelPickerGroups(null);
     return true;
   }
   if (key.return) {
-    const selected = ctx.modelPicker[ctx.modelPickerIndex];
+    const selected = ctx.flatModelList[ctx.modelPickerIndex];
     if (selected && ctx.agent) {
       ctx.agent.switchModel(selected);
       ctx.setModelName(selected);
       ctx.addMsg("info", `✅ Switched to: ${selected}`);
       ctx.refreshConnectionBanner();
     }
-    ctx.setModelPicker(null);
+    ctx.setModelPickerGroups(null);
     return true;
   }
   return true;

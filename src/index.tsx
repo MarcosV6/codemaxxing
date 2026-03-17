@@ -19,6 +19,8 @@ import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
 import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
+import type { GroupedModels } from "./ui/pickers.js";
+import { getCredential } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
 import { Banner, ConnectionInfo } from "./ui/banner.js";
 import { StatusBar } from "./ui/status-bar.js";
@@ -30,7 +32,7 @@ import {
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, ThemePickerUI, SessionPicker, DeleteSessionPicker,
-  DeleteSessionConfirm, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
+  DeleteSessionConfirm, GroupedModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
 } from "./ui/pickers.js";
@@ -65,9 +67,8 @@ const SLASH_COMMANDS = [
   { cmd: "/push", desc: "push to remote" },
   { cmd: "/git on", desc: "enable auto-commits" },
   { cmd: "/git off", desc: "disable auto-commits" },
-  { cmd: "/models", desc: "list available models" },
+  { cmd: "/models", desc: "switch model" },
   { cmd: "/theme", desc: "switch color theme" },
-  { cmd: "/model", desc: "switch model mid-session" },
   { cmd: "/sessions", desc: "list past sessions" },
   { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
@@ -224,8 +225,9 @@ function App() {
   const [ollamaDeletePickerIndex, setOllamaDeletePickerIndex] = useState(0);
   const [ollamaPullPicker, setOllamaPullPicker] = useState(false);
   const [ollamaPullPickerIndex, setOllamaPullPickerIndex] = useState(0);
-  const [modelPicker, setModelPicker] = useState<string[] | null>(null);
+  const [modelPickerGroups, setModelPickerGroups] = useState<GroupedModels | null>(null);
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
+  const [flatModelList, setFlatModelList] = useState<string[]>([]);
 
   // ── Setup Wizard State ──
   const [wizardScreen, setWizardScreen] = useState<WizardScreen>(null);
@@ -312,7 +314,7 @@ function App() {
       const selected = matches[idx];
       if (selected) {
         // Commands that need args (like /commit, /model) — fill input instead of executing
-        if (selected.cmd === "/commit" || selected.cmd === "/model" || selected.cmd === "/session delete" ||
+        if (selected.cmd === "/commit" || selected.cmd === "/session delete" ||
             selected.cmd === "/architect") {
           setInput(selected.cmd + " ");
           setCmdIndex(0);
@@ -373,8 +375,7 @@ function App() {
         "  /help      — show this",
         "  /connect   — retry LLM connection",
         "  /login     — authentication setup (run codemaxxing login in terminal)",
-        "  /model     — switch model mid-session",
-        "  /models    — list available models",
+        "  /models    — switch model",
         "  /map       — show repository map",
         "  /sessions  — list past sessions",
         "  /session delete — delete a session",
@@ -525,74 +526,103 @@ function App() {
       addMsg("info", `Messages in context: ${agent.getContextLength()}`);
       return;
     }
-    if (trimmed === "/models") {
+    if (trimmed === "/models" || trimmed === "/model") {
       addMsg("info", "Fetching available models...");
-      const { baseUrl, apiKey } = providerRef.current;
-      const models = await listModels(baseUrl, apiKey);
-      if (models.length === 0) {
-        addMsg("info", "No models found or couldn't reach provider.");
-      } else {
-        addMsg("info", "Available models:\n" + models.map(m => `  ${m}`).join("\n"));
-      }
-      return;
-    }
-    if (trimmed === "/model") {
-      // Show picker of available models — combine all sources
-      addMsg("info", "Fetching available models...");
-      const allModels: string[] = [];
+      const groups: GroupedModels = {};
 
       // Collect local Ollama models
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
-          allModels.push(...ollamaModels.map(m => m.name));
+          groups["Local (Ollama)"] = ollamaModels.map(m => m.name);
         }
-      } catch (err) {
+      } catch {
         // Ollama not available, skip
       }
 
-      // Collect cloud provider models
-      if (providerRef.current?.baseUrl && providerRef.current.baseUrl !== "auto") {
-        try {
-          const providerModels = await listModels(providerRef.current.baseUrl, providerRef.current.apiKey || "");
-          if (providerModels.length > 0) {
-            allModels.push(...providerModels);
-          }
-        } catch (err) {
-          // Provider fetch failed
-        }
-
-        // Anthropic doesn't have a /models endpoint — add known models
-        if (allModels.length === 0 || providerRef.current.baseUrl.includes("anthropic.com")) {
-          const isAnthropic = providerRef.current.baseUrl.includes("anthropic.com");
-          if (isAnthropic) {
-            const claudeModels = [
-              "claude-sonnet-4-20250514",
-              "claude-haiku-4-20250414",
-              "claude-opus-4-20250514",
-            ];
-            // Add only models not already in the list
-            for (const m of claudeModels) {
-              if (!allModels.includes(m)) allModels.push(m);
+      // Collect Anthropic models
+      if (getCredential("anthropic") || providerRef.current?.baseUrl?.includes("anthropic.com")) {
+        const claudeModels = [
+          "claude-sonnet-4-20250514",
+          "claude-haiku-4-20250414",
+          "claude-opus-4-20250514",
+        ];
+        // Try fetching from endpoint, fall back to hardcoded
+        if (providerRef.current?.baseUrl?.includes("anthropic.com")) {
+          try {
+            const fetched = await listModels(providerRef.current.baseUrl, providerRef.current.apiKey || "");
+            if (fetched.length > 0) {
+              groups["Anthropic"] = fetched;
+            } else {
+              groups["Anthropic"] = claudeModels;
             }
+          } catch {
+            groups["Anthropic"] = claudeModels;
           }
+        } else {
+          groups["Anthropic"] = claudeModels;
         }
       }
 
-      if (allModels.length > 0) {
-        setModelPicker(allModels);
+      // Collect OpenAI models
+      if (getCredential("openai") || providerRef.current?.baseUrl?.includes("openai.com")) {
+        try {
+          const baseUrl = providerRef.current?.baseUrl?.includes("openai.com")
+            ? providerRef.current.baseUrl
+            : "https://api.openai.com/v1";
+          const apiKey = providerRef.current?.baseUrl?.includes("openai.com")
+            ? providerRef.current.apiKey || ""
+            : getCredential("openai")?.apiKey || "";
+          const openaiModels = await listModels(baseUrl, apiKey);
+          if (openaiModels.length > 0) {
+            groups["OpenAI"] = openaiModels;
+          }
+        } catch {
+          // OpenAI fetch failed
+        }
+      }
+
+      // Collect from current provider if it's not already covered
+      const { baseUrl, apiKey } = providerRef.current;
+      if (baseUrl && baseUrl !== "auto" &&
+          !baseUrl.includes("anthropic.com") && !baseUrl.includes("openai.com") &&
+          !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1")) {
+        try {
+          const providerModels = await listModels(baseUrl, apiKey || "");
+          if (providerModels.length > 0) {
+            // Determine provider name from URL
+            let providerName = "Cloud Provider";
+            if (baseUrl.includes("openrouter")) providerName = "OpenRouter";
+            else if (baseUrl.includes("groq")) providerName = "Groq";
+            else if (baseUrl.includes("together")) providerName = "Together";
+            else {
+              try { providerName = new URL(baseUrl).hostname; } catch { /* keep default */ }
+            }
+            if (!groups[providerName]) {
+              groups[providerName] = providerModels;
+            }
+          }
+        } catch {
+          // Provider fetch failed
+        }
+      }
+
+      // Build flat list and open picker
+      const flat = Object.values(groups).flat();
+      if (flat.length > 0) {
+        setModelPickerGroups(groups);
+        setFlatModelList(flat);
         setModelPickerIndex(0);
         return;
       }
-      
-      // No models found anywhere
+
       addMsg("error", "No models available. Download one with /ollama pull or configure a provider.");
       return;
     }
     if (trimmed.startsWith("/model ")) {
       const newModel = trimmed.replace("/model ", "").trim();
       if (!newModel) {
-        addMsg("info", `Current model: ${modelName}\n  Usage: /model <model-name>`);
+        addMsg("info", `Current model: ${modelName}\n  Usage: /models`);
         return;
       }
       agent.switchModel(newModel);
@@ -743,10 +773,12 @@ function App() {
       setSkillsPicker,
       sessionDisabledSkills,
       setSessionDisabledSkills,
-      modelPicker,
+      modelPickerGroups,
       modelPickerIndex,
       setModelPickerIndex,
-      setModelPicker,
+      setModelPickerGroups,
+      flatModelList,
+      setFlatModelList,
       ollamaDeletePicker,
       ollamaDeletePickerIndex,
       setOllamaDeletePickerIndex,
@@ -912,8 +944,8 @@ function App() {
       )}
 
       {/* ═══ MODEL PICKER ═══ */}
-      {modelPicker && (
-        <ModelPicker models={modelPicker} selectedIndex={modelPickerIndex} activeModel={modelName} colors={theme.colors} />
+      {modelPickerGroups && (
+        <GroupedModelPicker groups={modelPickerGroups} selectedIndex={modelPickerIndex} flatList={flatModelList} activeModel={modelName} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA DELETE PICKER ═══ */}
