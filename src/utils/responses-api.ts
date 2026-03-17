@@ -127,7 +127,6 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     input: inputItems.length > 0 ? inputItems : "",
     stream: true,
     store: false,
-    max_output_tokens: maxTokens,
   };
 
   if (responseTools.length > 0) {
