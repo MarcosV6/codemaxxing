@@ -32,7 +32,7 @@ import {
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, ThemePickerUI, SessionPicker, DeleteSessionPicker,
-  DeleteSessionConfirm, GroupedModelPicker, OllamaDeletePicker, OllamaPullPicker,
+  DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
 } from "./ui/pickers.js";
@@ -228,6 +228,9 @@ function App() {
   const [modelPickerGroups, setModelPickerGroups] = useState<GroupedModels | null>(null);
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
   const [flatModelList, setFlatModelList] = useState<ModelEntry[]>([]);
+  const [providerPicker, setProviderPicker] = useState<string[] | null>(null);
+  const [providerPickerIndex, setProviderPickerIndex] = useState(0);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
   // ── Setup Wizard State ──
   const [wizardScreen, setWizardScreen] = useState<WizardScreen>(null);
@@ -580,12 +583,13 @@ function App() {
         }));
       }
 
-      // Build flat list and open picker
-      const flat = Object.values(groups).flat();
-      if (flat.length > 0) {
+      // Show provider picker first (step 1)
+      const providerNames = Object.keys(groups);
+      if (providerNames.length > 0) {
         setModelPickerGroups(groups);
-        setFlatModelList(flat);
-        setModelPickerIndex(0);
+        setProviderPicker(providerNames);
+        setProviderPickerIndex(0);
+        setSelectedProvider(null);
         return;
       }
 
@@ -752,6 +756,12 @@ function App() {
       setModelPickerGroups,
       flatModelList,
       setFlatModelList,
+      providerPicker,
+      providerPickerIndex,
+      setProviderPickerIndex,
+      setProviderPicker,
+      selectedProvider,
+      setSelectedProvider,
       ollamaDeletePicker,
       ollamaDeletePickerIndex,
       setOllamaDeletePickerIndex,
@@ -917,8 +927,11 @@ function App() {
       )}
 
       {/* ═══ MODEL PICKER ═══ */}
-      {modelPickerGroups && (
-        <GroupedModelPicker groups={modelPickerGroups} selectedIndex={modelPickerIndex} flatList={flatModelList} activeModel={modelName} colors={theme.colors} />
+      {providerPicker && !selectedProvider && (
+        <ProviderPicker providers={providerPicker} selectedIndex={providerPickerIndex} colors={theme.colors} />
+      )}
+      {selectedProvider && modelPickerGroups && modelPickerGroups[selectedProvider] && (
+        <ModelPicker providerName={selectedProvider} models={modelPickerGroups[selectedProvider]} selectedIndex={modelPickerIndex} activeModel={modelName} colors={theme.colors} />
       )}
 
       {/* ═══ OLLAMA DELETE PICKER ═══ */}

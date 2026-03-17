@@ -44,7 +44,15 @@ export interface InputRouterContext extends WizardContext {
   sessionDisabledSkills: Set<string>;
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
-  // Model picker (grouped)
+  // Provider picker (step 1)
+  providerPicker: string[] | null;
+  providerPickerIndex: number;
+  setProviderPickerIndex: (fn: (prev: number) => number) => void;
+  setProviderPicker: (val: string[] | null) => void;
+  selectedProvider: string | null;
+  setSelectedProvider: (val: string | null) => void;
+
+  // Model picker (step 2)
   modelPickerGroups: { [providerName: string]: Array<{ name: string; baseUrl: string; apiKey: string; providerType: "openai" | "anthropic" }> } | null;
   modelPickerIndex: number;
   setModelPickerIndex: (fn: (prev: number) => number) => void;
@@ -130,6 +138,7 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleLoginMethodPicker(inputChar, key, ctx)) return true;
   if (handleLoginPicker(inputChar, key, ctx)) return true;
   if (handleSkillsPicker(inputChar, key, ctx)) return true;
+  if (handleProviderPicker(inputChar, key, ctx)) return true;
   if (handleModelPicker(inputChar, key, ctx)) return true;
   if (handleOllamaDeletePicker(inputChar, key, ctx)) return true;
   if (handleOllamaPullPicker(inputChar, key, ctx)) return true;
@@ -451,9 +460,35 @@ function handleSkillsPicker(_inputChar: string, key: Key, ctx: InputRouterContex
   return true; // absorb all keys when skills picker is active
 }
 
+function handleProviderPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.providerPicker || ctx.selectedProvider) return false;
+  const len = ctx.providerPicker.length;
+  if (key.upArrow) {
+    ctx.setProviderPickerIndex((prev) => (prev - 1 + len) % len);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setProviderPickerIndex((prev) => (prev + 1) % len);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setProviderPicker(null);
+    return true;
+  }
+  if (key.return) {
+    const selected = ctx.providerPicker[ctx.providerPickerIndex];
+    ctx.setSelectedProvider(selected);
+    ctx.setModelPickerIndex(() => 0);
+    return true;
+  }
+  return true;
+}
+
 function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
-  if (!ctx.modelPickerGroups) return false;
-  const len = ctx.flatModelList.length;
+  if (!ctx.selectedProvider || !ctx.modelPickerGroups) return false;
+  const models = ctx.modelPickerGroups[ctx.selectedProvider];
+  if (!models) return false;
+  const len = models.length;
   if (key.upArrow) {
     ctx.setModelPickerIndex((prev) => (prev - 1 + len) % len);
     return true;
@@ -463,11 +498,12 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
     return true;
   }
   if (key.escape) {
-    ctx.setModelPickerGroups(null);
+    ctx.setSelectedProvider(null);
+    ctx.setModelPickerIndex(() => 0);
     return true;
   }
   if (key.return) {
-    const selected = ctx.flatModelList[ctx.modelPickerIndex];
+    const selected = models[ctx.modelPickerIndex];
     if (selected && ctx.agent) {
       ctx.agent.switchModel(selected.name, selected.baseUrl, selected.apiKey, selected.providerType);
       ctx.setModelName(selected.name);
@@ -475,6 +511,8 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
       ctx.refreshConnectionBanner();
     }
     ctx.setModelPickerGroups(null);
+    ctx.setSelectedProvider(null);
+    ctx.setModelPickerIndex(() => 0);
     return true;
   }
   return true;

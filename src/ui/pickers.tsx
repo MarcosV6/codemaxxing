@@ -305,44 +305,55 @@ export interface GroupedModels {
   [providerName: string]: ModelEntry[];
 }
 
-interface GroupedModelPickerProps {
-  groups: GroupedModels;
+// ── Provider Picker (step 1) ──
+
+interface ProviderPickerProps {
+  providers: string[];
   selectedIndex: number;
-  flatList: ModelEntry[];
+  colors: Theme["colors"];
+}
+
+export function ProviderPicker({ providers, selectedIndex, colors }: ProviderPickerProps) {
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Select provider:</Text>
+      <Text>{""}</Text>
+      {providers.map((provider, i) => (
+        <Text key={provider}>
+          {"  "}{i === selectedIndex ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
+          <Text color={i === selectedIndex ? colors.primary : undefined}>{provider}</Text>
+        </Text>
+      ))}
+      <Text>{""}</Text>
+      <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
+// ── Model Picker (step 2) ──
+
+interface ModelPickerProps {
+  providerName: string;
+  models: ModelEntry[];
+  selectedIndex: number;
   activeModel: string;
   colors: Theme["colors"];
 }
 
-export function GroupedModelPicker({ groups, selectedIndex, flatList, activeModel, colors }: GroupedModelPickerProps) {
-  const providerOrder = Object.keys(groups);
-  let flatIdx = 0;
-
+export function ModelPicker({ providerName, models, selectedIndex, activeModel, colors }: ModelPickerProps) {
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
-      <Text bold color={colors.secondary}>Switch model:</Text>
+      <Text bold color={colors.secondary}>{"── "}{providerName}{" ──"}</Text>
       <Text>{""}</Text>
-      {providerOrder.map((provider) => {
-        const models = groups[provider];
-        const headerAndModels = (
-          <Box key={provider} flexDirection="column">
-            <Text color={colors.muted} dimColor>{"  ── "}{provider}{" ──"}</Text>
-            {models.map((entry) => {
-              const idx = flatIdx++;
-              const isSelected = idx === selectedIndex;
-              return (
-                <Text key={entry.name}>
-                  {"  "}{isSelected ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
-                  <Text color={isSelected ? colors.primary : undefined}>{entry.name}</Text>
-                  {entry.name === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
-                </Text>
-              );
-            })}
-          </Box>
-        );
-        return headerAndModels;
-      })}
+      {models.map((entry, i) => (
+        <Text key={entry.name}>
+          {"  "}{i === selectedIndex ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
+          <Text color={i === selectedIndex ? colors.primary : undefined}>{entry.name}</Text>
+          {entry.name === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
+        </Text>
+      ))}
       <Text>{""}</Text>
-      <Text dimColor>{"  ↑↓ navigate · Enter to switch · Esc cancel"}</Text>
+      <Text dimColor>{"  ↑↓ navigate · Enter switch · Esc back"}</Text>
     </Box>
   );
 }
