@@ -565,19 +565,19 @@ function App() {
       const openaiCred = getCredential("openai");
       if (openaiCred) {
         const baseUrl = openaiCred.baseUrl || "https://api.openai.com/v1";
-        try {
-          const openaiModels = await listModels(baseUrl, openaiCred.apiKey);
-          if (openaiModels.length > 0) {
-            groups["OpenAI"] = openaiModels.map(m => ({
-              name: m,
-              baseUrl,
-              apiKey: openaiCred.apiKey,
-              providerType: "openai" as const,
-            }));
-          }
-        } catch {
-          // OpenAI fetch failed, skip
-        }
+        const openaiModels = [
+          "gpt-5.4",
+          "gpt-5",
+          "gpt-4.1",
+          "o3",
+          "o4-mini",
+        ];
+        groups["OpenAI"] = openaiModels.map(m => ({
+          name: m,
+          baseUrl,
+          apiKey: openaiCred.apiKey,
+          providerType: "openai" as const,
+        }));
       }
 
       // Build flat list and open picker
