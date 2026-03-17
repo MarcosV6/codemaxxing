@@ -537,31 +537,52 @@ function App() {
       return;
     }
     if (trimmed === "/model") {
-      // Show picker of available models
+      // Show picker of available models — combine all sources
       addMsg("info", "Fetching available models...");
+      const allModels: string[] = [];
+
+      // Collect local Ollama models
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
-          setModelPicker(ollamaModels.map(m => m.name));
-          setModelPickerIndex(0);
-          return;
+          allModels.push(...ollamaModels.map(m => m.name));
         }
       } catch (err) {
-        // Ollama not available or failed, try provider
+        // Ollama not available, skip
       }
-      
-      // Fallback: try provider's model list
+
+      // Collect cloud provider models
       if (providerRef.current?.baseUrl && providerRef.current.baseUrl !== "auto") {
         try {
           const providerModels = await listModels(providerRef.current.baseUrl, providerRef.current.apiKey || "");
           if (providerModels.length > 0) {
-            setModelPicker(providerModels);
-            setModelPickerIndex(0);
-            return;
+            allModels.push(...providerModels);
           }
         } catch (err) {
           // Provider fetch failed
         }
+
+        // Anthropic doesn't have a /models endpoint — add known models
+        if (allModels.length === 0 || providerRef.current.baseUrl.includes("anthropic.com")) {
+          const isAnthropic = providerRef.current.baseUrl.includes("anthropic.com");
+          if (isAnthropic) {
+            const claudeModels = [
+              "claude-sonnet-4-20250514",
+              "claude-haiku-4-20250414",
+              "claude-opus-4-20250514",
+            ];
+            // Add only models not already in the list
+            for (const m of claudeModels) {
+              if (!allModels.includes(m)) allModels.push(m);
+            }
+          }
+        }
+      }
+
+      if (allModels.length > 0) {
+        setModelPicker(allModels);
+        setModelPickerIndex(0);
+        return;
       }
       
       // No models found anywhere
