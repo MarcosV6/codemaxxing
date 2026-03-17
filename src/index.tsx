@@ -537,26 +537,37 @@ function App() {
       // Local LLM (Ollama/LM Studio) — always show, auto-detect
       let localFound = false;
 
-      // Check LM Studio (port 1234)
-      try {
-        const lmStudioModels = await listModels("http://localhost:1234/v1", "lm-studio");
-        if (lmStudioModels.length > 0) {
-          groups["Local (LM Studio / Ollama)"] = lmStudioModels.map(m => ({
-            name: m,
-            baseUrl: "http://localhost:1234/v1",
-            apiKey: "lm-studio",
-            providerType: "openai" as const,
-          }));
-          localFound = true;
-        }
-      } catch { /* LM Studio not running */ }
+      // Check common local LLM endpoints
+      const localEndpoints = [
+        { name: "LM Studio", port: 1234 },
+        { name: "Ollama", port: 11434 },
+        { name: "vLLM", port: 8000 },
+        { name: "LocalAI", port: 8080 },
+      ];
 
-      // Check Ollama (port 11434)
+      for (const endpoint of localEndpoints) {
+        if (localFound) break;
+        try {
+          const url = `http://localhost:${endpoint.port}/v1`;
+          const models = await listModels(url, "local");
+          if (models.length > 0) {
+            groups["Local LLM"] = models.map(m => ({
+              name: m,
+              baseUrl: url,
+              apiKey: "local",
+              providerType: "openai" as const,
+            }));
+            localFound = true;
+          }
+        } catch { /* not running */ }
+      }
+
+      // Also check Ollama native API
       if (!localFound) {
         try {
           const ollamaModels = await listInstalledModelsDetailed();
           if (ollamaModels.length > 0) {
-            groups["Local (LM Studio / Ollama)"] = ollamaModels.map(m => ({
+            groups["Local LLM"] = ollamaModels.map(m => ({
               name: m.name,
               baseUrl: "http://localhost:11434/v1",
               apiKey: "ollama",
@@ -568,7 +579,7 @@ function App() {
       }
 
       if (localFound) {
-        providerEntries.push({ name: "Local (LM Studio / Ollama)", description: "No auth needed — auto-detected", authed: true });
+        providerEntries.push({ name: "Local LLM", description: "No auth needed — auto-detected", authed: true });
       }
 
       // Anthropic
