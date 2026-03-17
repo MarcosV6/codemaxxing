@@ -179,6 +179,7 @@ export class CodingAgent {
   private client: OpenAI;
   private anthropicClient: Anthropic | null = null;
   private providerType: "openai" | "anthropic";
+  private currentApiKey: string | null = null;
   private messages: ChatCompletionMessageParam[] = [];
   private tools: ChatCompletionTool[] = FILE_TOOLS;
   private cwd: string;
@@ -592,7 +593,9 @@ export class CodingAgent {
       const anthropicTools = this.getAnthropicTools();
 
       // For OAuth tokens, system prompt must be a structured array with Claude Code identity
-      const isOAuthToken = this.options.provider.apiKey?.startsWith("sk-ant-oat");
+      // Check both the current provider key and what was passed to switchModel
+      const currentApiKey = this.currentApiKey ?? this.options.provider.apiKey;
+      const isOAuthToken = currentApiKey?.includes("sk-ant-oat");
       let systemPrompt: any = this.systemPrompt;
       if (isOAuthToken) {
         systemPrompt = [
@@ -769,6 +772,7 @@ export class CodingAgent {
    */
   switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
+    if (apiKey) this.currentApiKey = apiKey;
     if (providerType && providerType !== this.providerType) {
       this.providerType = providerType;
       if (providerType === "anthropic") {
