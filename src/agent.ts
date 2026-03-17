@@ -14,6 +14,27 @@ import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loa
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "./utils/mcp.js";
 import type { ProviderConfig } from "./config.js";
 
+// ── Helper: Create Anthropic client with proper auth ──
+function createAnthropicClient(apiKey: string): Anthropic {
+  // OAuth tokens start with "sk-ant-oat" and need authToken, not apiKey
+  if (apiKey.startsWith("sk-ant-oat")) {
+    return new Anthropic({
+      apiKey: null as any, // Required by SDK but ignored when authToken is set
+      authToken: apiKey,
+      dangerouslyAllowBrowser: true,
+      defaultHeaders: {
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+        "user-agent": "codemaxxing/1.0.17",
+      },
+    });
+  }
+  // Regular API keys
+  return new Anthropic({
+    apiKey,
+    dangerouslyAllowBrowser: true,
+  });
+}
+
 // Tools that can modify your project — require approval
 const DANGEROUS_TOOLS = new Set(["write_file", "edit_file", "run_command"]);
 
@@ -180,9 +201,7 @@ export class CodingAgent {
       apiKey: options.provider.apiKey,
     });
     if (this.providerType === "anthropic") {
-      this.anthropicClient = new Anthropic({
-        apiKey: options.provider.apiKey,
-      });
+      this.anthropicClient = createAnthropicClient(options.provider.apiKey);
     }
     this.cwd = options.cwd;
     this.maxTokens = options.maxTokens;
@@ -729,7 +748,7 @@ export class CodingAgent {
       if (providerType === "anthropic") {
         const key = apiKey || this.options.provider.apiKey;
         if (!key) throw new Error("No API key available for Anthropic");
-        this.anthropicClient = new Anthropic({ apiKey: key });
+        this.anthropicClient = createAnthropicClient(key);
       } else {
         this.anthropicClient = null;
       }
