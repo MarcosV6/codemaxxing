@@ -225,7 +225,7 @@ export async function loginOpenAICodexOAuth(
           provider: "openai",
           method: "oauth",
           apiKey: tokenData.access_token,
-          baseUrl: "https://api.openai.com/v1",
+          baseUrl: "https://chatgpt.com/backend-api",
           label: "OpenAI (ChatGPT subscription)",
           refreshToken: tokenData.refresh_token,
           oauthExpires: expiresAt,

@@ -191,6 +191,7 @@ export class CodingAgent {
   private anthropicClient: Anthropic | null = null;
   private providerType: "openai" | "anthropic";
   private currentApiKey: string | null = null;
+  private currentBaseUrl: string = "";
   private messages: ChatCompletionMessageParam[] = [];
   private tools: ChatCompletionTool[] = FILE_TOOLS;
   private cwd: string;
@@ -216,8 +217,9 @@ export class CodingAgent {
 
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
+    this.currentBaseUrl = options.provider.baseUrl || "https://api.openai.com/v1";
     this.client = new OpenAI({
-      baseURL: options.provider.baseUrl,
+      baseURL: this.currentBaseUrl,
       apiKey: options.provider.apiKey,
     });
     if (this.providerType === "anthropic") {
@@ -326,7 +328,7 @@ export class CodingAgent {
       return this.chatAnthropic(userMessage);
     }
 
-    // Route Codex OAuth models to Responses API (supports GPT-5.4, etc)
+    // Route to Responses API for models that need it (GPT-5.x, Codex, etc)
     if (this.providerType === "openai" && shouldUseResponsesAPI(this.model)) {
       return this.chatOpenAIResponses(userMessage);
     }
@@ -821,8 +823,11 @@ export class CodingAgent {
       iterations++;
 
       try {
+        const currentKey = this.currentApiKey || this.options.provider.apiKey;
+        
         const result = await chatWithResponsesAPI({
-          client: this.client,
+          baseUrl: this.currentBaseUrl,
+          apiKey: currentKey,
           model: this.model,
           maxTokens: this.maxTokens,
           systemPrompt: this.systemPrompt,
@@ -961,6 +966,7 @@ export class CodingAgent {
   switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
     if (apiKey) this.currentApiKey = apiKey;
+    if (baseUrl) this.currentBaseUrl = baseUrl;
 
     if (providerType) {
       this.providerType = providerType;
@@ -975,7 +981,7 @@ export class CodingAgent {
     }
     if (baseUrl || apiKey) {
       this.client = new OpenAI({
-        baseURL: baseUrl ?? this.options.provider.baseUrl,
+        baseURL: baseUrl ?? this.currentBaseUrl,
         apiKey: apiKey ?? this.options.provider.apiKey,
       });
     }

@@ -1,20 +1,16 @@
 /**
- * OpenAI Responses API handler for GPT-5.4 + Codex OAuth token support
+ * OpenAI Codex Responses API handler
  *
- * The Responses API (/v1/responses) supports Codex OAuth tokens from ChatGPT Plus,
- * enabling GPT-5.4, GPT-5, and other frontier models that Chat Completions API doesn't support.
+ * Uses the ChatGPT backend endpoint (https://chatgpt.com/backend-api/codex/responses)
+ * which is what Codex CLI, OpenClaw, and other tools use with ChatGPT Plus OAuth tokens.
  *
- * Key differences:
- * - Input: single string or ResponseInput (not messages array)
- * - Output: ResponseStreamEvent types (not ChatCompletionChunk)
- * - Tools: ResponseFunctionToolCall items (not tool_use)
+ * This endpoint supports the Responses API format but is separate from api.openai.com.
+ * Standard API keys use api.openai.com/v1/responses; Codex OAuth tokens use this.
  */
 
-import OpenAI from "openai";
-import type { Stream } from "openai/streaming";
-
 export interface ResponsesAPIOptions {
-  client: OpenAI;
+  baseUrl: string;
+  apiKey: string;
   model: string;
   maxTokens: number;
   systemPrompt: string;
@@ -31,8 +27,8 @@ interface ToolCall {
 }
 
 /**
- * Execute a chat request using the Responses API
- * Streams text + handles tool calls similar to Chat Completions
+ * Execute a chat request using the Codex Responses API endpoint
+ * Streams text + handles tool calls
  */
 export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promise<{
   contentText: string;
@@ -41,7 +37,8 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
   completionTokens: number;
 }> {
   const {
-    client,
+    baseUrl,
+    apiKey,
     model,
     maxTokens,
     systemPrompt,
@@ -51,14 +48,9 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     onToolCall,
   } = options;
 
-  // Build the instruction (system prompt + context)
-  const instruction = systemPrompt;
-
-  // Build input: convert message history to ResponseInput format
-  // For stateless operation, we pass the full history as input items
+  // Build input items from message history
   const inputItems: any[] = [];
 
-  // Add conversation history (skip system messages)
   for (const msg of messages) {
     if (msg.role === "system") continue;
 
@@ -69,9 +61,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
         content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) || "",
       });
     } else if (msg.role === "assistant") {
-      // Handle assistant messages that may contain tool calls
       if ((msg as any).tool_calls?.length > 0) {
-        // First add the text content as a message if present
         if (msg.content) {
           inputItems.push({
             type: "message",
@@ -79,14 +69,13 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
             content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
           });
         }
-        // Then add each tool call as a function_call item
         for (const tc of (msg as any).tool_calls) {
           inputItems.push({
             type: "function_call",
             id: tc.id,
             name: tc.function?.name || tc.name || "",
-            arguments: typeof tc.function?.arguments === "string" 
-              ? tc.function.arguments 
+            arguments: typeof tc.function?.arguments === "string"
+              ? tc.function.arguments
               : JSON.stringify(tc.function?.arguments || tc.input || {}),
           });
         }
@@ -98,7 +87,6 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
         });
       }
     } else if (msg.role === "tool") {
-      // Tool result → function_call_output
       inputItems.push({
         type: "function_call_output",
         call_id: (msg as any).tool_call_id || "",
@@ -107,106 +95,187 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     }
   }
 
-  // If no input items, use the last message or empty
-  const input = inputItems.length > 0 ? inputItems : (messages[messages.length - 1]?.content || "");
-
-  // Build tools for Responses API
-  // Convert from Chat Completions format to Responses API format
+  // Build tools in Responses API format
   const responseTools: any[] = tools
-    .filter((t) => t.type === "function")
-    .map((t) => ({
+    .filter((t: any) => t.type === "function")
+    .map((t: any) => ({
       type: "function" as const,
-      function: {
-        name: t.function?.name || "",
-        description: t.function?.description || "",
-        parameters: t.function?.parameters || { type: "object", properties: {} },
-      },
+      name: t.function?.name || "",
+      description: t.function?.description || "",
+      parameters: t.function?.parameters || { type: "object", properties: {} },
     }));
 
-  // Stream the response
+  // Determine the endpoint URL
+  // chatgpt.com/backend-api → chatgpt.com/backend-api/codex/responses
+  // api.openai.com/v1 → api.openai.com/v1/responses
+  let endpoint: string;
+  if (baseUrl.includes("chatgpt.com/backend-api")) {
+    endpoint = baseUrl.replace(/\/$/, "") + "/codex/responses";
+  } else {
+    endpoint = baseUrl.replace(/\/$/, "") + "/responses";
+  }
+
+  // Build request body
+  const body: any = {
+    model,
+    instructions: systemPrompt,
+    input: inputItems.length > 0 ? inputItems : "",
+    stream: true,
+    max_output_tokens: maxTokens,
+  };
+
+  if (responseTools.length > 0) {
+    body.tools = responseTools;
+  }
+
+  // Make the streaming request
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+      "User-Agent": "codemaxxing/1.0",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Responses API error (${response.status}): ${errText}`);
+  }
+
+  // Parse SSE stream
   let contentText = "";
   let promptTokens = 0;
   let completionTokens = 0;
   const toolCalls: ToolCall[] = [];
-  let currentToolCall: Partial<ToolCall> | null = null;
+  let currentToolCallId = "";
+  let currentToolCallName = "";
   let toolArgumentsBuffer = "";
 
-  const stream = await client.responses.create({
-    model,
-    instructions: instruction,
-    input,
-    tools: responseTools.length > 0 ? responseTools : undefined,
-    stream: true,
-    max_output_tokens: maxTokens,
-  });
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
 
-  // Type the stream properly
-  const typedStream = stream as any;
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-  for await (const event of typedStream) {
-    // Text delta events
-    if (event.type === "response.text_delta") {
-      const delta = (event as any).delta;
-      if (delta) {
-        contentText += delta;
-        onToken?.(delta);
-      }
-    }
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
 
-    // Tool call start
-    if (event.type === "response.function_call_arguments_delta") {
-      const delta = (event as any).delta;
-      if (delta) {
-        toolArgumentsBuffer += delta;
-      }
-    }
+    buffer += decoder.decode(value, { stream: true });
 
-    // Tool call done
-    if (event.type === "response.function_call_arguments_done") {
+    // Process complete SSE events
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") continue;
+
+      let event: any;
       try {
-        const args = JSON.parse(toolArgumentsBuffer);
-        if (currentToolCall) {
-          currentToolCall.input = args;
+        event = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      const eventType = event.type;
+
+      // Text content delta
+      if (eventType === "response.output_text.delta") {
+        const delta = event.delta;
+        if (delta) {
+          contentText += delta;
+          onToken?.(delta);
+        }
+      }
+
+      // Also handle the simpler delta format
+      if (eventType === "response.text_delta") {
+        const delta = event.delta;
+        if (delta) {
+          contentText += delta;
+          onToken?.(delta);
+        }
+      }
+
+      // Function call item added
+      if (eventType === "response.output_item.added") {
+        const item = event.item;
+        if (item?.type === "function_call") {
+          currentToolCallId = item.id || item.call_id || `tool_${Date.now()}`;
+          currentToolCallName = item.name || "";
+          toolArgumentsBuffer = "";
+        }
+      }
+
+      // Function call arguments streaming
+      if (eventType === "response.function_call_arguments.delta") {
+        const delta = event.delta;
+        if (delta) {
+          toolArgumentsBuffer += delta;
+        }
+      }
+
+      // Function call arguments done
+      if (eventType === "response.function_call_arguments.done") {
+        try {
+          const args = JSON.parse(event.arguments || toolArgumentsBuffer);
+          toolCalls.push({
+            id: currentToolCallId,
+            name: currentToolCallName,
+            input: args,
+          });
+          onToolCall?.(currentToolCallName, args);
+        } catch {
+          // Try buffer if event.arguments isn't set
+          try {
+            const args = JSON.parse(toolArgumentsBuffer);
+            toolCalls.push({
+              id: currentToolCallId,
+              name: currentToolCallName,
+              input: args,
+            });
+            onToolCall?.(currentToolCallName, args);
+          } catch {
+            // Skip malformed tool call
+          }
         }
         toolArgumentsBuffer = "";
-      } catch {
-        // Ignore parse errors
       }
-    }
 
-    // Function call item added (start of tool call)
-    if (event.type === "response.output_item_added") {
-      const item = (event as any).item;
-      if (item?.type === "function_call") {
-        currentToolCall = {
-          id: item.id || `tool_${Date.now()}`,
-          name: item.name || "",
-          input: {},
-        };
+      // Output item done (alternative tool call completion)
+      if (eventType === "response.output_item.done") {
+        const item = event.item;
+        if (item?.type === "function_call" && item.arguments) {
+          // Check if we already captured this from arguments.done
+          const alreadyCaptured = toolCalls.some(tc => tc.id === (item.id || item.call_id));
+          if (!alreadyCaptured) {
+            try {
+              const args = JSON.parse(item.arguments);
+              toolCalls.push({
+                id: item.id || item.call_id || currentToolCallId,
+                name: item.name || currentToolCallName,
+                input: args,
+              });
+              onToolCall?.(item.name || currentToolCallName, args);
+            } catch {
+              // Skip
+            }
+          }
+        }
       }
-    }
 
-    // Function call done
-    if (event.type === "response.output_item_done") {
-      const item = (event as any).item;
-      if (item?.type === "function_call" && currentToolCall) {
-        toolCalls.push({
-          id: currentToolCall.id!,
-          name: currentToolCall.name!,
-          input: currentToolCall.input || {},
-        });
-        onToolCall?.(currentToolCall.name!, currentToolCall.input || {});
-        currentToolCall = null;
-      }
-    }
-
-    // Track usage (if available)
-    if (event.type === "response.completed") {
-      const response = (event as any).response;
-      const usage = response?.usage || (event as any).usage;
-      if (usage) {
-        promptTokens = usage.input_tokens || usage.prompt_tokens || 0;
-        completionTokens = usage.output_tokens || usage.completion_tokens || 0;
+      // Response completed — extract usage
+      if (eventType === "response.completed") {
+        const resp = event.response;
+        const usage = resp?.usage || event.usage;
+        if (usage) {
+          promptTokens = usage.input_tokens || usage.prompt_tokens || 0;
+          completionTokens = usage.output_tokens || usage.completion_tokens || 0;
+        }
       }
     }
   }
@@ -221,20 +290,15 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
 
 /**
  * Determine if a model should use the Responses API
- * Codex models and GPT-5.x work best with Responses API for Codex OAuth tokens
  */
 export function shouldUseResponsesAPI(model: string): boolean {
-  const responsesModels = [
-    "gpt-5",
-    "gpt-5.4",
-    "gpt-5.4-pro",
-    "gpt-5.3-codex",
-    "gpt-5-codex",
-    "gpt-5.3",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "o3",
-    "o3-mini",
-  ];
-  return responsesModels.some((m) => model.toLowerCase().includes(m.toLowerCase()));
+  const lower = model.toLowerCase();
+  // GPT-5.x and Codex models need Responses API for OAuth tokens
+  if (lower.startsWith("gpt-5")) return true;
+  if (lower.includes("codex")) return true;
+  // o-series reasoning models also work with Responses API
+  if (lower === "o3" || lower === "o3-mini" || lower === "o4-mini") return true;
+  // gpt-4.1 works on both but Responses API is better for OAuth
+  if (lower.startsWith("gpt-4.1")) return true;
+  return false;
 }
