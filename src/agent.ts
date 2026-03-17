@@ -14,6 +14,7 @@ import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loa
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "./utils/mcp.js";
 import { refreshAnthropicOAuthToken } from "./utils/anthropic-oauth.js";
 import { getCredential, saveCredential } from "./utils/auth.js";
+import { chatWithResponsesAPI, shouldUseResponsesAPI } from "./utils/responses-api.js";
 import type { ProviderConfig } from "./config.js";
 
 // ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
@@ -60,6 +61,14 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "o1": { input: 15, output: 60 },
   "o1-mini": { input: 3, output: 12 },
   "o1-pro": { input: 150, output: 600 },
+  "gpt-5.4": { input: 2.5, output: 15 },
+  "gpt-5.4-pro": { input: 30, output: 180 },
+  "gpt-5": { input: 1.25, output: 10 },
+  "gpt-5-mini": { input: 0.3, output: 1.25 },
+  "gpt-5.3-codex": { input: 1.25, output: 10 },
+  "gpt-4.1": { input: 2, output: 8 },
+  "gpt-4.1-mini": { input: 0.4, output: 1.6 },
+  "gpt-4.1-nano": { input: 0.1, output: 0.4 },
   "o3": { input: 10, output: 40 },
   "o3-mini": { input: 1.1, output: 4.4 },
   "o4-mini": { input: 1.1, output: 4.4 },
@@ -317,6 +326,11 @@ export class CodingAgent {
       return this.chatAnthropic(userMessage);
     }
 
+    // Route Codex OAuth models to Responses API (supports GPT-5.4, etc)
+    if (this.providerType === "openai" && shouldUseResponsesAPI(this.model)) {
+      return this.chatOpenAIResponses(userMessage);
+    }
+
     let iterations = 0;
     const MAX_ITERATIONS = 20;
 
@@ -337,9 +351,9 @@ export class CodingAgent {
         // Better error for OpenAI Codex OAuth scope limitations
         if (err.status === 401 && err.message?.includes("Missing scopes")) {
           throw new Error(
-            `Model "${this.model}" requires API scopes your OAuth token doesn't have. ` +
-            `ChatGPT subscription OAuth tokens are limited to Codex models (o3, o4-mini, gpt-4.1). ` +
-            `For other models, use an API key (/login openai → api-key).`
+            `Model "${this.model}" is not available via Chat Completions with your OAuth token. ` +
+            `Try a GPT-5.x model (which uses the Responses API automatically), ` +
+            `or use an API key for full model access (/login openai → api-key).`
           );
         }
         throw err;
@@ -790,6 +804,151 @@ export class CodingAgent {
         };
         this.messages.push(toolMsg);
         saveMessage(this.sessionId, toolMsg);
+      }
+    }
+
+    return "Max iterations reached. The agent may be stuck in a loop.";
+  }
+
+  /**
+   * OpenAI Responses API chat (for Codex OAuth tokens + GPT-5.4)
+   */
+  private async chatOpenAIResponses(userMessage: string): Promise<string> {
+    let iterations = 0;
+    const MAX_ITERATIONS = 20;
+
+    while (iterations < MAX_ITERATIONS) {
+      iterations++;
+
+      try {
+        const result = await chatWithResponsesAPI({
+          client: this.client,
+          model: this.model,
+          maxTokens: this.maxTokens,
+          systemPrompt: this.systemPrompt,
+          messages: this.messages,
+          tools: this.tools,
+          onToken: (token) => this.options.onToken?.(token),
+          onToolCall: (name, args) => this.options.onToolCall?.(name, args),
+        });
+
+        const { contentText, toolCalls, promptTokens, completionTokens } = result;
+
+        // Track usage
+        this.totalPromptTokens += promptTokens;
+        this.totalCompletionTokens += completionTokens;
+        const costs = getModelCost(this.model);
+        this.totalCost = (this.totalPromptTokens / 1_000_000) * costs.input +
+                         (this.totalCompletionTokens / 1_000_000) * costs.output;
+        updateSessionCost(this.sessionId, this.totalPromptTokens, this.totalCompletionTokens, this.totalCost);
+
+        // Build and save assistant message
+        const assistantMessage: ChatCompletionMessageParam = { role: "assistant", content: contentText || null };
+        if (toolCalls.length > 0) {
+          (assistantMessage as any).tool_calls = toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+          }));
+        }
+        this.messages.push(assistantMessage);
+        saveMessage(this.sessionId, assistantMessage);
+
+        // If no tool calls, we're done
+        if (toolCalls.length === 0) {
+          updateTokenEstimate(this.sessionId, this.estimateTokens());
+          return contentText || "(empty response)";
+        }
+
+        // Process tool calls (same as Chat Completions flow)
+        for (const toolCall of toolCalls) {
+          const args = toolCall.input;
+
+          // Check approval
+          if (DANGEROUS_TOOLS.has(toolCall.name) && !this.autoApprove && !this.alwaysApproved.has(toolCall.name)) {
+            if (this.options.onToolApproval) {
+              let diff: string | undefined;
+              if (toolCall.name === "write_file" && args.path && args.content) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  diff = generateDiff(existing, String(args.content), String(args.path));
+                }
+              }
+              if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  const oldText = String(args.oldText);
+                  const newText = String(args.newText);
+                  const replaceAll = Boolean(args.replaceAll);
+                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                  diff = generateDiff(existing, next, String(args.path));
+                }
+              }
+
+              const decision = await this.options.onToolApproval(toolCall.name, args, diff);
+              if (decision === "no") {
+                const toolMsg: ChatCompletionMessageParam = {
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: "Tool denied by user.",
+                };
+                this.messages.push(toolMsg);
+                saveMessage(this.sessionId, toolMsg);
+                continue;
+              }
+              if (decision === "always") {
+                this.alwaysApproved.add(toolCall.name);
+              }
+            }
+          }
+
+          // Execute tool
+          const mcpParsed = parseMCPToolName(toolCall.name);
+          let result: string;
+          if (mcpParsed) {
+            result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+          } else {
+            result = await executeTool(toolCall.name, args, this.cwd);
+          }
+          this.options.onToolResult?.(toolCall.name, result);
+
+          // Auto-commit
+          if (this.gitEnabled && this.autoCommitEnabled && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const path = String(args.path ?? "unknown");
+            const committed = autoCommit(this.cwd, path, "write");
+            if (committed) {
+              this.options.onGitCommit?.(`write ${path}`);
+            }
+          }
+
+          // Auto-lint
+          if (this.autoLintEnabled && this.detectedLinter && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const filePath = String(args.path ?? "");
+            const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+            if (lintErrors) {
+              this.options.onLintResult?.(filePath, lintErrors);
+              const lintMsg: ChatCompletionMessageParam = {
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
+              };
+              this.messages.push(lintMsg);
+              saveMessage(this.sessionId, lintMsg);
+              continue;
+            }
+          }
+
+          // Save tool result
+          const toolMsg: ChatCompletionMessageParam = {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: result,
+          };
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+        }
+      } catch (err: any) {
+        throw err;
       }
     }
 

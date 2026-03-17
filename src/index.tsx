@@ -597,7 +597,7 @@ function App() {
 
       // OpenAI
       const openaiCred = getCredential("openai");
-      const openaiModels = ["gpt-5.4", "gpt-5", "gpt-4.1", "o3", "o4-mini"];
+      const openaiModels = ["gpt-5.4", "gpt-5.4-pro", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini", "gpt-4o"];
       if (openaiCred) {
         const baseUrl = openaiCred.baseUrl || "https://api.openai.com/v1";
         groups["OpenAI (ChatGPT)"] = openaiModels.map(m => ({
