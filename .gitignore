@@ -36,3 +36,7 @@ neon-counter.*
 # Generated test outputs
 /tests/**/*.js
 /tests/**/*.d.ts
+
+# Internal planning docs
+ONBOARDING_PLAN.md
+RESPONSES_API_MIGRATION.md
