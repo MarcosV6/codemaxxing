@@ -509,6 +509,10 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
       ctx.setModelName(selected.name);
       ctx.addMsg("info", `✅ Switched to: ${selected.name}`);
       ctx.refreshConnectionBanner();
+    } else if (selected && !ctx.agent) {
+      // First-time: trigger reconnect which will create the agent
+      ctx.addMsg("info", `Initializing with ${selected.name}...`);
+      ctx.connectToProvider?.(false);
     }
     ctx.setModelPickerGroups(null);
     ctx.setProviderPicker(null);
