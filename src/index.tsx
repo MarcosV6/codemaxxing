@@ -535,19 +535,40 @@ function App() {
       const providerEntries: ProviderPickerEntry[] = [];
 
       // Local LLM (Ollama/LM Studio) — always show, auto-detect
+      let localFound = false;
+
+      // Check LM Studio (port 1234)
       try {
-        const ollamaModels = await listInstalledModelsDetailed();
-        if (ollamaModels.length > 0) {
-          groups["Local (LM Studio / Ollama)"] = ollamaModels.map(m => ({
-            name: m.name,
+        const lmStudioModels = await listModels("http://localhost:1234/v1", "lm-studio");
+        if (lmStudioModels.length > 0) {
+          groups["Local (LM Studio / Ollama)"] = lmStudioModels.map(m => ({
+            name: m,
             baseUrl: "http://localhost:1234/v1",
             apiKey: "lm-studio",
             providerType: "openai" as const,
           }));
-          providerEntries.push({ name: "Local (LM Studio / Ollama)", description: "No auth needed — auto-detected", authed: true });
+          localFound = true;
         }
-      } catch {
-        // not running
+      } catch { /* LM Studio not running */ }
+
+      // Check Ollama (port 11434)
+      if (!localFound) {
+        try {
+          const ollamaModels = await listInstalledModelsDetailed();
+          if (ollamaModels.length > 0) {
+            groups["Local (LM Studio / Ollama)"] = ollamaModels.map(m => ({
+              name: m.name,
+              baseUrl: "http://localhost:11434/v1",
+              apiKey: "ollama",
+              providerType: "openai" as const,
+            }));
+            localFound = true;
+          }
+        } catch { /* Ollama not running */ }
+      }
+
+      if (localFound) {
+        providerEntries.push({ name: "Local (LM Studio / Ollama)", description: "No auth needed — auto-detected", authed: true });
       }
 
       // Anthropic
