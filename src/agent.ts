@@ -727,9 +727,9 @@ export class CodingAgent {
     if (providerType && providerType !== this.providerType) {
       this.providerType = providerType;
       if (providerType === "anthropic") {
-        this.anthropicClient = new Anthropic({
-          apiKey: apiKey ?? this.options.provider.apiKey,
-        });
+        const key = apiKey || this.options.provider.apiKey;
+        if (!key) throw new Error("No API key available for Anthropic");
+        this.anthropicClient = new Anthropic({ apiKey: key });
       } else {
         this.anthropicClient = null;
       }
