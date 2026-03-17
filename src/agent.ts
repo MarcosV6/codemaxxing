@@ -12,6 +12,8 @@ import { isGitRepo, autoCommit } from "./utils/git.js";
 import { buildSkillPrompts, getActiveSkillCount } from "./utils/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "./utils/sessions.js";
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "./utils/mcp.js";
+import { refreshAnthropicOAuthToken } from "./utils/anthropic-oauth.js";
+import { getCredential, saveCredential } from "./utils/auth.js";
 import type { ProviderConfig } from "./config.js";
 
 // ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
@@ -321,14 +323,27 @@ export class CodingAgent {
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
-      const stream = await this.client.chat.completions.create({
-        model: this.model,
-        messages: this.messages,
-        tools: this.tools,
-        max_tokens: this.maxTokens,
-        stream: true,
-        stream_options: { include_usage: true },
-      });
+      let stream;
+      try {
+        stream = await this.client.chat.completions.create({
+          model: this.model,
+          messages: this.messages,
+          tools: this.tools,
+          max_tokens: this.maxTokens,
+          stream: true,
+          stream_options: { include_usage: true },
+        });
+      } catch (err: any) {
+        // Better error for OpenAI Codex OAuth scope limitations
+        if (err.status === 401 && err.message?.includes("Missing scopes")) {
+          throw new Error(
+            `Model "${this.model}" requires API scopes your OAuth token doesn't have. ` +
+            `ChatGPT subscription OAuth tokens are limited to Codex models (o3, o4-mini, gpt-4.1). ` +
+            `For other models, use an API key (/login openai → api-key).`
+          );
+        }
+        throw err;
+      }
 
       // Accumulate the streamed response
       let contentText = "";
@@ -582,7 +597,6 @@ export class CodingAgent {
    * Anthropic-native streaming chat
    */
   private async chatAnthropic(_userMessage: string): Promise<string> {
-    const client = this.anthropicClient!;
     let iterations = 0;
     const MAX_ITERATIONS = 20;
 
@@ -612,26 +626,41 @@ export class CodingAgent {
         systemPrompt = sanitizeSurrogates(this.systemPrompt);
       }
 
-      const stream = client.messages.stream({
-        model: this.model,
-        max_tokens: this.maxTokens,
-        system: systemPrompt,
-        messages: anthropicMessages,
-        tools: anthropicTools,
-      });
-
+      let stream;
+      let finalMessage;
       let contentText = "";
       const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-      let currentToolId = "";
-      let currentToolName = "";
-      let currentToolInput = "";
 
-      stream.on("text", (text) => {
-        contentText += text;
-        this.options.onToken?.(text);
-      });
+      try {
+        stream = this.anthropicClient!.messages.stream({
+          model: this.model,
+          max_tokens: this.maxTokens,
+          system: systemPrompt,
+          messages: anthropicMessages,
+          tools: anthropicTools,
+        });
 
-      const finalMessage = await stream.finalMessage();
+        stream.on("text", (text) => {
+          contentText += text;
+          this.options.onToken?.(text);
+        });
+
+        finalMessage = await stream.finalMessage();
+      } catch (err: any) {
+        // Handle 401 Unauthorized — try refreshing OAuth token
+        const isOAuth = (this.currentApiKey ?? this.options.provider.apiKey)?.startsWith("sk-ant-oat");
+        if (err.status === 401 && isOAuth) {
+          const refreshed = await this.tryRefreshAnthropicToken();
+          if (refreshed) {
+            // Token was refreshed — retry this iteration
+            iterations--;
+            continue;
+          }
+          throw new Error("Anthropic OAuth token expired. Please re-login with /login anthropic");
+        }
+        // Re-throw if we can't handle it
+        throw err;
+      }
 
       // Track usage
       if (finalMessage.usage) {
@@ -788,6 +817,30 @@ export class CodingAgent {
         baseURL: baseUrl ?? this.options.provider.baseUrl,
         apiKey: apiKey ?? this.options.provider.apiKey,
       });
+    }
+  }
+
+  /**
+   * Attempt to refresh an expired Anthropic OAuth token.
+   * Returns true if refresh succeeded and client was rebuilt.
+   */
+  private async tryRefreshAnthropicToken(): Promise<boolean> {
+    const cred = getCredential("anthropic");
+    if (!cred?.refreshToken) return false;
+
+    try {
+      const refreshed = await refreshAnthropicOAuthToken(cred.refreshToken);
+      // Update stored credential
+      cred.apiKey = refreshed.access;
+      cred.refreshToken = refreshed.refresh;
+      cred.oauthExpires = refreshed.expires;
+      saveCredential(cred);
+      // Rebuild client with new token
+      this.currentApiKey = refreshed.access;
+      this.anthropicClient = createAnthropicClient(refreshed.access);
+      return true;
+    } catch {
+      return false;
     }
   }
 
