@@ -293,14 +293,21 @@ export function DeleteSessionConfirm({ session, colors }: DeleteSessionConfirmPr
 
 // ── Model Picker (grouped) ──
 
+export interface ModelEntry {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  providerType: "openai" | "anthropic";
+}
+
 export interface GroupedModels {
-  [providerName: string]: string[];
+  [providerName: string]: ModelEntry[];
 }
 
 interface GroupedModelPickerProps {
   groups: GroupedModels;
   selectedIndex: number;
-  flatList: string[];
+  flatList: ModelEntry[];
   activeModel: string;
   colors: Theme["colors"];
 }
@@ -318,14 +325,14 @@ export function GroupedModelPicker({ groups, selectedIndex, flatList, activeMode
         const headerAndModels = (
           <Box key={provider} flexDirection="column">
             <Text color={colors.muted} dimColor>{"  ── "}{provider}{" ──"}</Text>
-            {models.map((m) => {
+            {models.map((entry) => {
               const idx = flatIdx++;
               const isSelected = idx === selectedIndex;
               return (
-                <Text key={m}>
+                <Text key={entry.name}>
                   {"  "}{isSelected ? <Text color={colors.primary} bold>{"▸ "}</Text> : "  "}
-                  <Text color={isSelected ? colors.primary : undefined}>{m}</Text>
-                  {m === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
+                  <Text color={isSelected ? colors.primary : undefined}>{entry.name}</Text>
+                  {entry.name === activeModel ? <Text color={colors.success}>{" (active)"}</Text> : null}
                 </Text>
               );
             })}

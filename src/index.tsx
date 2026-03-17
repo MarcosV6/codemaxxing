@@ -19,7 +19,7 @@ import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
 import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
-import type { GroupedModels } from "./ui/pickers.js";
+import type { GroupedModels, ModelEntry } from "./ui/pickers.js";
 import { getCredential } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
 import { Banner, ConnectionInfo } from "./ui/banner.js";
@@ -227,7 +227,7 @@ function App() {
   const [ollamaPullPickerIndex, setOllamaPullPickerIndex] = useState(0);
   const [modelPickerGroups, setModelPickerGroups] = useState<GroupedModels | null>(null);
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
-  const [flatModelList, setFlatModelList] = useState<string[]>([]);
+  const [flatModelList, setFlatModelList] = useState<ModelEntry[]>([]);
 
   // ── Setup Wizard State ──
   const [wizardScreen, setWizardScreen] = useState<WizardScreen>(null);
@@ -530,80 +530,53 @@ function App() {
       addMsg("info", "Fetching available models...");
       const groups: GroupedModels = {};
 
-      // Collect local Ollama models
+      // Collect local Ollama models (always available if running)
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
-          groups["Local (Ollama)"] = ollamaModels.map(m => m.name);
+          groups["Local (Ollama)"] = ollamaModels.map(m => ({
+            name: m.name,
+            baseUrl: "http://localhost:1234/v1",
+            apiKey: "lm-studio",
+            providerType: "openai" as const,
+          }));
         }
       } catch {
         // Ollama not available, skip
       }
 
-      // Collect Anthropic models
-      if (getCredential("anthropic") || providerRef.current?.baseUrl?.includes("anthropic.com")) {
+      // Collect Anthropic models (if authed)
+      const anthropicCred = getCredential("anthropic");
+      if (anthropicCred) {
         const claudeModels = [
           "claude-sonnet-4-20250514",
           "claude-haiku-4-20250414",
           "claude-opus-4-20250514",
         ];
-        // Try fetching from endpoint, fall back to hardcoded
-        if (providerRef.current?.baseUrl?.includes("anthropic.com")) {
-          try {
-            const fetched = await listModels(providerRef.current.baseUrl, providerRef.current.apiKey || "");
-            if (fetched.length > 0) {
-              groups["Anthropic"] = fetched;
-            } else {
-              groups["Anthropic"] = claudeModels;
-            }
-          } catch {
-            groups["Anthropic"] = claudeModels;
-          }
-        } else {
-          groups["Anthropic"] = claudeModels;
-        }
+        groups["Anthropic"] = claudeModels.map(m => ({
+          name: m,
+          baseUrl: "https://api.anthropic.com/v1",
+          apiKey: anthropicCred.apiKey,
+          providerType: "anthropic" as const,
+        }));
       }
 
-      // Collect OpenAI models
-      if (getCredential("openai") || providerRef.current?.baseUrl?.includes("openai.com")) {
+      // Collect OpenAI models (if authed)
+      const openaiCred = getCredential("openai");
+      if (openaiCred) {
+        const baseUrl = openaiCred.baseUrl || "https://api.openai.com/v1";
         try {
-          const baseUrl = providerRef.current?.baseUrl?.includes("openai.com")
-            ? providerRef.current.baseUrl
-            : "https://api.openai.com/v1";
-          const apiKey = providerRef.current?.baseUrl?.includes("openai.com")
-            ? providerRef.current.apiKey || ""
-            : getCredential("openai")?.apiKey || "";
-          const openaiModels = await listModels(baseUrl, apiKey);
+          const openaiModels = await listModels(baseUrl, openaiCred.apiKey);
           if (openaiModels.length > 0) {
-            groups["OpenAI"] = openaiModels;
+            groups["OpenAI"] = openaiModels.map(m => ({
+              name: m,
+              baseUrl,
+              apiKey: openaiCred.apiKey,
+              providerType: "openai" as const,
+            }));
           }
         } catch {
-          // OpenAI fetch failed
-        }
-      }
-
-      // Collect from current provider if it's not already covered
-      const { baseUrl, apiKey } = providerRef.current;
-      if (baseUrl && baseUrl !== "auto" &&
-          !baseUrl.includes("anthropic.com") && !baseUrl.includes("openai.com") &&
-          !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1")) {
-        try {
-          const providerModels = await listModels(baseUrl, apiKey || "");
-          if (providerModels.length > 0) {
-            // Determine provider name from URL
-            let providerName = "Cloud Provider";
-            if (baseUrl.includes("openrouter")) providerName = "OpenRouter";
-            else if (baseUrl.includes("groq")) providerName = "Groq";
-            else if (baseUrl.includes("together")) providerName = "Together";
-            else {
-              try { providerName = new URL(baseUrl).hostname; } catch { /* keep default */ }
-            }
-            if (!groups[providerName]) {
-              groups[providerName] = providerModels;
-            }
-          }
-        } catch {
-          // Provider fetch failed
+          // OpenAI fetch failed, skip
         }
       }
 

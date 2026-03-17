@@ -44,12 +44,12 @@ export interface InputRouterContext extends WizardContext {
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
   // Model picker (grouped)
-  modelPickerGroups: { [providerName: string]: string[] } | null;
+  modelPickerGroups: { [providerName: string]: Array<{ name: string; baseUrl: string; apiKey: string; providerType: "openai" | "anthropic" }> } | null;
   modelPickerIndex: number;
   setModelPickerIndex: (fn: (prev: number) => number) => void;
-  setModelPickerGroups: (val: { [providerName: string]: string[] } | null) => void;
-  flatModelList: string[];
-  setFlatModelList: (val: string[]) => void;
+  setModelPickerGroups: (val: { [providerName: string]: Array<{ name: string; baseUrl: string; apiKey: string; providerType: "openai" | "anthropic" }> } | null) => void;
+  flatModelList: Array<{ name: string; baseUrl: string; apiKey: string; providerType: "openai" | "anthropic" }>;
+  setFlatModelList: (val: Array<{ name: string; baseUrl: string; apiKey: string; providerType: "openai" | "anthropic" }>) => void;
 
   // Ollama delete picker
   ollamaDeletePicker: { models: { name: string; size: number }[] } | null;
@@ -465,9 +465,9 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
   if (key.return) {
     const selected = ctx.flatModelList[ctx.modelPickerIndex];
     if (selected && ctx.agent) {
-      ctx.agent.switchModel(selected);
-      ctx.setModelName(selected);
-      ctx.addMsg("info", `✅ Switched to: ${selected}`);
+      ctx.agent.switchModel(selected.name, selected.baseUrl, selected.apiKey, selected.providerType);
+      ctx.setModelName(selected.name);
+      ctx.addMsg("info", `✅ Switched to: ${selected.name}`);
       ctx.refreshConnectionBanner();
     }
     ctx.setModelPickerGroups(null);

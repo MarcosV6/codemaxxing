@@ -722,8 +722,18 @@ export class CodingAgent {
   /**
    * Switch to a different model mid-session
    */
-  switchModel(model: string, baseUrl?: string, apiKey?: string): void {
+  switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
+    if (providerType && providerType !== this.providerType) {
+      this.providerType = providerType;
+      if (providerType === "anthropic") {
+        this.anthropicClient = new Anthropic({
+          apiKey: apiKey ?? this.options.provider.apiKey,
+        });
+      } else {
+        this.anthropicClient = null;
+      }
+    }
     if (baseUrl || apiKey) {
       this.client = new OpenAI({
         baseURL: baseUrl ?? this.options.provider.baseUrl,
