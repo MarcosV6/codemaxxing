@@ -379,6 +379,27 @@ export function detectCodexToken(): string | null {
     }
   }
 
+  // Codex CLI v0.18+ stores tokens in macOS Keychain
+  if (process.platform === "darwin") {
+    const keychainQueries = [
+      ["security", "find-generic-password", "-s", "codex", "-w"],
+      ["security", "find-generic-password", "-a", "openai", "-s", "codex", "-w"],
+      ["security", "find-generic-password", "-s", "openai-codex", "-w"],
+      ["security", "find-generic-password", "-l", "codex", "-w"],
+    ];
+    for (const args of keychainQueries) {
+      try {
+        const token = execSync(args.join(" "), { stdio: "pipe", timeout: 3000 }).toString().trim();
+        if (token) return token;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Final fallback: environment variable
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+
   return null;
 }
 

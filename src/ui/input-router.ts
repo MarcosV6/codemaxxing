@@ -208,7 +208,7 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
     } else if (method === "cached-token" && providerId === "openai") {
       const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
       if (imported) { ctx.addMsg("info", `✅ Imported Codex credentials! (${imported.label})`); }
-      else { ctx.addMsg("info", "No Codex CLI found. Install Codex CLI and sign in first."); }
+      else { ctx.addMsg("info", "Could not auto-detect Codex CLI credentials.\n  Set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys"); }
     } else if (method === "cached-token" && providerId === "qwen") {
       const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
       if (imported) { ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`); }

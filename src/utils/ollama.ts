@@ -27,6 +27,11 @@ export function isOllamaInstalled(): boolean {
     if (getWindowsOllamaPaths().some(p => existsSync(p))) return true;
   }
 
+  // Check known install paths on macOS
+  if (process.platform === "darwin") {
+    if (existsSync("/usr/local/bin/ollama") || existsSync("/opt/homebrew/bin/ollama")) return true;
+  }
+
   // Check if the server is responding (if server is running, Ollama is definitely installed)
   try {
     execSync("curl -s http://localhost:11434/api/tags", {
@@ -66,7 +71,7 @@ export async function isOllamaRunning(): Promise<boolean> {
 /** Get the install command for the user's OS */
 export function getOllamaInstallCommand(os: "macos" | "linux" | "windows"): string {
   switch (os) {
-    case "macos": return "brew install ollama";
+    case "macos": return "curl -fsSL https://ollama.com/install.sh | sh";
     case "linux": return "curl -fsSL https://ollama.com/install.sh | sh";
     case "windows": return "winget install Ollama.Ollama";
   }
