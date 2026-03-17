@@ -599,7 +599,12 @@ function App() {
       const openaiCred = getCredential("openai");
       const openaiModels = ["gpt-5.4", "gpt-5.4-pro", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini", "gpt-4o"];
       if (openaiCred) {
-        const baseUrl = openaiCred.baseUrl || "https://api.openai.com/v1";
+        // OAuth tokens (non sk- keys) must use ChatGPT backend, not api.openai.com
+        const isOAuthToken = openaiCred.method === "oauth" || openaiCred.method === "cached-token" || 
+                             (!openaiCred.apiKey.startsWith("sk-") && !openaiCred.apiKey.startsWith("sess-"));
+        const baseUrl = isOAuthToken 
+          ? "https://chatgpt.com/backend-api" 
+          : (openaiCred.baseUrl || "https://api.openai.com/v1");
         groups["OpenAI (ChatGPT)"] = openaiModels.map(m => ({
           name: m,
           baseUrl,

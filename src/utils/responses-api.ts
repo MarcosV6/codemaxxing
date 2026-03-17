@@ -106,13 +106,18 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     }));
 
   // Determine the endpoint URL
-  // chatgpt.com/backend-api → chatgpt.com/backend-api/codex/responses
-  // api.openai.com/v1 → api.openai.com/v1/responses
+  // OAuth tokens (JWTs, not sk- keys) must use ChatGPT backend
+  const isOAuthToken = !apiKey.startsWith("sk-") && !apiKey.startsWith("sess-");
+  let effectiveBaseUrl = baseUrl;
+  if (isOAuthToken && !baseUrl.includes("chatgpt.com")) {
+    effectiveBaseUrl = "https://chatgpt.com/backend-api";
+  }
+
   let endpoint: string;
-  if (baseUrl.includes("chatgpt.com/backend-api")) {
-    endpoint = baseUrl.replace(/\/$/, "") + "/codex/responses";
+  if (effectiveBaseUrl.includes("chatgpt.com/backend-api")) {
+    endpoint = effectiveBaseUrl.replace(/\/$/, "") + "/codex/responses";
   } else {
-    endpoint = baseUrl.replace(/\/$/, "") + "/responses";
+    endpoint = effectiveBaseUrl.replace(/\/$/, "") + "/responses";
   }
 
   // Build request body
