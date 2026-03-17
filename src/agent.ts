@@ -802,10 +802,12 @@ export class CodingAgent {
   switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
     if (apiKey) this.currentApiKey = apiKey;
-    if (providerType && providerType !== this.providerType) {
+
+    if (providerType) {
       this.providerType = providerType;
       if (providerType === "anthropic") {
-        const key = apiKey || this.options.provider.apiKey;
+        // Always rebuild Anthropic client when switching (token may have changed)
+        const key = apiKey || this.currentApiKey || this.options.provider.apiKey;
         if (!key) throw new Error("No API key available for Anthropic");
         this.anthropicClient = createAnthropicClient(key);
       } else {

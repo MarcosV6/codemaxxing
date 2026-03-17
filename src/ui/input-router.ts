@@ -511,8 +511,10 @@ function handleModelPicker(_inputChar: string, key: Key, ctx: InputRouterContext
       ctx.refreshConnectionBanner();
     }
     ctx.setModelPickerGroups(null);
+    ctx.setProviderPicker(null);
     ctx.setSelectedProvider(null);
     ctx.setModelPickerIndex(() => 0);
+    ctx.setProviderPickerIndex(() => 0);
     return true;
   }
   return true;
