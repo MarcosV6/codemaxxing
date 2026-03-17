@@ -126,6 +126,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     instructions: systemPrompt,
     input: inputItems.length > 0 ? inputItems : "",
     stream: true,
+    store: false,
     max_output_tokens: maxTokens,
   };
 
