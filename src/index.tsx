@@ -888,6 +888,8 @@ function App() {
       setLoading,
       setSpinnerMsg,
       agent,
+      streaming,
+      loading,
       setModelName,
       addMsg,
       exit,

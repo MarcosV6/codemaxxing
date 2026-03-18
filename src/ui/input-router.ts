@@ -125,6 +125,10 @@ export interface InputRouterContext extends WizardContext {
   agent: CodingAgent | null;
   setModelName: (val: string) => void;
 
+  // Generation state
+  streaming: boolean;
+  loading: boolean;
+
   // Misc (addMsg, setLoading, setSpinnerMsg, connectToProvider, _require inherited from WizardContext)
   exit: () => void;
   refreshConnectionBanner: () => Promise<void>;
@@ -151,6 +155,13 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleDeleteSessionPicker(inputChar, key, ctx)) return true;
   if (handleBackspaceRemovesPasteChunk(inputChar, key, ctx)) return true;
   if (handleApprovalPrompts(inputChar, key, ctx)) return true;
+  // Escape to abort generation (when loading or streaming)
+  if (key.escape && (ctx.streaming || ctx.loading) && ctx.agent) {
+    ctx.agent.abort();
+    ctx.setLoading(false);
+    ctx.addMsg("info", "⏹ Generation cancelled.");
+    return true;
+  }
   if (handleCtrlCExit(inputChar, key, ctx)) return true;
   return false;
 }

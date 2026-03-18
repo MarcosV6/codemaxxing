@@ -318,6 +318,7 @@ export class CodingAgent {
    * and loops until the model responds with text (no more tool calls).
    */
   async chat(userMessage: string): Promise<string> {
+    this.resetAbort();
     const userMsg: ChatCompletionMessageParam = { role: "user", content: userMessage };
     this.messages.push(userMsg);
     saveMessage(this.sessionId, userMsg);
@@ -371,6 +372,11 @@ export class CodingAgent {
       let chunkCompletionTokens = 0;
 
       for await (const chunk of stream) {
+        // Check for abort
+        if (this.aborted) {
+          try { stream.controller?.abort(); } catch {}
+          break;
+        }
         // Capture usage from the final chunk
         if ((chunk as any).usage) {
           chunkPromptTokens = (chunk as any).usage.prompt_tokens ?? 0;
@@ -442,6 +448,12 @@ export class CodingAgent {
         this.totalCost = (this.totalPromptTokens / 1_000_000) * costs.input +
                          (this.totalCompletionTokens / 1_000_000) * costs.output;
         updateSessionCost(this.sessionId, this.totalPromptTokens, this.totalCompletionTokens, this.totalCost);
+      }
+
+      // If aborted, return what we have so far
+      if (this.aborted) {
+        updateTokenEstimate(this.sessionId, this.estimateTokens());
+        return contentText ? contentText + "\n\n_(cancelled)_" : "_(cancelled)_";
       }
 
       // If no tool calls, we're done — return the text
@@ -635,6 +647,7 @@ export class CodingAgent {
    * Anthropic-native streaming chat
    */
   private async chatAnthropic(_userMessage: string): Promise<string> {
+    this.resetAbort();
     let iterations = 0;
     const MAX_ITERATIONS = 20;
 
@@ -664,8 +677,8 @@ export class CodingAgent {
         systemPrompt = sanitizeSurrogates(this.systemPrompt);
       }
 
-      let stream;
-      let finalMessage;
+      let stream: any;
+      let finalMessage: any;
       let contentText = "";
       const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
 
@@ -678,7 +691,11 @@ export class CodingAgent {
           tools: anthropicTools,
         });
 
-        stream.on("text", (text) => {
+        stream.on("text", (text: string) => {
+          if (this.aborted) {
+            stream.abort();
+            return;
+          }
           contentText += text;
           this.options.onToken?.(text);
         });
@@ -698,6 +715,12 @@ export class CodingAgent {
         }
         // Re-throw if we can't handle it
         throw err;
+      }
+
+      // If aborted, return what we have
+      if (this.aborted) {
+        updateTokenEstimate(this.sessionId, this.estimateTokens());
+        return contentText ? contentText + "\n\n_(cancelled)_" : "_(cancelled)_";
       }
 
       // Track usage
@@ -838,6 +861,7 @@ export class CodingAgent {
    * OpenAI Responses API chat (for Codex OAuth tokens + GPT-5.4)
    */
   private async chatOpenAIResponses(userMessage: string): Promise<string> {
+    this.resetAbort();
     let iterations = 0;
     const MAX_ITERATIONS = 20;
 
@@ -880,6 +904,12 @@ export class CodingAgent {
         }
         this.messages.push(assistantMessage);
         saveMessage(this.sessionId, assistantMessage);
+
+        // If aborted, return what we have
+        if (this.aborted) {
+          updateTokenEstimate(this.sessionId, this.estimateTokens());
+          return contentText ? contentText + "\n\n_(cancelled)_" : "_(cancelled)_";
+        }
 
         // If no tool calls, we're done
         if (toolCalls.length === 0) {
@@ -985,6 +1015,24 @@ export class CodingAgent {
   /**
    * Switch to a different model mid-session
    */
+  /**
+   * Abort the current generation. Safe to call from any thread.
+   */
+  abort(): void {
+    this.aborted = true;
+  }
+
+  /**
+   * Check if generation was aborted, and reset the flag.
+   */
+  isAborted(): boolean {
+    return this.aborted;
+  }
+
+  private resetAbort(): void {
+    this.aborted = false;
+  }
+
   switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
     if (apiKey) this.currentApiKey = apiKey;
