@@ -71,7 +71,7 @@ If you already have a local server running, Codemaxxing auto-detects common defa
 
 For LM Studio:
 1. Download [LM Studio](https://lmstudio.ai)
-2. Load a coding model (for example **Qwen 2.5 Coder 7B** for a lightweight test)
+2. Load a coding model (ideally **Qwen 2.5 Coder 14B** or **DeepSeek Coder V2 16B** if your machine can handle it; use 7B only as a fallback)
 3. Start the local server
 4. Run:
 
