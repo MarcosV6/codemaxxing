@@ -27,6 +27,18 @@ export type PasteEventBus = EventEmitter;
 export function setupPasteInterceptor(): PasteEventBus {
   const pasteEvents = new EventEmitter();
 
+  // Detect Windows CMD/conhost — these don't support bracketed paste or ANSI sequences well.
+  // On these terminals, skip paste interception entirely to avoid eating keystrokes.
+  const isWindowsLegacyTerminal = process.platform === "win32" && (
+    !process.env.WT_SESSION && // Not Windows Terminal
+    !process.env.TERM_PROGRAM   // Not a modern terminal emulator
+  );
+
+  if (isWindowsLegacyTerminal) {
+    // Just return a dummy event bus — no interception, no burst buffering
+    return pasteEvents;
+  }
+
   // Enable bracketed paste mode — terminal wraps pastes in escape sequences
   process.stdout.write("\x1b[?2004h");
 

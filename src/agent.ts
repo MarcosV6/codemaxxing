@@ -192,6 +192,7 @@ export class CodingAgent {
   private providerType: "openai" | "anthropic";
   private currentApiKey: string | null = null;
   private currentBaseUrl: string = "";
+  private aborted: boolean = false;
   private messages: ChatCompletionMessageParam[] = [];
   private tools: ChatCompletionTool[] = FILE_TOOLS;
   private cwd: string;

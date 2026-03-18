@@ -1054,7 +1054,7 @@ function App() {
       )}
 
       {/* ═══ INPUT BOX (always at bottom) ═══ */}
-      <Box borderStyle="single" borderColor={approval ? theme.colors.warning : theme.colors.border} paddingX={1}>
+      <Box borderStyle={process.platform === "win32" && !process.env.WT_SESSION ? "classic" : "single"} borderColor={approval ? theme.colors.warning : theme.colors.border} paddingX={1}>
         <Text color={theme.colors.secondary} bold>{"> "}</Text>
         {approval ? (
           <Text color={theme.colors.warning}>waiting for approval...</Text>
