@@ -47,9 +47,11 @@ export function handleWizardScreen(_inputChar: string, key: Key, ctx: WizardCont
         ctx.setWizardScreen(null);
         ctx.setLoginPicker(true);
         ctx.setLoginPickerIndex(() => 0);
+        ctx.addMsg("info", "Choose a cloud provider to continue.");
       } else if (selected === "existing") {
         ctx.setWizardScreen(null);
-        ctx.addMsg("info", "Start your LLM server, then type /connect to retry.");
+        ctx.addMsg("info", "Checking for your running server...");
+        void ctx.connectToProvider(true);
       }
       return true;
     }

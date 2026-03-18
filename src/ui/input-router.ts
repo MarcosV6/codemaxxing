@@ -491,6 +491,9 @@ function handleProviderPicker(_inputChar: string, key: Key, ctx: InputRouterCont
   }
   if (key.escape) {
     ctx.setProviderPicker(null);
+    if (!ctx.agent) {
+      ctx.addMsg("info", "Model selection cancelled. Use /login for cloud providers or choose local setup from the startup menu.");
+    }
     return true;
   }
   if (key.return) {

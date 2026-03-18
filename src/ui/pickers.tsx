@@ -635,7 +635,7 @@ export function WizardInstallOllama({ wizardHardware, colors }: WizardInstallOll
       <Text color={colors.primary}>{"  Press Enter to install Ollama automatically"}</Text>
       <Text dimColor>{"  Or install manually: "}<Text>{getOllamaInstallCommand(wizardHardware?.os ?? "linux")}</Text></Text>
       <Text>{""}</Text>
-      <Text dimColor>{"  Enter to install · Esc to go back"}</Text>
+      <Text dimColor>{"  Enter to install · Esc back to model list"}</Text>
     </Box>
   );
 }
