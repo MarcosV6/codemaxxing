@@ -89,10 +89,11 @@ codemaxxing
 
 If no LLM is available, Codemaxxing can guide you through:
 - detecting your hardware
-- recommending a model
+- recommending a model (with stronger coding defaults first)
 - installing Ollama
 - downloading the model
 - connecting automatically
+- opening the model picker automatically after cloud auth
 
 ### Option C — ChatGPT Plus (GPT-5.4, easiest cloud option)
 
