@@ -211,5 +211,18 @@ export async function connectToProvider(
   ctx.setReady(true);
   if (isRetry) {
     ctx.addMsg("info", `✅ Connected to ${provider.model}`);
+  } else {
+    // First-time connection — show capabilities hint
+    const tools = a.getTools();
+    const toolCount = tools.length;
+    const toolNames = tools
+      .map((t) => t.function.name.replace(/_/g, " "))
+      .slice(0, 3)
+      .join(", ");
+    ctx.addMsg(
+      "info",
+      `💡 You can: ${toolNames}${toolCount > 3 ? `, +${toolCount - 3} more` : ""}\n` +
+      `   Try: "list files in src/" or "read main.ts"`
+    );
   }
 }

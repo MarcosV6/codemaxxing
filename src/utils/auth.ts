@@ -193,11 +193,14 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
   const { verifier, challenge } = generatePKCE();
 
   return new Promise((resolve, reject) => {
+    let handled = false; // Guard against duplicate callbacks
+
     // Start local callback server
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? "/", `http://localhost`);
 
-      if (url.pathname === "/callback") {
+      if (url.pathname === "/callback" && !handled) {
+        handled = true;
         const code = url.searchParams.get("code");
 
         if (!code) {
@@ -224,6 +227,9 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
 
           if (!exchangeRes.ok) {
             const errText = await exchangeRes.text();
+            if (exchangeRes.status === 409) {
+              throw new Error(`OpenRouter returned 409 (Conflict) — this usually means the auth code was already used. Please try /login again.`);
+            }
             throw new Error(`Exchange failed (${exchangeRes.status}): ${errText}`);
           }
 

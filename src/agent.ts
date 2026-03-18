@@ -1016,6 +1016,13 @@ export class CodingAgent {
    * Switch to a different model mid-session
    */
   /**
+   * Get available tools (for UI hints, capabilities display, etc.)
+   */
+  getTools(): ChatCompletionTool[] {
+    return this.tools;
+  }
+
+  /**
    * Abort the current generation. Safe to call from any thread.
    */
   abort(): void {
