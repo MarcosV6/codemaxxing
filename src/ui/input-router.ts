@@ -309,7 +309,7 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for GitHub authorization...");
         copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-          .then(() => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Next: type /models to pick a model`); ctx.setLoading(false); })
+          .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Opening model picker...`); ctx.setLoading(false); await ctx.openModelPicker(); })
           .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "api-key") {
         ctx.setLoginMethodPicker(null);

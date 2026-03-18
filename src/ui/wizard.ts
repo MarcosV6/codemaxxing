@@ -37,9 +37,10 @@ export function handleWizardScreen(_inputChar: string, key: Key, ctx: WizardCont
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for authorization...");
         openRouterOAuth((msg: string) => ctx.addMsg("info", msg))
-          .then(() => {
-            ctx.addMsg("info", "✅ OpenRouter authenticated! Use /connect to connect.");
+          .then(async () => {
+            ctx.addMsg("info", "✅ OpenRouter authenticated! Opening model picker...");
             ctx.setLoading(false);
+            await ctx.openModelPicker();
           })
           .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (selected === "apikey") {
@@ -198,6 +199,7 @@ function startPullFlow(ctx: WizardContext, selected: { ollamaId: string; name: s
         }
       }
 
+      ctx.addMsg("info", `Downloading ${selected.name}. This can take a while on first run depending on your internet and disk speed.`);
       await pullModel(selected.ollamaId, (p) => {
         ctx.setWizardPullProgress(p);
       });

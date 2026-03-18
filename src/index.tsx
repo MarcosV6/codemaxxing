@@ -276,6 +276,7 @@ function App() {
       setApproval,
       setWizardScreen,
       setWizardIndex,
+      openModelPicker,
     });
   }, []);
 
@@ -303,6 +304,133 @@ function App() {
   showSuggestionsRef.current = showSuggestions;
   const pastedChunksRef = React.useRef(pastedChunks);
   pastedChunksRef.current = pastedChunks;
+
+  const openModelPicker = useCallback(async () => {
+    addMsg("info", "Fetching available models...");
+    const groups: GroupedModels = {};
+    const providerEntries: ProviderPickerEntry[] = [];
+
+    let localFound = false;
+    const localEndpoints = [
+      { name: "LM Studio", port: 1234 },
+      { name: "Ollama", port: 11434 },
+      { name: "vLLM", port: 8000 },
+      { name: "LocalAI", port: 8080 },
+    ];
+
+    for (const endpoint of localEndpoints) {
+      if (localFound) break;
+      try {
+        const url = `http://localhost:${endpoint.port}/v1`;
+        const models = await listModels(url, "local");
+        if (models.length > 0) {
+          groups["Local LLM"] = models.map(m => ({
+            name: m,
+            baseUrl: url,
+            apiKey: "local",
+            providerType: "openai" as const,
+          }));
+          localFound = true;
+        }
+      } catch { /* not running */ }
+    }
+
+    if (!localFound) {
+      try {
+        const ollamaModels = await listInstalledModelsDetailed();
+        if (ollamaModels.length > 0) {
+          groups["Local LLM"] = ollamaModels.map(m => ({
+            name: m.name,
+            baseUrl: "http://localhost:11434/v1",
+            apiKey: "ollama",
+            providerType: "openai" as const,
+          }));
+          localFound = true;
+        }
+      } catch { /* Ollama not running */ }
+    }
+
+    if (localFound) {
+      providerEntries.push({ name: "Local LLM", description: "No auth needed — auto-detected", authed: true });
+    }
+
+    const anthropicCred = getCredential("anthropic");
+    const claudeModels = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"];
+    if (anthropicCred) {
+      groups["Anthropic (Claude)"] = claudeModels.map(m => ({
+        name: m,
+        baseUrl: "https://api.anthropic.com",
+        apiKey: anthropicCred.apiKey,
+        providerType: "anthropic" as const,
+      }));
+    }
+    providerEntries.push({ name: "Anthropic (Claude)", description: "Claude Opus, Sonnet, Haiku — use your subscription or API key", authed: !!anthropicCred });
+
+    const openaiCred = getCredential("openai");
+    const openaiModels = ["gpt-5.4", "gpt-5.4-pro", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini", "gpt-4o"];
+    if (openaiCred) {
+      const isOAuthToken = openaiCred.method === "oauth" || openaiCred.method === "cached-token" || 
+                           (!openaiCred.apiKey.startsWith("sk-") && !openaiCred.apiKey.startsWith("sess-"));
+      const baseUrl = isOAuthToken 
+        ? "https://chatgpt.com/backend-api" 
+        : (openaiCred.baseUrl || "https://api.openai.com/v1");
+      groups["OpenAI (ChatGPT)"] = openaiModels.map(m => ({
+        name: m,
+        baseUrl,
+        apiKey: openaiCred.apiKey,
+        providerType: "openai" as const,
+      }));
+    }
+    providerEntries.push({ name: "OpenAI (ChatGPT)", description: "GPT-5, GPT-4.1, o3 — use your ChatGPT subscription or API key", authed: !!openaiCred });
+
+    const openrouterCred = getCredential("openrouter");
+    if (openrouterCred) {
+      try {
+        const orModels = await listModels(openrouterCred.baseUrl || "https://openrouter.ai/api/v1", openrouterCred.apiKey);
+        if (orModels.length > 0) {
+          groups["OpenRouter"] = orModels.slice(0, 20).map(m => ({
+            name: m,
+            baseUrl: openrouterCred.baseUrl || "https://openrouter.ai/api/v1",
+            apiKey: openrouterCred.apiKey,
+            providerType: "openai" as const,
+          }));
+        }
+      } catch { /* skip */ }
+    }
+    providerEntries.push({ name: "OpenRouter", description: "200+ models (Claude, GPT, Gemini, Llama, etc.) — one login", authed: !!openrouterCred });
+
+    const qwenCred = getCredential("qwen");
+    if (qwenCred) {
+      groups["Qwen"] = ["qwen-max", "qwen-plus", "qwen-turbo"].map(m => ({
+        name: m,
+        baseUrl: qwenCred.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        apiKey: qwenCred.apiKey,
+        providerType: "openai" as const,
+      }));
+    }
+    providerEntries.push({ name: "Qwen", description: "Qwen 3.5, Qwen Coder — use your Qwen CLI login or API key", authed: !!qwenCred });
+
+    const copilotCred = getCredential("copilot");
+    if (copilotCred) {
+      groups["GitHub Copilot"] = ["gpt-4o", "claude-3.5-sonnet"].map(m => ({
+        name: m,
+        baseUrl: copilotCred.baseUrl || "https://api.githubcopilot.com",
+        apiKey: copilotCred.apiKey,
+        providerType: "openai" as const,
+      }));
+    }
+    providerEntries.push({ name: "GitHub Copilot", description: "Use your GitHub Copilot subscription", authed: !!copilotCred });
+
+    if (providerEntries.length > 0) {
+      setModelPickerGroups(groups);
+      setProviderPicker(providerEntries);
+      setProviderPickerIndex(0);
+      setSelectedProvider(null);
+      return;
+    }
+
+    addMsg("error", "No models available. Download one with /ollama pull or configure a provider.");
+  }, [addMsg]);
 
   const handleSubmit = useCallback(async (value: string) => {
     value = sanitizeInputArtifacts(value);
@@ -534,141 +662,7 @@ function App() {
       return;
     }
     if (trimmed === "/models" || trimmed === "/model") {
-      addMsg("info", "Fetching available models...");
-      const groups: GroupedModels = {};
-      const providerEntries: ProviderPickerEntry[] = [];
-
-      // Local LLM (Ollama/LM Studio) — always show, auto-detect
-      let localFound = false;
-
-      // Check common local LLM endpoints
-      const localEndpoints = [
-        { name: "LM Studio", port: 1234 },
-        { name: "Ollama", port: 11434 },
-        { name: "vLLM", port: 8000 },
-        { name: "LocalAI", port: 8080 },
-      ];
-
-      for (const endpoint of localEndpoints) {
-        if (localFound) break;
-        try {
-          const url = `http://localhost:${endpoint.port}/v1`;
-          const models = await listModels(url, "local");
-          if (models.length > 0) {
-            groups["Local LLM"] = models.map(m => ({
-              name: m,
-              baseUrl: url,
-              apiKey: "local",
-              providerType: "openai" as const,
-            }));
-            localFound = true;
-          }
-        } catch { /* not running */ }
-      }
-
-      // Also check Ollama native API
-      if (!localFound) {
-        try {
-          const ollamaModels = await listInstalledModelsDetailed();
-          if (ollamaModels.length > 0) {
-            groups["Local LLM"] = ollamaModels.map(m => ({
-              name: m.name,
-              baseUrl: "http://localhost:11434/v1",
-              apiKey: "ollama",
-              providerType: "openai" as const,
-            }));
-            localFound = true;
-          }
-        } catch { /* Ollama not running */ }
-      }
-
-      if (localFound) {
-        providerEntries.push({ name: "Local LLM", description: "No auth needed — auto-detected", authed: true });
-      }
-
-      // Anthropic
-      const anthropicCred = getCredential("anthropic");
-      const claudeModels = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"];
-      if (anthropicCred) {
-        groups["Anthropic (Claude)"] = claudeModels.map(m => ({
-          name: m,
-          baseUrl: "https://api.anthropic.com",
-          apiKey: anthropicCred.apiKey,
-          providerType: "anthropic" as const,
-        }));
-      }
-      providerEntries.push({ name: "Anthropic (Claude)", description: "Claude Opus, Sonnet, Haiku — use your subscription or API key", authed: !!anthropicCred });
-
-      // OpenAI
-      const openaiCred = getCredential("openai");
-      const openaiModels = ["gpt-5.4", "gpt-5.4-pro", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini", "gpt-4o"];
-      if (openaiCred) {
-        // OAuth tokens (non sk- keys) must use ChatGPT backend, not api.openai.com
-        const isOAuthToken = openaiCred.method === "oauth" || openaiCred.method === "cached-token" || 
-                             (!openaiCred.apiKey.startsWith("sk-") && !openaiCred.apiKey.startsWith("sess-"));
-        const baseUrl = isOAuthToken 
-          ? "https://chatgpt.com/backend-api" 
-          : (openaiCred.baseUrl || "https://api.openai.com/v1");
-        groups["OpenAI (ChatGPT)"] = openaiModels.map(m => ({
-          name: m,
-          baseUrl,
-          apiKey: openaiCred.apiKey,
-          providerType: "openai" as const,
-        }));
-      }
-      providerEntries.push({ name: "OpenAI (ChatGPT)", description: "GPT-5, GPT-4.1, o3 — use your ChatGPT subscription or API key", authed: !!openaiCred });
-
-      // OpenRouter
-      const openrouterCred = getCredential("openrouter");
-      if (openrouterCred) {
-        try {
-          const orModels = await listModels(openrouterCred.baseUrl || "https://openrouter.ai/api/v1", openrouterCred.apiKey);
-          if (orModels.length > 0) {
-            groups["OpenRouter"] = orModels.slice(0, 20).map(m => ({
-              name: m,
-              baseUrl: openrouterCred.baseUrl || "https://openrouter.ai/api/v1",
-              apiKey: openrouterCred.apiKey,
-              providerType: "openai" as const,
-            }));
-          }
-        } catch { /* skip */ }
-      }
-      providerEntries.push({ name: "OpenRouter", description: "200+ models (Claude, GPT, Gemini, Llama, etc.) — one login", authed: !!openrouterCred });
-
-      // Qwen
-      const qwenCred = getCredential("qwen");
-      if (qwenCred) {
-        groups["Qwen"] = ["qwen-max", "qwen-plus", "qwen-turbo"].map(m => ({
-          name: m,
-          baseUrl: qwenCred.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          apiKey: qwenCred.apiKey,
-          providerType: "openai" as const,
-        }));
-      }
-      providerEntries.push({ name: "Qwen", description: "Qwen 3.5, Qwen Coder — use your Qwen CLI login or API key", authed: !!qwenCred });
-
-      // GitHub Copilot
-      const copilotCred = getCredential("copilot");
-      if (copilotCred) {
-        groups["GitHub Copilot"] = ["gpt-4o", "claude-3.5-sonnet"].map(m => ({
-          name: m,
-          baseUrl: copilotCred.baseUrl || "https://api.githubcopilot.com",
-          apiKey: copilotCred.apiKey,
-          providerType: "openai" as const,
-        }));
-      }
-      providerEntries.push({ name: "GitHub Copilot", description: "Use your GitHub Copilot subscription", authed: !!copilotCred });
-
-      // Show provider picker (step 1)
-      if (providerEntries.length > 0) {
-        setModelPickerGroups(groups);
-        setProviderPicker(providerEntries);
-        setProviderPickerIndex(0);
-        setSelectedProvider(null);
-        return;
-      }
-
-      addMsg("error", "No models available. Download one with /ollama pull or configure a provider.");
+      await openModelPicker();
       return;
     }
     if (trimmed.startsWith("/model ")) {
@@ -895,6 +889,7 @@ function App() {
       exit,
       refreshConnectionBanner,
       connectToProvider,
+      openModelPicker,
       handleSubmit,
       _require,
     });

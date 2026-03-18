@@ -34,6 +34,7 @@ export interface WizardContext {
 
   // Provider connection
   connectToProvider: (isRetry: boolean) => Promise<void>;
+  openModelPicker: () => Promise<void>;
 
   // Node require (for child_process in install-ollama)
   _require: NodeRequire;

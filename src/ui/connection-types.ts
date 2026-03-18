@@ -42,4 +42,7 @@ export interface ConnectionContext {
   // Wizard triggers
   setWizardScreen: (val: WizardScreen) => void;
   setWizardIndex: (val: number) => void;
+
+  // First-run model picker flow
+  openModelPicker: () => Promise<void>;
 }

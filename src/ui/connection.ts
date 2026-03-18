@@ -85,11 +85,11 @@ export async function connectToProvider(
                           !!getCredential("copilot");
       
       if (hasAnyCreds) {
-        // User has auth'd before — skip wizard, go straight to /models picker
-        info.push("✔ Found saved credentials. Use /models to pick a model and start coding.");
+        // User has auth'd before — skip wizard and go straight to the model picker
+        info.push("✔ Found saved credentials. Opening model picker...");
         ctx.setConnectionInfo([...info]);
         ctx.setReady(true);
-        // The user will run /models, which now works without an agent
+        await ctx.openModelPicker();
         return;
       }
       
