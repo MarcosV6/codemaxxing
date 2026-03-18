@@ -606,7 +606,28 @@ export class CodingAgent {
         });
       }
     }
-    return msgs;
+    // Sanitize: remove tool_result messages that don't have a matching tool_use
+    const validToolUseIds = new Set<string>();
+    for (const m of msgs) {
+      if (m.role === "assistant" && Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if ((block as any).type === "tool_use") {
+            validToolUseIds.add((block as any).id);
+          }
+        }
+      }
+    }
+    
+    return msgs.filter((m) => {
+      if (m.role === "user" && Array.isArray(m.content)) {
+        const toolResults = (m.content as any[]).filter((b) => b.type === "tool_result");
+        if (toolResults.length > 0) {
+          // Only keep if ALL tool_results have matching tool_use
+          return toolResults.every((tr) => validToolUseIds.has(tr.tool_use_id));
+        }
+      }
+      return true;
+    });
   }
 
   /**
