@@ -20,14 +20,24 @@ export interface ScoredModel extends RecommendedModel {
 
 const MODELS: RecommendedModel[] = [
   {
-    name: "Qwen 2.5 Coder 3B",
-    ollamaId: "qwen2.5-coder:3b",
-    size: 2,
-    ramRequired: 8,
-    vramOptimal: 4,
-    description: "\u26A0\uFE0F May not support tool calling well",
-    speed: "~60 tok/s on M1",
-    quality: "limited",
+    name: "Qwen 2.5 Coder 14B",
+    ollamaId: "qwen2.5-coder:14b",
+    size: 9,
+    ramRequired: 24,
+    vramOptimal: 12,
+    description: "Recommended default for coding when your machine can handle it",
+    speed: "~25 tok/s on M1 Pro",
+    quality: "best",
+  },
+  {
+    name: "DeepSeek Coder V2 16B",
+    ollamaId: "deepseek-coder-v2:16b",
+    size: 9,
+    ramRequired: 24,
+    vramOptimal: 12,
+    description: "Strong higher-quality alternative for coding",
+    speed: "~30 tok/s on M1 Pro",
+    quality: "great",
   },
   {
     name: "Qwen 2.5 Coder 7B",
@@ -35,19 +45,9 @@ const MODELS: RecommendedModel[] = [
     size: 5,
     ramRequired: 16,
     vramOptimal: 8,
-    description: "Sweet spot for most machines",
+    description: "Fallback for mid-range machines when 14B is too heavy",
     speed: "~45 tok/s on M1",
     quality: "great",
-  },
-  {
-    name: "Qwen 2.5 Coder 14B",
-    ollamaId: "qwen2.5-coder:14b",
-    size: 9,
-    ramRequired: 32,
-    vramOptimal: 16,
-    description: "High quality coding",
-    speed: "~25 tok/s on M1 Pro",
-    quality: "best",
   },
   {
     name: "Qwen 2.5 Coder 32B",
@@ -60,22 +60,12 @@ const MODELS: RecommendedModel[] = [
     quality: "best",
   },
   {
-    name: "DeepSeek Coder V2 16B",
-    ollamaId: "deepseek-coder-v2:16b",
-    size: 9,
-    ramRequired: 32,
-    vramOptimal: 16,
-    description: "Strong alternative for coding",
-    speed: "~30 tok/s on M1 Pro",
-    quality: "great",
-  },
-  {
     name: "CodeLlama 7B",
     ollamaId: "codellama:7b",
     size: 4,
     ramRequired: 16,
     vramOptimal: 8,
-    description: "Meta's coding model",
+    description: "Older fallback coding model",
     speed: "~40 tok/s on M1",
     quality: "good",
   },
@@ -85,9 +75,19 @@ const MODELS: RecommendedModel[] = [
     size: 4,
     ramRequired: 16,
     vramOptimal: 8,
-    description: "Good for code completion",
+    description: "Completion-focused fallback",
     speed: "~40 tok/s on M1",
     quality: "good",
+  },
+  {
+    name: "Qwen 2.5 Coder 3B",
+    ollamaId: "qwen2.5-coder:3b",
+    size: 2,
+    ramRequired: 8,
+    vramOptimal: 4,
+    description: "⚠️ Last-resort fallback — may struggle with tool calling",
+    speed: "~60 tok/s on M1",
+    quality: "limited",
   },
 ];
 
@@ -106,6 +106,17 @@ function scoreModel(model: RecommendedModel, ramGB: number, vramGB: number): Mod
 const qualityOrder: Record<string, number> = { best: 3, great: 2, good: 1, limited: 0 };
 const fitOrder: Record<string, number> = { perfect: 4, good: 3, tight: 2, skip: 1 };
 
+function recommendationPriority(model: RecommendedModel): number {
+  if (model.ollamaId === "qwen2.5-coder:14b") return 100;
+  if (model.ollamaId === "deepseek-coder-v2:16b") return 95;
+  if (model.ollamaId === "qwen2.5-coder:7b") return 80;
+  if (model.ollamaId === "qwen2.5-coder:32b") return 75;
+  if (model.ollamaId === "codellama:7b") return 60;
+  if (model.ollamaId === "starcoder2:7b") return 55;
+  if (model.ollamaId === "qwen2.5-coder:3b") return 10;
+  return 0;
+}
+
 export function getRecommendations(hardware: HardwareInfo): ScoredModel[] {
   const ramGB = hardware.ram / (1024 * 1024 * 1024);
   const vramGB = hardware.gpu?.vram ? hardware.gpu.vram / (1024 * 1024 * 1024) : 0;
@@ -118,10 +129,14 @@ export function getRecommendations(hardware: HardwareInfo): ScoredModel[] {
     fit: scoreModel(m, ramGB, effectiveVRAM),
   }));
 
-  // Sort: perfect first, then by quality descending
+  // Sort: fit first, then strongly prefer better coding defaults over tiny fallback models
   scored.sort((a, b) => {
     const fitDiff = (fitOrder[b.fit] ?? 0) - (fitOrder[a.fit] ?? 0);
     if (fitDiff !== 0) return fitDiff;
+
+    const priorityDiff = recommendationPriority(b) - recommendationPriority(a);
+    if (priorityDiff !== 0) return priorityDiff;
+
     return (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0);
   });
 

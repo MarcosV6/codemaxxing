@@ -585,13 +585,13 @@ function handleOllamaDeletePicker(_inputChar: string, key: Key, ctx: InputRouter
 function handleOllamaPullPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
   if (!ctx.ollamaPullPicker) return false;
   const pullModels = [
-    { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Best balance of speed & quality" },
-    { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Higher quality, needs 16GB+ RAM" },
-    { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "\u26A0\uFE0F Basic \u2014 may struggle with tool calls" },
-    { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs 48GB+" },
-    { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2", size: "9 GB", desc: "Strong alternative" },
-    { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Meta's coding model" },
-    { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Code completion focused" },
+    { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Recommended default for coding if your machine can handle it" },
+    { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2 16B", size: "9 GB", desc: "Strong higher-quality alternative" },
+    { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Fallback for mid-range machines" },
+    { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs lots of RAM" },
+    { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Older fallback coding model" },
+    { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Completion-focused fallback" },
+    { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "⚠️ Last resort — may struggle with tool calls" },
   ];
   if (key.upArrow) {
     ctx.setOllamaPullPickerIndex((prev) => (prev - 1 + pullModels.length) % pullModels.length);
