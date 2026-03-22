@@ -63,12 +63,14 @@ export function setupPasteInterceptor(): PasteEventBus {
   const origEmit = process.stdin.emit.bind(process.stdin);
 
   function handlePasteContent(content: string): void {
-    const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-    if (!normalized) return;
+    const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const visible = normalized.trim();
+    if (!visible) return;
 
     const lineCount = normalized.split("\n").length;
-    if (lineCount > 2) {
-      // Real multiline paste → badge it
+    const isAttachmentPaste = lineCount >= 2 || visible.length >= 120;
+    if (isAttachmentPaste) {
+      // Multiline / large paste → treat as a first-class attachment block.
       // Some terminals dribble the closing bracketed-paste marker (`[201~`)
       // one character at a time *after* the paste payload. Arm a tiny
       // swallow-state so those trailing fragments never leak into the input.
@@ -78,11 +80,8 @@ export function setupPasteInterceptor(): PasteEventBus {
       return;
     }
 
-    // Short paste (1-2 lines) → collapse to single line and forward as normal input
-    const sanitized = normalized.replace(/\n/g, " ");
-    if (sanitized) {
-      origEmit("data", sanitized);
-    }
+    // Short single-line paste → forward as normal input.
+    origEmit("data", visible);
   }
 
   function looksLikeMultilinePaste(data: string): boolean {

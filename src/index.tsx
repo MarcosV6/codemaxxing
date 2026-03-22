@@ -458,20 +458,21 @@ function App() {
       }
     }
 
-    // Combine typed text with any pasted chunks
+    // Combine typed text with any pasted attachment blocks.
     const chunks = pastedChunksRef.current;
-    let fullValue = value;
+    const trimmedValue = value.trim();
+    let submittedValue = trimmedValue;
     if (chunks.length > 0) {
       const pasteText = chunks.map(p => p.content).join("\n\n");
-      fullValue = value ? `${value}\n\n${pasteText}` : pasteText;
+      submittedValue = trimmedValue ? `${trimmedValue}\n\n${pasteText}` : pasteText;
     }
-    const trimmed = fullValue.trim();
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
-    if (!trimmed) return;
+    if (!submittedValue.trim()) return;
 
-    addMsg("user", trimmed);
+    const trimmed = submittedValue.trim();
+    addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
       // Check if Ollama is running and offer to stop it
@@ -1056,10 +1057,14 @@ function App() {
         {approval ? (
           <Text color={theme.colors.warning}>waiting for approval...</Text>
         ) : ready && !loading && !wizardScreen ? (
-          <Box>
-            {pastedChunks.map((p) => (
-              <Text key={p.id} color={theme.colors.muted}>[Pasted text #{p.id} +{p.lines} lines]</Text>
-            ))}
+          <Box flexDirection="column" width="100%">
+            {pastedChunks.length > 0 && (
+              <Box flexDirection="column" marginBottom={0}>
+                {pastedChunks.map((p) => (
+                  <Text key={p.id} color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
+                ))}
+              </Box>
+            )}
             <TextInput
               key={inputKey}
               value={input}

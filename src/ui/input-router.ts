@@ -785,12 +785,17 @@ function handleDeleteSessionPicker(_inputChar: string, key: Key, ctx: InputRoute
 }
 
 function handleBackspaceRemovesPasteChunk(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
-  if (key.backspace || key.delete) {
-    if (ctx.input === "" && ctx.pastedChunksRef.current.length > 0) {
-      ctx.setPastedChunks((prev) => prev.slice(0, -1));
-      return true;
-    }
+  if ((key.backspace || key.delete) && ctx.input === "" && ctx.pastedChunksRef.current.length > 0) {
+    ctx.setPastedChunks((prev) => prev.slice(0, -1));
+    return true;
   }
+
+  if (key.escape && ctx.input === "" && ctx.pastedChunksRef.current.length > 0) {
+    ctx.setPastedChunks((prev) => prev.slice(0, -1));
+    ctx.addMsg("info", "Removed latest pasted block.");
+    return true;
+  }
+
   return false;
 }
 

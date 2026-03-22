@@ -2,7 +2,50 @@ import { CodingAgent } from "../agent.js";
 import { loadConfig, parseCLIArgs, applyOverrides, detectLocalProvider, detectLocalProviderDetailed } from "../config.js";
 import { isOllamaRunning } from "../utils/ollama.js";
 import { isGitRepo, getBranch, getStatus } from "../utils/git.js";
+import { getCredential } from "../utils/auth.js";
 import type { ConnectionContext } from "./connection-types.js";
+
+function describeActiveConnection(baseUrl: string, model: string): string {
+  const url = baseUrl.toLowerCase();
+  if (url.includes("localhost:1234")) return `${model} via LM Studio`;
+  if (url.includes("localhost:11434")) return `${model} via Ollama`;
+  if (url.includes("localhost:8000")) return `${model} via vLLM`;
+  if (url.includes("chatgpt.com")) return `${model} via OpenAI OAuth`;
+  if (url.includes("api.openai.com")) return `${model} via OpenAI API`;
+  if (url.includes("api.anthropic.com")) return `${model} via Anthropic`;
+  if (url.includes("openrouter.ai")) return `${model} via OpenRouter`;
+  if (url.includes("dashscope.aliyuncs.com")) return `${model} via Qwen`;
+  if (url.includes("githubcopilot.com")) return `${model} via GitHub Copilot`;
+  return `${model} via ${baseUrl}`;
+}
+
+async function buildAvailabilityLines(activeBaseUrl: string, activeModel: string): Promise<string[]> {
+  const localReady: string[] = [];
+  const cloudReady: string[] = [];
+
+  const detected = await detectLocalProvider();
+  if (detected) {
+    const baseUrl = detected.baseUrl.toLowerCase();
+    if (baseUrl.includes("localhost:1234")) localReady.push("LM Studio");
+    else if (baseUrl.includes("localhost:11434")) localReady.push("Ollama");
+    else if (baseUrl.includes("localhost:8000")) localReady.push("vLLM");
+    else localReady.push("Local LLM");
+  } else if (await isOllamaRunning()) {
+    localReady.push("Ollama (no model loaded)");
+  }
+
+  if (getCredential("openai")) cloudReady.push("OpenAI OAuth");
+  if (getCredential("anthropic")) cloudReady.push("Anthropic");
+  if (getCredential("openrouter")) cloudReady.push("OpenRouter");
+  if (getCredential("qwen")) cloudReady.push("Qwen");
+  if (getCredential("copilot")) cloudReady.push("GitHub Copilot");
+
+  return [
+    `Active: ${describeActiveConnection(activeBaseUrl, activeModel)}`,
+    `Local Ready: ${localReady.length > 0 ? localReady.join(", ") : "none"}`,
+    `Cloud Ready: ${cloudReady.length > 0 ? cloudReady.join(", ") : "none"}`,
+  ];
+}
 
 /**
  * Build and set the connection banner (provider status + git info).
@@ -20,14 +63,20 @@ export async function refreshConnectionBanner(
   if (provider.model === "auto" || (provider.baseUrl === "http://localhost:1234/v1" && !cliArgs.baseUrl)) {
     const detected = await detectLocalProvider();
     if (detected) {
-      info.push(`✔ Connected to ${detected.baseUrl} → ${detected.model}`);
+      info.push(...await buildAvailabilityLines(detected.baseUrl, detected.model));
     } else {
-      const ollamaUp = await isOllamaRunning();
-      info.push(ollamaUp ? "Ollama running (no model loaded)" : "✗ No local LLM server found");
+      info.push("Active: not connected");
+      info.push(`Local Ready: ${await isOllamaRunning() ? "Ollama (no model loaded)" : "none"}`);
+      const cloudReady: string[] = [];
+      if (getCredential("openai")) cloudReady.push("OpenAI OAuth");
+      if (getCredential("anthropic")) cloudReady.push("Anthropic");
+      if (getCredential("openrouter")) cloudReady.push("OpenRouter");
+      if (getCredential("qwen")) cloudReady.push("Qwen");
+      if (getCredential("copilot")) cloudReady.push("GitHub Copilot");
+      info.push(`Cloud Ready: ${cloudReady.length > 0 ? cloudReady.join(", ") : "none"}`);
     }
   } else {
-    info.push(`Provider: ${provider.baseUrl}`);
-    info.push(`Model: ${provider.model}`);
+    info.push(...await buildAvailabilityLines(provider.baseUrl, provider.model));
   }
 
   const cwd = process.cwd();
@@ -52,7 +101,7 @@ export async function connectToProvider(
   const rawConfig = loadConfig();
   const config = applyOverrides(rawConfig, cliArgs);
   let provider = config.provider;
-  const info: string[] = [];
+  let info: string[] = [];
 
   if (isRetry) {
     info.push("Retrying connection...");
@@ -64,46 +113,58 @@ export async function connectToProvider(
     ctx.setConnectionInfo([...info]);
     const detection = await detectLocalProviderDetailed();
     if (detection.status === "connected") {
-      // Keep CLI model override if specified
       if (cliArgs.model) detection.provider.model = cliArgs.model;
       provider = detection.provider;
-      info.push(`✔ Connected to ${provider.baseUrl} → ${provider.model}`);
-      ctx.setConnectionInfo([...info]);
     } else if (detection.status === "no-models") {
-      info.push(`⚠ ${detection.serverName} is running but has no models. Use /ollama pull to download one.`);
-      ctx.setConnectionInfo([...info]);
+      info = [
+        "Active: not connected",
+        `Local Ready: ${detection.serverName} (no model loaded)`,
+        `Cloud Ready: ${[
+          getCredential("openai") ? "OpenAI OAuth" : null,
+          getCredential("anthropic") ? "Anthropic" : null,
+          getCredential("openrouter") ? "OpenRouter" : null,
+          getCredential("qwen") ? "Qwen" : null,
+          getCredential("copilot") ? "GitHub Copilot" : null,
+        ].filter(Boolean).join(", ") || "none"}`,
+        `⚠ ${detection.serverName} is running but has no models. Use /ollama pull to download one.`
+      ];
+      ctx.setConnectionInfo(info);
       ctx.setReady(true);
       return;
     } else {
-      info.push("✗ No local LLM server found.");
-      ctx.setConnectionInfo([...info]);
-      
-      // Check if user has saved credentials — if so, auto-show model picker
-      const { getCredential } = await import("../utils/auth.js");
       const hasAnyCreds = !!getCredential("anthropic") || !!getCredential("openai") || 
                           !!getCredential("openrouter") || !!getCredential("qwen") || 
                           !!getCredential("copilot");
-      
+      info = [
+        "Active: not connected",
+        "Local Ready: none",
+        `Cloud Ready: ${[
+          getCredential("openai") ? "OpenAI OAuth" : null,
+          getCredential("anthropic") ? "Anthropic" : null,
+          getCredential("openrouter") ? "OpenRouter" : null,
+          getCredential("qwen") ? "Qwen" : null,
+          getCredential("copilot") ? "GitHub Copilot" : null,
+        ].filter(Boolean).join(", ") || "none"}`,
+      ];
+      ctx.setConnectionInfo(info);
+
       if (hasAnyCreds) {
-        // User has auth'd before — skip wizard and go straight to the model picker
-        info.push("✔ Found saved credentials. Opening model picker...");
+        info.push("Found saved credentials. Opening model picker...");
         ctx.setConnectionInfo([...info]);
         ctx.setReady(true);
         await ctx.openModelPicker();
         return;
       }
-      
-      // No creds found — show the setup wizard
+
       ctx.setReady(true);
       ctx.setWizardScreen("connection");
       ctx.setWizardIndex(0);
       return;
     }
-  } else {
-    info.push(`Provider: ${provider.baseUrl}`);
-    info.push(`Model: ${provider.model}`);
-    ctx.setConnectionInfo([...info]);
   }
+
+  info = await buildAvailabilityLines(provider.baseUrl, provider.model);
+  ctx.setConnectionInfo([...info]);
 
   const cwd = process.cwd();
 
