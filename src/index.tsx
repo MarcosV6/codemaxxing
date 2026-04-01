@@ -15,6 +15,10 @@ import { getTheme, DEFAULT_THEME, type Theme } from "./themes.js";
 import { tryHandleUiCommand } from "./commands/ui.js";
 import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
 import { tryHandleSkillsCommand } from "./commands/skills.js";
+import { tryHandleBackgroundAgentCommand } from "./commands/background-agents.js";
+import { listBackgroundAgents, getBackgroundAgent, startBackgroundAgent } from "./background-agents.js";
+import { tryHandleScheduleCommand, closeCronScheduler } from "./commands/schedule.js";
+import { tryHandleOrchestrateCommand } from "./commands/orchestrate.js";
 import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
@@ -541,6 +545,16 @@ function App() {
       return;
     }
     if (await dispatchRegisteredCommands([
+      // Phase B & C: Agent/Schedule/Orchestrate commands
+      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg).then(r => r ?? false),
+      () => tryHandleScheduleCommand(trimmed, { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 }).then(r => r ?? false),
+      () => tryHandleOrchestrateCommand(
+        trimmed,
+        process.cwd(),
+        { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 },
+        addMsg
+      ),
+      // Existing commands
       () => tryHandleSkillsCommand({
         trimmed,
         cwd: process.cwd(),
