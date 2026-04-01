@@ -23,10 +23,17 @@ export function sanitizeInputArtifacts(value: string): string {
   out = out.replace(/\[20[01]~/g, "");
   out = out.replace(/(^|\s)20[01]~(?=\s|$)/g, "$1");
 
-  // Defensive UI-layer cleanup: if the entire current input consists only of
-  // tiny control-fragment characters, wipe it completely instead of rendering
-  // terminal debris like `[201~` to the user.
-  if (out.length <= 8 && /^[\x1b\[\]0-9;~]+$/.test(out)) {
+  // Defensive UI-layer cleanup: if the entire current input still looks like a
+  // tiny bracketed-paste control fragment, wipe it completely instead of
+  // rendering terminal debris like `[201~` to the user.
+  //
+  // Be careful not to erase legitimate short input such as `[` or `123`.
+  const looksLikeDebris =
+    out.length <= 8 &&
+    /^[\x1b\[\]0-9;~]+$/.test(out) &&
+    (out.includes("~") || out.includes("\x1b"));
+
+  if (looksLikeDebris) {
     return "";
   }
 
