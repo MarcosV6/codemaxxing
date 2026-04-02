@@ -7,6 +7,7 @@ import {
   type SubAgentSpec,
 } from "../orchestrator.js";
 import type { AgentOptions } from "../agent.js";
+import type { AddMsg } from "./types.js";
 
 /**
  * Handle /orchestrate commands
@@ -19,7 +20,7 @@ export async function tryHandleOrchestrateCommand(
   input: string,
   cwd: string,
   agentOptions: AgentOptions,
-  onProgress?: (msg: string) => void
+  addMsg: AddMsg,
 ): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   if (parts[0]?.toLowerCase() !== "/orchestrate") return false;
@@ -30,54 +31,50 @@ export async function tryHandleOrchestrateCommand(
     case "fullstack": {
       const task = parts.slice(2).join(" ");
       if (!task) {
-        console.log(chalk.red("Usage: /orchestrate fullstack <describe the feature>"));
+        addMsg("error", "Usage: /orchestrate fullstack <describe the feature>");
         return true;
       }
 
-      console.log(chalk.bold(`\n🤖 Full-Stack Orchestration`));
-      console.log(chalk.dim(`Task: ${task}`));
-      console.log(chalk.dim(`Spawning: backend + frontend + tests + docs agents\n`));
+      addMsg("info", `🤖 Full-Stack Orchestration\nTask: ${task}\nSpawning: backend + frontend + tests + docs agents...`);
 
       try {
         const result = await runFullStackOrchestration(task, cwd, agentOptions, (msg) => {
-          console.log(chalk.dim(msg));
-          onProgress?.(msg);
+          addMsg("info", msg);
         });
-        console.log("\n" + formatOrchestrationResult(result));
+        addMsg("info", formatOrchestrationResult(result));
       } catch (err: any) {
-        console.log(chalk.red(`✗ Orchestration failed: ${err.message}`));
+        addMsg("error", `✗ Orchestration failed: ${err.message}`);
       }
       return true;
     }
 
     case "review": {
-      console.log(chalk.bold(`\n🔍 Code Review Orchestration`));
-      console.log(chalk.dim(`Spawning: security + test coverage + docs agents\n`));
+      addMsg("info", `🔍 Code Review Orchestration\nSpawning: security + test coverage + docs agents...`);
 
       try {
         const result = await runCodeReviewOrchestration(cwd, agentOptions, (msg) => {
-          console.log(chalk.dim(msg));
-          onProgress?.(msg);
+          addMsg("info", msg);
         });
-        console.log("\n" + formatOrchestrationResult(result));
+        addMsg("info", formatOrchestrationResult(result));
       } catch (err: any) {
-        console.log(chalk.red(`✗ Review failed: ${err.message}`));
+        addMsg("error", `✗ Review failed: ${err.message}`);
       }
       return true;
     }
 
     case "": {
-      console.log(chalk.bold("Orchestration Commands:"));
-      console.log("/orchestrate fullstack <task>   — spawn full-stack specialist team");
-      console.log("/orchestrate review             — spawn code review team");
+      addMsg("info", [
+        "Orchestration Commands:",
+        "  /orchestrate fullstack <task>   — spawn full-stack specialist team",
+        "  /orchestrate review             — spawn code review team",
+      ].join("\n"));
       return true;
     }
 
     default: {
       // Treat everything after /orchestrate as a free-form task
       const task = parts.slice(1).join(" ");
-      console.log(chalk.bold(`\n🤖 Custom Orchestration`));
-      console.log(chalk.dim(`Task: ${task}`));
+      addMsg("info", `🤖 Custom Orchestration\nTask: ${task}`);
 
       const specs: SubAgentSpec[] = [
         { role: "backend", name: "Implementation", prompt: task, maxIterations: 10 },
@@ -86,12 +83,11 @@ export async function tryHandleOrchestrateCommand(
 
       try {
         const result = await runOrchestration(task, cwd, agentOptions, specs, (msg) => {
-          console.log(chalk.dim(msg));
-          onProgress?.(msg);
+          addMsg("info", msg);
         });
-        console.log("\n" + formatOrchestrationResult(result));
+        addMsg("info", formatOrchestrationResult(result));
       } catch (err: any) {
-        console.log(chalk.red(`✗ Orchestration failed: ${err.message}`));
+        addMsg("error", `✗ Orchestration failed: ${err.message}`);
       }
       return true;
     }

@@ -553,7 +553,7 @@ function App() {
     if (await dispatchRegisteredCommands([
       // Phase B & C: Agent/Schedule/Orchestrate commands
       () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg).then(r => r ?? false),
-      () => tryHandleScheduleCommand(trimmed, { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 }).then(r => r ?? false),
+      () => tryHandleScheduleCommand(trimmed, { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 }, addMsg).then(r => r ?? false),
       () => tryHandleOrchestrateCommand(
         trimmed,
         process.cwd(),
