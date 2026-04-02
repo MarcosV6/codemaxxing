@@ -7,6 +7,7 @@ import {
   type BackgroundAgentRecord,
 } from "../background-agents.js";
 import { displayAgent, listAgents, showAgentDetail } from "../background-agents-cli.js";
+import type { AddMsg } from "./types.js";
 
 /**
  * Handle /agent commands
@@ -17,7 +18,11 @@ import { displayAgent, listAgents, showAgentDetail } from "../background-agents-
  *   /agent resume [id]    - resume a paused agent
  *   /agent delete [id]    - delete an agent
  */
-export async function tryHandleBackgroundAgentCommand(input: string): Promise<boolean> {
+export async function tryHandleBackgroundAgentCommand(
+  input: string,
+  cwd: string,
+  addMsg: AddMsg,
+): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
 
@@ -30,48 +35,54 @@ export async function tryHandleBackgroundAgentCommand(input: string): Promise<bo
 
   switch (subcommand) {
     case "list": {
-      console.log(chalk.bold("Background Agents:\n"));
-      listAgents();
+      const agents = listBackgroundAgents(cwd);
+      if (agents.length === 0) {
+        addMsg("info", "No background agents found.\n  Use /agent start to create one.");
+      } else {
+        const lines = agents.map(a => `  ${a.id} — ${a.name} (${a.status})`).join("\n");
+        addMsg("info", `Background Agents:\n${lines}`);
+      }
       return true;
     }
 
     case "pause": {
       if (!agentId) {
-        console.log(chalk.red("Usage: /agent pause <agent-id>"));
+        addMsg("error", "Usage: /agent pause <agent-id>");
         return true;
       }
       const agent = getBackgroundAgent(agentId);
       if (!agent) {
-        console.log(chalk.red(`Agent ${agentId} not found`));
+        addMsg("error", `Agent ${agentId} not found`);
         return true;
       }
       pauseBackgroundAgent(agentId);
-      console.log(chalk.cyan(`✓ Agent ${agentId} paused`));
+      addMsg("info", `✓ Agent ${agentId} paused`);
       return true;
     }
 
     case "delete": {
       if (!agentId) {
-        console.log(chalk.red("Usage: /agent delete <agent-id>"));
+        addMsg("error", "Usage: /agent delete <agent-id>");
         return true;
       }
       const agent = getBackgroundAgent(agentId);
       if (!agent) {
-        console.log(chalk.red(`Agent ${agentId} not found`));
+        addMsg("error", `Agent ${agentId} not found`);
         return true;
       }
       deleteBackgroundAgent(agentId);
-      console.log(chalk.green(`✓ Agent ${agentId} deleted`));
+      addMsg("info", `✓ Agent ${agentId} deleted`);
       return true;
     }
 
     case "": {
       // No subcommand, show help
-      console.log(chalk.bold("Background Agent Commands:"));
-      console.log("/agent list              - list all agents");
-      console.log("/agent <id>              - show agent details");
-      console.log("/agent pause <id>        - pause a running agent");
-      console.log("/agent delete <id>       - delete an agent");
+      addMsg("info", [
+        "Background Agent Commands:",
+        "  /agent list              — list all agents",
+        "  /agent pause <id>        — pause a running agent",
+        "  /agent delete <id>       — delete an agent",
+      ].join("\n"));
       return true;
     }
 
@@ -80,14 +91,12 @@ export async function tryHandleBackgroundAgentCommand(input: string): Promise<bo
       const possibleId = subcommand;
       const agent = getBackgroundAgent(possibleId);
       if (agent) {
-        console.log(chalk.bold(`Agent: ${agent.name}\n`));
-        showAgentDetail(possibleId);
+        addMsg("info", `Agent: ${agent.name}\n  Status: ${agent.status}\n  ID: ${agent.id}`);
         return true;
       }
 
       // If not found as ID, maybe they misspelled
-      console.log(chalk.red(`Unknown subcommand: ${subcommand}`));
-      console.log("Usage: /agent [list|pause|delete] [agent-id]");
+      addMsg("error", `Unknown subcommand: ${subcommand}\nUsage: /agent [list|pause|delete] [agent-id]`);
       return true;
     }
   }
