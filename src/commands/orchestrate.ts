@@ -21,6 +21,7 @@ export async function tryHandleOrchestrateCommand(
   cwd: string,
   agentOptions: AgentOptions,
   addMsg: AddMsg,
+  ctx?: { setOrchestratePicker?: (val: boolean) => void }
 ): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   if (parts[0]?.toLowerCase() !== "/orchestrate") return false;
@@ -63,7 +64,8 @@ export async function tryHandleOrchestrateCommand(
     }
 
     case "": {
-      addMsg("info", [
+      if (ctx?.setOrchestratePicker) ctx.setOrchestratePicker(true);
+      else addMsg("info", [
         "Orchestration Commands:",
         "  /orchestrate fullstack <task>   — spawn full-stack specialist team",
         "  /orchestrate review             — spawn code review team",

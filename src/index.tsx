@@ -17,7 +17,7 @@ import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServe
 import { tryHandleSkillsCommand } from "./commands/skills.js";
 import { tryHandleBackgroundAgentCommand } from "./commands/background-agents.js";
 import { listBackgroundAgents, getBackgroundAgent, startBackgroundAgent } from "./background-agents.js";
-import { tryHandleScheduleCommand, closeCronScheduler } from "./commands/schedule.js";
+import { tryHandleScheduleCommand } from "./commands/schedule.js";
 import { tryHandleOrchestrateCommand } from "./commands/orchestrate.js";
 import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
@@ -35,7 +35,8 @@ import {
 } from "./ui/connection.js";
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
-  SkillsInstalled, SkillsRemove, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
+  OrchestrateCommandPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
   DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
@@ -216,6 +217,14 @@ function App() {
   const [loginMethodIndex, setLoginMethodIndex] = useState(0);
   const [skillsPicker, setSkillsPicker] = useState<"menu" | "browse" | "installed" | "remove" | null>(null);
   const [skillsPickerIndex, setSkillsPickerIndex] = useState(0);
+
+  // Agent/schedule/orchestrate pickers
+  const [agentPicker, setAgentPicker] = useState(false);
+  const [agentPickerIndex, setAgentPickerIndex] = useState(0);
+  const [schedulePicker, setSchedulePicker] = useState(false);
+  const [schedulePickerIndex, setSchedulePickerIndex] = useState(0);
+  const [orchestratePicker, setOrchestratePicker] = useState(false);
+  const [orchestratePickerIndex, setOrchestratePickerIndex] = useState(0);
   const [sessionDisabledSkills, setSessionDisabledSkills] = useState<Set<string>>(new Set());
   const [approval, setApproval] = useState<{
     tool: string;
@@ -508,6 +517,21 @@ function App() {
       await connectToProvider(true);
       return;
     }
+    if (trimmed === "/agent") {
+      setAgentPicker(true);
+      setAgentPickerIndex(0);
+      return;
+    }
+    if (trimmed === "/schedule") {
+      setSchedulePicker(true);
+      setSchedulePickerIndex(0);
+      return;
+    }
+    if (trimmed === "/orchestrate") {
+      setOrchestratePicker(true);
+      setOrchestratePickerIndex(0);
+      return;
+    }
     if (trimmed === "/help") {
       addMsg("info", [
         "Commands:",
@@ -550,15 +574,24 @@ function App() {
       ].join("\n"));
       return;
     }
+    const config = loadConfig();
+    const commandAgentOptions = {
+      provider: config.provider,
+      cwd: process.cwd(),
+      maxTokens: config.defaults.maxTokens ?? 8192,
+      autoApprove: config.defaults.autoApprove,
+    };
+
     if (await dispatchRegisteredCommands([
       // Phase B & C: Agent/Schedule/Orchestrate commands
-      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg).then(r => r ?? false),
-      () => tryHandleScheduleCommand(trimmed, { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 }, addMsg).then(r => r ?? false),
+      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg, { setAgentPicker }).then(r => r ?? false),
+      () => tryHandleScheduleCommand(trimmed, commandAgentOptions, addMsg, { setSchedulePicker }).then(r => r ?? false),
       () => tryHandleOrchestrateCommand(
         trimmed,
         process.cwd(),
-        { provider: agent.provider, cwd: process.cwd(), maxTokens: 8192 },
-        addMsg
+        commandAgentOptions,
+        addMsg,
+        { setOrchestratePicker }
       ),
       // Existing commands
       () => tryHandleSkillsCommand({
@@ -838,6 +871,18 @@ function App() {
       skillsPickerIndex,
       setSkillsPickerIndex,
       setSkillsPicker,
+      agentPicker,
+      agentPickerIndex,
+      setAgentPickerIndex,
+      setAgentPicker,
+      schedulePicker,
+      schedulePickerIndex,
+      setSchedulePickerIndex,
+      setSchedulePicker,
+      orchestratePicker,
+      orchestratePickerIndex,
+      setOrchestratePickerIndex,
+      setOrchestratePicker,
       sessionDisabledSkills,
       setSessionDisabledSkills,
       modelPickerGroups,
@@ -997,6 +1042,21 @@ function App() {
       )}
       {skillsPicker === "remove" && (
         <SkillsRemove skillsPickerIndex={skillsPickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ AGENT PICKER ═══ */}
+      {agentPicker && (
+        <AgentCommandPicker selectedIndex={agentPickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ SCHEDULE PICKER ═══ */}
+      {schedulePicker && (
+        <ScheduleCommandPicker selectedIndex={schedulePickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ ORCHESTRATE PICKER ═══ */}
+      {orchestratePicker && (
+        <OrchestrateCommandPicker selectedIndex={orchestratePickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ THEME PICKER ═══ */}

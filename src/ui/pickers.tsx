@@ -202,6 +202,77 @@ export function SkillsRemove({ skillsPickerIndex, colors }: SkillsRemoveProps) {
   );
 }
 
+// ── Agent / Schedule / Orchestrate Pickers ──
+
+interface CommandPickerProps {
+  selectedIndex: number;
+  colors: Theme["colors"];
+}
+
+export function AgentCommandPicker({ selectedIndex, colors }: CommandPickerProps) {
+  const options = [
+    { key: "list", label: "list", desc: "show all background agents" },
+    { key: "pause", label: "pause", desc: "pause a running agent" },
+    { key: "delete", label: "delete", desc: "delete an agent" },
+  ];
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Agent commands:</Text>
+      {options.map((option, i) => (
+        <Text key={option.key}>
+          {i === selectedIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+          <Text color={i === selectedIndex ? colors.suggestion : colors.primary} bold>{option.label}</Text>
+          <Text color={colors.muted}>{" — "}{option.desc}</Text>
+        </Text>
+      ))}
+      <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
+export function ScheduleCommandPicker({ selectedIndex, colors }: CommandPickerProps) {
+  const options = [
+    { key: "list", label: "list", desc: "show scheduled jobs" },
+    { key: "disable", label: "disable", desc: "pause a scheduled job" },
+    { key: "delete", label: "delete", desc: "delete a scheduled job" },
+    { key: "history", label: "history", desc: "show recent run history" },
+  ];
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Schedule commands:</Text>
+      {options.map((option, i) => (
+        <Text key={option.key}>
+          {i === selectedIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+          <Text color={i === selectedIndex ? colors.suggestion : colors.primary} bold>{option.label}</Text>
+          <Text color={colors.muted}>{" — "}{option.desc}</Text>
+        </Text>
+      ))}
+      <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
+export function OrchestrateCommandPicker({ selectedIndex, colors }: CommandPickerProps) {
+  const options = [
+    { key: "fullstack", label: "fullstack", desc: "spawn backend + frontend + tests + docs agents" },
+    { key: "review", label: "review", desc: "run multi-agent code review" },
+    { key: "custom", label: "custom", desc: "enter a free-form orchestration task" },
+  ];
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Orchestrate commands:</Text>
+      {options.map((option, i) => (
+        <Text key={option.key}>
+          {i === selectedIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+          <Text color={i === selectedIndex ? colors.suggestion : colors.primary} bold>{option.label}</Text>
+          <Text color={colors.muted}>{" — "}{option.desc}</Text>
+        </Text>
+      ))}
+      <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
 // ── Theme Picker ──
 
 interface ThemePickerProps {

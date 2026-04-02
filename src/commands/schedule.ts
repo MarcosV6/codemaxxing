@@ -42,7 +42,8 @@ function displayCronJob(job: CronJobRecord): string {
 export async function tryHandleScheduleCommand(
   input: string,
   agentOptions?: AgentOptions,
-  addMsg?: AddMsg
+  addMsg: AddMsg = () => {},
+  ctx?: { setSchedulePicker?: (val: boolean) => void }
 ): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   if (parts[0]?.toLowerCase() !== "/schedule") return false;
@@ -108,7 +109,8 @@ export async function tryHandleScheduleCommand(
     }
 
     case "": {
-      addMsg("info", [
+      if (ctx?.setSchedulePicker) ctx.setSchedulePicker(true);
+      else addMsg("info", [
         "Scheduled Job Commands:",
         "  /schedule list              — list all jobs",
         "  /schedule <id>              — show job details",

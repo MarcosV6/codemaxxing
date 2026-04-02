@@ -22,6 +22,7 @@ export async function tryHandleBackgroundAgentCommand(
   input: string,
   cwd: string,
   addMsg: AddMsg,
+  ctx?: { setAgentPicker?: (val: boolean) => void }
 ): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
@@ -76,8 +77,9 @@ export async function tryHandleBackgroundAgentCommand(
     }
 
     case "": {
-      // No subcommand, show help
-      addMsg("info", [
+      // No subcommand, open picker
+      if (ctx?.setAgentPicker) ctx.setAgentPicker(true);
+      else addMsg("info", [
         "Background Agent Commands:",
         "  /agent list              — list all agents",
         "  /agent pause <id>        — pause a running agent",
