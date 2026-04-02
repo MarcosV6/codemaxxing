@@ -41,8 +41,8 @@ export function setupPasteInterceptor(): PasteEventBus {
   let burstTimer: NodeJS.Timeout | null = null;
   const BURST_WINDOW_MS = 50;
 
-  // Debug: set CODEMAXXING_DEBUG_PASTE=1
-  const PASTE_DEBUG = process.env.CODEMAXXING_DEBUG_PASTE === "1";
+  // Force debug for this session — will write to /tmp/codemaxxing-paste-debug.log
+  const PASTE_DEBUG = true;
   function pasteLog(msg: string): void {
     if (!PASTE_DEBUG) return;
     const escaped = msg
@@ -128,7 +128,18 @@ export function setupPasteInterceptor(): PasteEventBus {
           ? chunk.toString("utf-8")
           : String(chunk);
 
-    pasteLog(`CHUNK len=${data.length} inBracketed=${inBracketedPaste}`);
+    // CRITICAL: Strip stray markers that might leak through if state got out of sync
+    // This handles the case where [201~ arrives as a separate tiny chunk after paste end
+    data = data.replace(/\x1b\[201~/g, "");
+    data = data.replace(/\[201~/g, "");
+    data = data.replace(/201~/g, "");
+    data = data.replace(/\x1b\[200~/g, "");
+    data = data.replace(/\[200~/g, "");
+    data = data.replace(/200~/g, "");
+
+    // Log raw bytes in hex for debugging marker fragments
+    const hexPreview = data.substring(0, 50).split('').map(c => c.charCodeAt(0).toString(16)).join(' ');
+    pasteLog(`CHUNK len=${data.length} inBracketed=${inBracketedPaste} hex=${hexPreview}`);
 
     // ── Process the chunk, potentially containing multiple markers ──
     while (data.length > 0) {
