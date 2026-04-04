@@ -161,8 +161,31 @@ function NeonSpinner({ message, colors }: { message: string; colors: Theme['colo
 
 // ── Streaming Indicator (subtle, shows model is still working) ──
 const STREAM_DOTS = ["·  ", "·· ", "···", " ··", "  ·", "   "];
+const STREAM_MESSAGES = [
+  "Streaming...",
+  "Yapping live...",
+  "Typing with intent...",
+  "Cooking response...",
+  "Locked in...",
+  "Spitting tokens...",
+  "Channeling the machine spirit...",
+  "Vibing through the output...",
+  "Absolutely flowing...",
+  "Free styling the answer...",
+  "Transmitting sauce...",
+  "Pushing pixels and prayers...",
+  "Deep in the bag right now...",
+  "Farming intelligence...",
+  "Manifesting the response...",
+  "Printing heat...",
+  "In my typing arc...",
+  "Going word for word...",
+  "Generating cinema...",
+  "No cap streaming...",
+];
 function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   const [frame, setFrame] = useState(0);
+  const [message, setMessage] = useState(() => STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -171,10 +194,17 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessage(STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <Text dimColor>
       {"  "}<Text color={colors.spinner}>{STREAM_DOTS[frame]}</Text>
-      {" "}<Text color={colors.muted}>streaming</Text>
+      {" "}<Text color={colors.muted}>{message}</Text>
     </Text>
   );
 }
