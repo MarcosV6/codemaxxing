@@ -225,6 +225,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [spinnerMsg, setSpinnerMsg] = useState("");
+  const [lastActivityAt, setLastActivityAt] = useState(Date.now());
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
   const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
@@ -262,6 +263,19 @@ function App() {
     diff?: string;
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
+
+  useEffect(() => {
+    if (!loading || !agent) return;
+    const interval = setInterval(() => {
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs > 60000) {
+        addMsg("error", "⏱️ No model activity for 60s. This request may be hung.");
+        setLoading(false);
+        setStreaming(false);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [loading, agent, lastActivityAt]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -316,6 +330,7 @@ function App() {
       setLoading,
       setStreaming,
       setSpinnerMsg,
+      setLastActivityAt,
       setMessages,
       addMsg,
       nextMsgId,
@@ -867,6 +882,7 @@ function App() {
     }
     setLoading(true);
     setStreaming(false);
+    setLastActivityAt(Date.now());
     setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
 
     try {
@@ -879,6 +895,7 @@ function App() {
 
     setLoading(false);
     setStreaming(false);
+    setLastActivityAt(Date.now());
   }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {
@@ -1043,7 +1060,7 @@ function App() {
 
       {/* ═══ SPINNER ═══ */}
       {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} colors={theme.colors} />}
-      {streaming && !loading && <StreamingIndicator colors={theme.colors} />}
+      {streaming && <StreamingIndicator colors={theme.colors} />}
 
       {/* ═══ APPROVAL PROMPT ═══ */}
       {approval && (

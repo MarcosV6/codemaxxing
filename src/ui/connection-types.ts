@@ -25,6 +25,7 @@ export interface ConnectionContext {
   setLoading: (val: boolean) => void;
   setStreaming: (val: boolean) => void;
   setSpinnerMsg: (val: string) => void;
+  setLastActivityAt: (val: number) => void;
 
   // Messages
   setMessages: (fn: (prev: ChatMessage[]) => ChatMessage[]) => void;
