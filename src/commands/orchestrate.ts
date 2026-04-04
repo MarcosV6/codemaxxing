@@ -5,8 +5,8 @@ import {
   runCodeReviewOrchestration,
   formatOrchestrationResult,
   type SubAgentSpec,
-} from "../orchestrator.js";
-import type { AgentOptions } from "../agent.js";
+} from "../orchestrator/index.js";
+import type { AgentOptions } from "../core/agent.js";
 import type { AddMsg } from "./types.js";
 
 /**

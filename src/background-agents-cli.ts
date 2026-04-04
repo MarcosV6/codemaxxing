@@ -12,7 +12,7 @@ import {
   getAgentRuntimeStatus,
   type BackgroundAgentRecord,
 } from "./background-agents.js";
-import type { AgentOptions } from "./agent.js";
+import type { AgentOptions } from "./core/agent.js";
 
 /**
  * Display a background agent record in a readable format

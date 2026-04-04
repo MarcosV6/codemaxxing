@@ -5,10 +5,10 @@
  * Supports stdin pipe: echo "fix the tests" | codemaxxing exec
  */
 
-import { CodingAgent } from "./agent.js";
+import { CodingAgent } from "./core/agent.js";
 import { loadConfig, applyOverrides, detectLocalProvider } from "./config.js";
 import { getCredential } from "./utils/auth.js";
-import { disconnectAll } from "./utils/mcp.js";
+import { disconnectAll } from "./bridge/mcp.js";
 
 interface ExecArgs {
   prompt: string;

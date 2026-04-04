@@ -4,7 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import nodeCron, { type ScheduledTask } from "node-cron";
-import type { AgentOptions } from "./agent.js";
+import type { AgentOptions } from "./core/agent.js";
 import {
   createBackgroundAgent,
   startBackgroundAgent,

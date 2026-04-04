@@ -4,7 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { CodingAgent, type AgentOptions } from "./agent.js";
+import { CodingAgent, type AgentOptions } from "./core/agent.js";
 import { getSession, listSessions, type SessionInfo } from "./utils/sessions.js";
 
 const CONFIG_DIR = join(homedir(), ".codemaxxing");
