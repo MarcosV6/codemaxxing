@@ -226,6 +226,8 @@ function App() {
   const [streaming, setStreaming] = useState(false);
   const [spinnerMsg, setSpinnerMsg] = useState("");
   const [lastActivityAt, setLastActivityAt] = useState(Date.now());
+  const [agentStage, setAgentStage] = useState("idle");
+  const [lastToolName, setLastToolName] = useState<string | null>(null);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
   const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
@@ -269,13 +271,15 @@ function App() {
     const interval = setInterval(() => {
       const idleMs = Date.now() - lastActivityAt;
       if (idleMs > 60000) {
-        addMsg("error", "⏱️ No model activity for 60s. This request may be hung.");
+        const toolSuffix = lastToolName ? ` (${lastToolName})` : "";
+        addMsg("error", `⏱️ No model activity for 60s while ${agentStage}${toolSuffix}. Request may be hung.`);
         setLoading(false);
         setStreaming(false);
+        setAgentStage("hung");
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [loading, agent, lastActivityAt]);
+  }, [loading, agent, lastActivityAt, agentStage, lastToolName]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -331,6 +335,8 @@ function App() {
       setStreaming,
       setSpinnerMsg,
       setLastActivityAt,
+      setAgentStage,
+      setLastToolName,
       setMessages,
       addMsg,
       nextMsgId,
@@ -883,6 +889,8 @@ function App() {
     setLoading(true);
     setStreaming(false);
     setLastActivityAt(Date.now());
+    setAgentStage("waiting for first token");
+    setLastToolName(null);
     setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
 
     try {
@@ -896,6 +904,7 @@ function App() {
     setLoading(false);
     setStreaming(false);
     setLastActivityAt(Date.now());
+    setAgentStage("idle");
   }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {

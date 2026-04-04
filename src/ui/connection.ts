@@ -184,6 +184,7 @@ export async function connectToProvider(
     onToken: (token) => {
       // Switch from big spinner to streaming mode
       ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("streaming response");
       ctx.setLoading(false);
       ctx.setStreaming(true);
 
@@ -205,6 +206,8 @@ export async function connectToProvider(
     },
     onToolCall: (name, args) => {
       ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("executing tool");
+      ctx.setLastToolName(name);
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Executing tools...");
       const argStr = Object.entries(args)
@@ -215,14 +218,17 @@ export async function connectToProvider(
         .join(", ");
       ctx.addMsg("tool", `${name}(${argStr})`);
     },
-    onToolResult: (_name, result) => {
+    onToolResult: (name, result) => {
       ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("waiting after tool result");
+      ctx.setLastToolName(name);
       const numLines = result.split("\n").length;
       const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
       ctx.addMsg("tool-result", `└ ${numLines} lines (${size})`);
     },
     onThinking: (text) => {
       ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("thinking");
       if (text.length > 0) {
         ctx.addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
       }
