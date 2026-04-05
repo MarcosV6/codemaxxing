@@ -260,6 +260,7 @@ function App() {
 
   const [input, setInput] = useState("");
   const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
+  const inlinePasteSkipRef = useRef<string | null>(null);
   const [pasteCount, setPasteCount] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -356,6 +357,7 @@ function App() {
   useEffect(() => {
     const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
       if (inline) {
+        inlinePasteSkipRef.current = content;
         setInput((prev) => `${prev}${content}`);
         return;
       }
@@ -1277,7 +1279,18 @@ function App() {
             <TextInput
               key={inputKey}
               value={input}
-              onChange={(v) => { setInput(sanitizeInputArtifacts(v)); setCmdIndex(0); }}
+              onChange={(v) => {
+                const sanitized = sanitizeInputArtifacts(v);
+                const pendingInlinePaste = inlinePasteSkipRef.current;
+                if (pendingInlinePaste && sanitized === "") {
+                  inlinePasteSkipRef.current = null;
+                  setCmdIndex(0);
+                  return;
+                }
+                inlinePasteSkipRef.current = null;
+                setInput(sanitized);
+                setCmdIndex(0);
+              }}
               onSubmit={handleSubmit}
             />
           </Box>
