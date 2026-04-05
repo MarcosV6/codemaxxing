@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { appendFileSync } from "node:fs";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
@@ -210,12 +209,6 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   );
 }
 
-function pasteDebugLog(msg: string): void {
-  try {
-    appendFileSync("/tmp/codemaxxing-paste-pipeline.log", `[${Date.now()}] ${msg}\n`);
-  } catch {}
-}
-
 function longestOverlapSuffixPrefix(a: string, b: string): number {
   const max = Math.min(a.length, b.length);
   for (let len = max; len > 0; len--) {
@@ -361,13 +354,16 @@ function App() {
 
   // Listen for paste events from stdin interceptor
   useEffect(() => {
-    const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
-      pasteDebugLog(`STATE STORE incoming lines=${lines} len=${content.length} json=${JSON.stringify(content)}`);
+    const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
+      if (inline) {
+        setInput((prev) => `${prev}${content}`);
+        return;
+      }
+
       setPasteCount((c) => {
         const newId = c + 1;
         setPastedChunks((prev) => {
           const next = [...prev, { id: newId, lines, content }];
-          pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(content)}`);
           return next;
         });
         return newId;
@@ -591,7 +587,6 @@ function App() {
     if (chunks.length > 0) {
       const pasteText = chunks.map(p => p.content).join("\n\n");
       const dedupedInput = dedupeLeakedPasteInput(trimmedValue, pasteText).trim();
-      pasteDebugLog(`SUBMIT ASSEMBLY typedLen=${trimmedValue.length} dedupedLen=${dedupedInput.length} chunkCount=${chunks.length} pasteJson=${JSON.stringify(pasteText)}`);
       submittedValue = dedupedInput ? `${dedupedInput}\n\n${pasteText}` : pasteText;
     }
     setInput("");
@@ -600,7 +595,6 @@ function App() {
     if (!submittedValue.trim()) return;
 
     const trimmed = submittedValue.trim();
-    pasteDebugLog(`SUBMIT FINAL len=${submittedValue.length} json=${JSON.stringify(submittedValue)}`);
     addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {

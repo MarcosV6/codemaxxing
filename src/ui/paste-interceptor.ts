@@ -1,5 +1,4 @@
 import { EventEmitter } from "events";
-import { appendFileSync } from "node:fs";
 
 export interface PasteEvent {
   content: string;
@@ -43,17 +42,9 @@ export function setupPasteInterceptor(): PasteEventBus {
   let burstTimer: NodeJS.Timeout | null = null;
   const BURST_WINDOW_MS = 50;
 
-  // Force debug for this session — will write to /tmp/codemaxxing-paste-debug.log
-  const PASTE_DEBUG = true;
-  function pasteLog(msg: string): void {
+  const PASTE_DEBUG = false;
+  function pasteLog(_msg: string): void {
     if (!PASTE_DEBUG) return;
-    const escaped = msg
-      .replace(/\x1b/g, "\\x1b")
-      .replace(/\r/g, "\\r")
-      .replace(/\n/g, "\\n");
-    try {
-      appendFileSync("/tmp/codemaxxing-paste-debug.log", `[${Date.now()}] ${escaped}\n`);
-    } catch {}
   }
 
   const origEmit = process.stdin.emit.bind(process.stdin);
@@ -75,10 +66,8 @@ export function setupPasteInterceptor(): PasteEventBus {
       pasteLog(`PASTE EMIT attachment lines=${lineCount} len=${visible.length}`);
       pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: false });
     } else {
-      // Treat short single-line paste as a paste block too. It's slightly less fancy,
-      // but much more reliable than trying to inject synthetic keystrokes into Ink.
-      pasteLog(`PASTE EMIT single-line block len=${visible.length}`);
-      pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: false });
+      pasteLog(`PASTE EMIT inline len=${visible.length}`);
+      pasteEvents.emit("paste", { content: visible, lines: lineCount, inline: true });
     }
   }
 
