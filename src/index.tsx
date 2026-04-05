@@ -1044,8 +1044,12 @@ function App() {
         switch (msg.type) {
           case "user":
             return (
-              <Box key={msg.id} marginTop={1}>
-                <Text color={theme.colors.userInput}>{"  > "}{msg.text}</Text>
+              <Box key={msg.id} marginTop={1} flexDirection="column">
+                {msg.text.split("\n").map((line, i) => (
+                  <Text key={i} color={theme.colors.userInput} wrap="wrap">
+                    {i === 0 ? "  > " : "    "}{line}
+                  </Text>
+                ))}
               </Box>
             );
           case "response":
