@@ -69,6 +69,7 @@ export function setupPasteInterceptor(): PasteEventBus {
 
     const lineCount = normalized.split("\n").length;
     const isAttachment = lineCount >= 2 || visible.length >= 120;
+    pasteLog(`PASTE PAYLOAD RAW lines=${lineCount} len=${normalized.length} json=${JSON.stringify(normalized)}`);
 
     if (isAttachment) {
       pasteLog(`PASTE EMIT attachment lines=${lineCount} len=${visible.length}`);

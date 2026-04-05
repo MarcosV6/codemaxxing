@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { appendFileSync } from "node:fs";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
@@ -209,6 +210,12 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   );
 }
 
+function pasteDebugLog(msg: string): void {
+  try {
+    appendFileSync("/tmp/codemaxxing-paste-pipeline.log", `[${Date.now()}] ${msg}\n`);
+  } catch {}
+}
+
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
@@ -315,9 +322,14 @@ function App() {
   // Listen for paste events from stdin interceptor
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
+      pasteDebugLog(`STATE STORE incoming lines=${lines} len=${content.length} json=${JSON.stringify(content)}`);
       setPasteCount((c) => {
         const newId = c + 1;
-        setPastedChunks((prev) => [...prev, { id: newId, lines, content }]);
+        setPastedChunks((prev) => {
+          const next = [...prev, { id: newId, lines, content }];
+          pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(content)}`);
+          return next;
+        });
         return newId;
       });
     };
@@ -538,6 +550,7 @@ function App() {
     let submittedValue = trimmedValue;
     if (chunks.length > 0) {
       const pasteText = chunks.map(p => p.content).join("\n\n");
+      pasteDebugLog(`SUBMIT ASSEMBLY typedLen=${trimmedValue.length} chunkCount=${chunks.length} pasteJson=${JSON.stringify(pasteText)}`);
       submittedValue = trimmedValue ? `${trimmedValue}\n\n${pasteText}` : pasteText;
     }
     setInput("");
@@ -546,6 +559,7 @@ function App() {
     if (!submittedValue.trim()) return;
 
     const trimmed = submittedValue.trim();
+    pasteDebugLog(`SUBMIT FINAL len=${submittedValue.length} json=${JSON.stringify(submittedValue)}`);
     addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
