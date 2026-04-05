@@ -45,8 +45,7 @@ export function setupPasteInterceptor(): PasteEventBus {
   let pendingPasteEndState = { active: false, buffer: "" };
   const BURST_WINDOW_MS = 50;
 
-  // Force debug for this session — will write to /tmp/codemaxxing-paste-debug.log
-  const PASTE_DEBUG = true;
+  const PASTE_DEBUG = process.env.CODEMAXXING_PASTE_DEBUG === "1";
   function pasteLog(msg: string): void {
     if (!PASTE_DEBUG) return;
     const escaped = msg
@@ -87,17 +86,23 @@ export function setupPasteInterceptor(): PasteEventBus {
   function classifyBurstPaste(data: string): { isPaste: boolean } {
     const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     const normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const compact = normalized.replace(/\n/g, "");
+    const printableOnly = compact.replace(/[^\x20-\x7E]/g, "");
+    const nonPrintableCount = compact.length - printableOnly.length;
     const newlines = (normalized.match(/\n/g) ?? []).length;
-    const printable = normalized.replace(/\n/g, "").trim().length;
+    const printable = printableOnly.trim().length;
+
+    // If the chunk is mostly control bytes / escape debris, do not classify it as paste.
+    if (nonPrintableCount > 0 && printable < Math.max(2, nonPrintableCount)) {
+      return { isPaste: false };
+    }
 
     if (newlines >= 2 || (newlines >= 1 && printable >= 40)) {
       return { isPaste: true };
     }
 
-    // Single-line pastes are common on macOS terminals and may arrive as one fast chunk.
-    // Route them through the same paste event path as multiline content so they don't
-    // collide with incremental input handling inside ink-text-input.
-    if (newlines === 0 && printable >= 2) {
+    // Accept short single-line paste only when it is genuinely printable text.
+    if (newlines === 0 && printable >= 2 && nonPrintableCount === 0) {
       return { isPaste: true };
     }
 
