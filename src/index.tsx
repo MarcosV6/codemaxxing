@@ -344,19 +344,21 @@ function App() {
 
   // Listen for paste events from stdin interceptor
   useEffect(() => {
-    const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
-      const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      const trimmed = normalized.trim();
-      if (!trimmed) return;
+    const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
+      const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+      if (!normalized) return;
 
-      if (inline) {
-        setInput((prev) => `${prev}${trimmed}`);
+      if (lines <= 1 && normalized.length < 120) {
+        setInput((prev) => `${prev}${normalized}`);
         return;
       }
 
       setPasteCount((c) => {
         const newId = c + 1;
-        setPastedChunks((prev) => [...prev, { id: newId, lines, content: trimmed }]);
+        setPastedChunks((prev) => {
+          const next = [...prev, { id: newId, lines, content: normalized }];
+          return next;
+        });
         return newId;
       });
     };
