@@ -910,13 +910,38 @@ function handleDeleteSessionPicker(_inputChar: string, key: Key, ctx: InputRoute
   return true;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatPastedTextRef(id: number, lines: number): string {
+  return lines <= 1 ? `[Pasted text #${id}]` : `[Pasted text #${id} +${lines - 1} lines]`;
+}
+
+function removeTrailingPasteRef(input: string, removed: { id: number; lines: number; content: string }): string {
+  const ref = formatPastedTextRef(removed.id, removed.lines);
+  const pattern = new RegExp(`(?:\\s*${escapeRegExp(ref)})\\s*$`);
+  if (pattern.test(input)) {
+    return input.replace(pattern, "").trimEnd();
+  }
+  return input;
+}
+
 function handleBackspaceRemovesPasteChunk(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
   if ((key.backspace || key.delete) && ctx.input === "" && ctx.pastedChunksRef.current.length > 0) {
+    const removed = ctx.pastedChunksRef.current[ctx.pastedChunksRef.current.length - 1];
+    if (removed) {
+      ctx.setInput(removeTrailingPasteRef(ctx.input, removed));
+    }
     ctx.setPastedChunks((prev) => prev.slice(0, -1));
     return true;
   }
 
   if (key.escape && ctx.input === "" && ctx.pastedChunksRef.current.length > 0) {
+    const removed = ctx.pastedChunksRef.current[ctx.pastedChunksRef.current.length - 1];
+    if (removed) {
+      ctx.setInput(removeTrailingPasteRef(ctx.input, removed));
+    }
     ctx.setPastedChunks((prev) => prev.slice(0, -1));
     ctx.addMsg("info", "Removed latest pasted block.");
     return true;
