@@ -307,13 +307,7 @@ function App() {
 
   // Listen for paste events from stdin interceptor
   useEffect(() => {
-    const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
-      if (inline) {
-        setInput((prev) => sanitizeInputArtifacts(prev + content));
-        setCmdIndex(0);
-        setInputKey((k) => k + 1);
-        return;
-      }
+    const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
       setPasteCount((c) => {
         const newId = c + 1;
         setPastedChunks((prev) => [...prev, { id: newId, lines, content }]);

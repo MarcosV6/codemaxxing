@@ -73,31 +73,31 @@ export function setupPasteInterceptor(): PasteEventBus {
       pasteLog(`PASTE EMIT attachment lines=${lineCount} len=${visible.length}`);
       pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: false });
     } else {
-      // Short single-line paste should still go through a paste-aware path.
-      // Forwarding it as synthetic stdin data is fragile on some mac terminal setups.
-      pasteLog(`PASTE EMIT inline len=${visible.length}`);
-      pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: true });
+      // Treat short single-line paste as a paste block too. It's slightly less fancy,
+      // but much more reliable than trying to inject synthetic keystrokes into Ink.
+      pasteLog(`PASTE EMIT single-line block len=${visible.length}`);
+      pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: false });
     }
   }
 
-  function classifyBurstPaste(data: string): { isPaste: boolean; inline: boolean } {
+  function classifyBurstPaste(data: string): { isPaste: boolean } {
     const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     const normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const newlines = (normalized.match(/\n/g) ?? []).length;
     const printable = normalized.replace(/\n/g, "").trim().length;
 
     if (newlines >= 2 || (newlines >= 1 && printable >= 40)) {
-      return { isPaste: true, inline: false };
+      return { isPaste: true };
     }
 
     // Single-line pastes are common on macOS terminals and may arrive as one fast chunk.
-    // Treat a reasonably sized printable single-line burst as an inline paste instead of
-    // ordinary typing so Cmd+V works for normal prompts too.
+    // Route them through the same paste event path as multiline content so they don't
+    // collide with incremental input handling inside ink-text-input.
     if (newlines === 0 && printable >= 2) {
-      return { isPaste: true, inline: true };
+      return { isPaste: true };
     }
 
-    return { isPaste: false, inline: false };
+    return { isPaste: false };
   }
 
   function flushBurst(): void {
@@ -109,14 +109,8 @@ export function setupPasteInterceptor(): PasteEventBus {
 
     const classification = classifyBurstPaste(buffered);
     if (classification.isPaste) {
-      pasteLog(`BURST → paste len=${buffered.length} inline=${classification.inline}`);
-      if (classification.inline) {
-        const normalized = buffered.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-        const lineCount = normalized.split("\n").length;
-        pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: true });
-      } else {
-        emitPaste(buffered);
-      }
+      pasteLog(`BURST → paste len=${buffered.length}`);
+      emitPaste(buffered);
     } else {
       pasteLog(`BURST → forward len=${buffered.length}`);
       origEmit("data", buffered);
