@@ -80,12 +80,24 @@ export function setupPasteInterceptor(): PasteEventBus {
     }
   }
 
-  function looksLikeMultilinePaste(data: string): boolean {
+  function classifyBurstPaste(data: string): { isPaste: boolean; inline: boolean } {
     const clean = data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     const normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const newlines = (normalized.match(/\n/g) ?? []).length;
     const printable = normalized.replace(/\n/g, "").trim().length;
-    return newlines >= 2 || (newlines >= 1 && printable >= 40);
+
+    if (newlines >= 2 || (newlines >= 1 && printable >= 40)) {
+      return { isPaste: true, inline: false };
+    }
+
+    // Single-line pastes are common on macOS terminals and may arrive as one fast chunk.
+    // Treat a reasonably sized printable single-line burst as an inline paste instead of
+    // ordinary typing so Cmd+V works for normal prompts too.
+    if (newlines === 0 && printable >= 2) {
+      return { isPaste: true, inline: true };
+    }
+
+    return { isPaste: false, inline: false };
   }
 
   function flushBurst(): void {
@@ -95,9 +107,16 @@ export function setupPasteInterceptor(): PasteEventBus {
 
     if (!buffered.trim()) return;
 
-    if (looksLikeMultilinePaste(buffered)) {
-      pasteLog(`BURST → paste len=${buffered.length}`);
-      emitPaste(buffered);
+    const classification = classifyBurstPaste(buffered);
+    if (classification.isPaste) {
+      pasteLog(`BURST → paste len=${buffered.length} inline=${classification.inline}`);
+      if (classification.inline) {
+        const normalized = buffered.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const lineCount = normalized.split("\n").length;
+        pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: true });
+      } else {
+        emitPaste(buffered);
+      }
     } else {
       pasteLog(`BURST → forward len=${buffered.length}`);
       origEmit("data", buffered);
