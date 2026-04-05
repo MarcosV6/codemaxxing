@@ -4,6 +4,7 @@ import { appendFileSync } from "node:fs";
 export interface PasteEvent {
   content: string;
   lines: number;
+  inline?: boolean;
 }
 
 export type PasteEventBus = EventEmitter;
@@ -70,11 +71,12 @@ export function setupPasteInterceptor(): PasteEventBus {
 
     if (isAttachment) {
       pasteLog(`PASTE EMIT attachment lines=${lineCount} len=${visible.length}`);
-      pasteEvents.emit("paste", { content: normalized, lines: lineCount });
+      pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: false });
     } else {
-      // Short single-line paste → forward as normal typed input
+      // Short single-line paste should still go through a paste-aware path.
+      // Forwarding it as synthetic stdin data is fragile on some mac terminal setups.
       pasteLog(`PASTE EMIT inline len=${visible.length}`);
-      origEmit("data", visible);
+      pasteEvents.emit("paste", { content: normalized, lines: lineCount, inline: true });
     }
   }
 
