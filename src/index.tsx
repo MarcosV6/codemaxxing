@@ -260,7 +260,7 @@ function App() {
 
   const [input, setInput] = useState("");
   const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
-  const inlinePasteSkipRef = useRef<string | null>(null);
+  const inlinePasteValueRef = useRef<string | null>(null);
   const [pasteCount, setPasteCount] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -357,8 +357,10 @@ function App() {
   useEffect(() => {
     const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
       if (inline) {
-        inlinePasteSkipRef.current = content;
-        setInput((prev) => `${prev}${content}`);
+        const nextValue = `${inputRef.current}${content}`;
+        inlinePasteValueRef.current = nextValue;
+        setInput(nextValue);
+        setInputKey((k) => k + 1);
         return;
       }
 
@@ -428,6 +430,8 @@ function App() {
   showSuggestionsRef.current = showSuggestions;
   const pastedChunksRef = React.useRef(pastedChunks);
   pastedChunksRef.current = pastedChunks;
+  const inputRef = React.useRef(input);
+  inputRef.current = input;
 
   const openModelPicker = useCallback(async () => {
     addMsg("info", "Fetching available models...");
@@ -1281,13 +1285,16 @@ function App() {
               value={input}
               onChange={(v) => {
                 const sanitized = sanitizeInputArtifacts(v);
-                const pendingInlinePaste = inlinePasteSkipRef.current;
-                if (pendingInlinePaste && sanitized === "") {
-                  inlinePasteSkipRef.current = null;
-                  setCmdIndex(0);
-                  return;
+                const forcedInlineValue = inlinePasteValueRef.current;
+                if (forcedInlineValue !== null) {
+                  if (sanitized === "" || sanitized === forcedInlineValue.slice(0, -1)) {
+                    setInput(forcedInlineValue);
+                    inlinePasteValueRef.current = null;
+                    setCmdIndex(0);
+                    return;
+                  }
+                  inlinePasteValueRef.current = null;
                 }
-                inlinePasteSkipRef.current = null;
                 setInput(sanitized);
                 setCmdIndex(0);
               }}
