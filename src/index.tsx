@@ -216,6 +216,35 @@ function pasteDebugLog(msg: string): void {
   } catch {}
 }
 
+function longestOverlapSuffixPrefix(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  for (let len = max; len > 0; len--) {
+    if (a.slice(-len) === b.slice(0, len)) return len;
+  }
+  return 0;
+}
+
+function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
+  const typed = typedInput.trim();
+  const pasted = pasteText.trim();
+  if (!typed || !pasted) return typedInput;
+
+  if (pasted.startsWith(typed)) {
+    return "";
+  }
+
+  if (typed.includes(pasted)) {
+    return typedInput.replace(pasteText, "").trim();
+  }
+
+  const overlap = longestOverlapSuffixPrefix(typed, pasted);
+  if (overlap >= Math.min(typed.length, 32)) {
+    return typedInput.slice(0, typedInput.length - overlap).trimEnd();
+  }
+
+  return typedInput;
+}
+
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
@@ -550,8 +579,9 @@ function App() {
     let submittedValue = trimmedValue;
     if (chunks.length > 0) {
       const pasteText = chunks.map(p => p.content).join("\n\n");
-      pasteDebugLog(`SUBMIT ASSEMBLY typedLen=${trimmedValue.length} chunkCount=${chunks.length} pasteJson=${JSON.stringify(pasteText)}`);
-      submittedValue = trimmedValue ? `${trimmedValue}\n\n${pasteText}` : pasteText;
+      const dedupedInput = dedupeLeakedPasteInput(trimmedValue, pasteText).trim();
+      pasteDebugLog(`SUBMIT ASSEMBLY typedLen=${trimmedValue.length} dedupedLen=${dedupedInput.length} chunkCount=${chunks.length} pasteJson=${JSON.stringify(pasteText)}`);
+      submittedValue = dedupedInput ? `${dedupedInput}\n\n${pasteText}` : pasteText;
     }
     setInput("");
     setPastedChunks([]);
