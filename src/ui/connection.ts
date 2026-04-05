@@ -5,6 +5,19 @@ import { isGitRepo, getBranch, getStatus } from "../utils/git.js";
 import { getCredential } from "../utils/auth.js";
 import type { ConnectionContext } from "./connection-types.js";
 
+const OPENING_STREAM_MESSAGES = [
+  "Locking onto the stream...",
+  "Tapping into the sauce...",
+  "Opening the firehose...",
+  "Warming up the tokens...",
+  "Dialing into the mainframe...",
+  "Booting the word cannon...",
+  "Channeling the machine spirit...",
+  "Connecting to the yap dimension...",
+  "Cracking open the response...",
+  "Spinning up the next move...",
+];
+
 function describeActiveConnection(baseUrl: string, model: string): string {
   const url = baseUrl.toLowerCase();
   if (url.includes("localhost:1234")) return `${model} via LM Studio`;
@@ -235,7 +248,8 @@ export async function connectToProvider(
       if (stage === "opening model stream" || stage === "opening next model stream") {
         ctx.setLoading(true);
         ctx.setStreaming(false);
-        ctx.setSpinnerMsg(stage === "opening next model stream" ? "Opening follow-up stream..." : "Opening model stream...");
+        const msg = OPENING_STREAM_MESSAGES[Math.floor(Math.random() * OPENING_STREAM_MESSAGES.length)];
+        ctx.setSpinnerMsg(stage === "opening next model stream" ? `${msg} (round 2)` : msg);
       }
       if (stage === "tool result appended to conversation") {
         ctx.setAgentStage("waiting after tool result");
