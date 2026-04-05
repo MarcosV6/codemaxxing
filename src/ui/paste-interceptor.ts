@@ -84,8 +84,7 @@ export function setupPasteInterceptor(): PasteEventBus {
     burstBuffer = "";
 
     const classified = classifyPaste(buffered);
-    if (classified) {
-      // Treat any clean printable burst as paste so short one-line Cmd+V works too.
+    if (classified && (classified.lines > 1 || classified.content.length > 1)) {
       pasteEvents.emit("paste", classified);
       return;
     }
