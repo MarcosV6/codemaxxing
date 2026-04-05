@@ -221,17 +221,18 @@ function formatPastedTextRef(id: number, numLines: number): string {
   return `[Pasted text #${id} +${numLines - 1} lines]`;
 }
 
-function expandPastedTextRefs(
+function buildSubmittedValue(
   input: string,
   pastedChunks: Array<{ id: number; lines: number; content: string }>,
 ): string {
-  let expanded = input;
-  const sorted = [...pastedChunks].sort((a, b) => b.id - a.id);
-  for (const chunk of sorted) {
-    const ref = formatPastedTextRef(chunk.id, chunk.lines);
-    expanded = expanded.split(ref).join(chunk.content);
-  }
-  return expanded;
+  const trimmedInput = input.trim();
+  if (pastedChunks.length === 0) return trimmedInput;
+
+  const pastedText = pastedChunks
+    .map((chunk) => chunk.content)
+    .join("\n\n");
+
+  return trimmedInput ? `${trimmedInput}\n\n${pastedText}` : pastedText;
 }
 
 function renderPastePreview(content: string, maxLines = 8, maxWidth = 100): string[] {
@@ -357,23 +358,16 @@ function App() {
 
       if (lines <= 1 && normalized.length < 120) {
         setInput((prev) => `${prev}${normalized}`);
-        setInputKey((k) => k + 1);
         return;
       }
 
       setPasteCount((c) => {
         const newId = c + 1;
-        const ref = formatPastedTextRef(newId, lines);
         setPastedChunks((prev) => {
           const next = [...prev, { id: newId, lines, content: normalized }];
           pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(normalized)}`);
           return next;
         });
-        setInput((prev) => {
-          const spacer = prev.trim().length > 0 ? " " : "";
-          return `${prev}${spacer}${ref}`;
-        });
-        setInputKey((k) => k + 1);
         return newId;
       });
     };
@@ -590,16 +584,16 @@ function App() {
 
     const chunks = pastedChunksRef.current;
     const trimmedVisibleValue = value.trim();
-    const expandedValue = expandPastedTextRefs(trimmedVisibleValue, chunks);
+    const submittedValue = buildSubmittedValue(trimmedVisibleValue, chunks);
 
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
-    if (!expandedValue.trim()) return;
+    if (!submittedValue.trim()) return;
 
-    const trimmed = expandedValue.trim();
-    pasteDebugLog(`SUBMIT FINAL visible=${JSON.stringify(trimmedVisibleValue)} expandedLen=${expandedValue.length} json=${JSON.stringify(expandedValue)}`);
-    addMsg("user", expandedValue);
+    const trimmed = submittedValue.trim();
+    pasteDebugLog(`SUBMIT FINAL visible=${JSON.stringify(trimmedVisibleValue)} chunkCount=${chunks.length} submittedLen=${submittedValue.length} json=${JSON.stringify(submittedValue)}`);
+    addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
       // Check if Ollama is running and offer to stop it
@@ -1270,7 +1264,7 @@ function App() {
                   const ref = formatPastedTextRef(p.id, p.lines);
                   return (
                     <Box key={p.id} flexDirection="column" marginBottom={1}>
-                      <Text color={theme.colors.muted}>{ref} · preview · Backspace/Esc to remove last paste</Text>
+                      <Text color={theme.colors.muted}>{ref} · attached paste · Backspace/Esc to remove last paste</Text>
                       {previewLines.map((line, i) => (
                         <Text key={i} color={theme.colors.muted} wrap="truncate-end">  {line}</Text>
                       ))}
