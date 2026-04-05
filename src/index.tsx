@@ -216,33 +216,22 @@ function pasteDebugLog(msg: string): void {
   } catch {}
 }
 
-function longestOverlapSuffixPrefix(a: string, b: string): number {
-  const max = Math.min(a.length, b.length);
-  for (let len = max; len > 0; len--) {
-    if (a.slice(-len) === b.slice(0, len)) return len;
-  }
-  return 0;
+function formatPastedTextRef(id: number, numLines: number): string {
+  if (numLines <= 1) return `[Pasted text #${id}]`;
+  return `[Pasted text #${id} +${numLines - 1} lines]`;
 }
 
-function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
-  const typed = typedInput.trim();
-  const pasted = pasteText.trim();
-  if (!typed || !pasted) return typedInput;
-
-  if (pasted.startsWith(typed)) {
-    return "";
+function expandPastedTextRefs(
+  input: string,
+  pastedChunks: Array<{ id: number; lines: number; content: string }>,
+): string {
+  let expanded = input;
+  const sorted = [...pastedChunks].sort((a, b) => b.id - a.id);
+  for (const chunk of sorted) {
+    const ref = formatPastedTextRef(chunk.id, chunk.lines);
+    expanded = expanded.split(ref).join(chunk.content);
   }
-
-  if (typed.includes(pasted)) {
-    return typedInput.replace(pasteText, "").trim();
-  }
-
-  const overlap = longestOverlapSuffixPrefix(typed, pasted);
-  if (overlap >= Math.min(typed.length, 32)) {
-    return typedInput.slice(0, typedInput.length - overlap).trimEnd();
-  }
-
-  return typedInput;
+  return expanded;
 }
 
 function renderPastePreview(content: string, maxLines = 8, maxWidth = 100): string[] {
@@ -363,13 +352,28 @@ function App() {
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
       pasteDebugLog(`STATE STORE incoming lines=${lines} len=${content.length} json=${JSON.stringify(content)}`);
+      const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+      if (!normalized) return;
+
+      if (lines <= 1 && normalized.length < 120) {
+        setInput((prev) => `${prev}${normalized}`);
+        setInputKey((k) => k + 1);
+        return;
+      }
+
       setPasteCount((c) => {
         const newId = c + 1;
+        const ref = formatPastedTextRef(newId, lines);
         setPastedChunks((prev) => {
-          const next = [...prev, { id: newId, lines, content }];
-          pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(content)}`);
+          const next = [...prev, { id: newId, lines, content: normalized }];
+          pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(normalized)}`);
           return next;
         });
+        setInput((prev) => {
+          const spacer = prev.trim().length > 0 ? " " : "";
+          return `${prev}${spacer}${ref}`;
+        });
+        setInputKey((k) => k + 1);
         return newId;
       });
     };
@@ -584,24 +588,18 @@ function App() {
       }
     }
 
-    // Combine typed text with any pasted attachment blocks.
     const chunks = pastedChunksRef.current;
-    const trimmedValue = value.trim();
-    let submittedValue = trimmedValue;
-    if (chunks.length > 0) {
-      const pasteText = chunks.map(p => p.content).join("\n\n");
-      const dedupedInput = dedupeLeakedPasteInput(trimmedValue, pasteText).trim();
-      pasteDebugLog(`SUBMIT ASSEMBLY typedLen=${trimmedValue.length} dedupedLen=${dedupedInput.length} chunkCount=${chunks.length} pasteJson=${JSON.stringify(pasteText)}`);
-      submittedValue = dedupedInput ? `${dedupedInput}\n\n${pasteText}` : pasteText;
-    }
+    const trimmedVisibleValue = value.trim();
+    const expandedValue = expandPastedTextRefs(trimmedVisibleValue, chunks);
+
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
-    if (!submittedValue.trim()) return;
+    if (!expandedValue.trim()) return;
 
-    const trimmed = submittedValue.trim();
-    pasteDebugLog(`SUBMIT FINAL len=${submittedValue.length} json=${JSON.stringify(submittedValue)}`);
-    addMsg("user", submittedValue);
+    const trimmed = expandedValue.trim();
+    pasteDebugLog(`SUBMIT FINAL visible=${JSON.stringify(trimmedVisibleValue)} expandedLen=${expandedValue.length} json=${JSON.stringify(expandedValue)}`);
+    addMsg("user", expandedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
       // Check if Ollama is running and offer to stop it
@@ -1269,9 +1267,10 @@ function App() {
               <Box flexDirection="column" marginBottom={0}>
                 {pastedChunks.map((p) => {
                   const previewLines = renderPastePreview(p.content, 8, Math.max(40, termWidth - 8));
+                  const ref = formatPastedTextRef(p.id, p.lines);
                   return (
                     <Box key={p.id} flexDirection="column" marginBottom={1}>
-                      <Text color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
+                      <Text color={theme.colors.muted}>{ref} · preview · Backspace/Esc to remove last paste</Text>
                       {previewLines.map((line, i) => (
                         <Text key={i} color={theme.colors.muted} wrap="truncate-end">  {line}</Text>
                       ))}
