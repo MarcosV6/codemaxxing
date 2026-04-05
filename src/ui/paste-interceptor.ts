@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { appendFileSync } from "node:fs";
+import { consumePendingPasteEndMarkerChunk } from "../utils/paste.js";
 
 export interface PasteEvent {
   content: string;
@@ -41,6 +42,7 @@ export function setupPasteInterceptor(): PasteEventBus {
   let inBracketedPaste = false;
   let burstBuffer = "";
   let burstTimer: NodeJS.Timeout | null = null;
+  let pendingPasteEndState = { active: false, buffer: "" };
   const BURST_WINDOW_MS = 50;
 
   // Force debug for this session — will write to /tmp/codemaxxing-paste-debug.log
@@ -138,12 +140,24 @@ export function setupPasteInterceptor(): PasteEventBus {
     }
 
     const chunk = args[0];
-    const incoming =
+    const incomingRaw =
       typeof chunk === "string"
         ? chunk
         : Buffer.isBuffer(chunk)
           ? chunk.toString("utf-8")
           : String(chunk);
+
+    const consumed = consumePendingPasteEndMarkerChunk(incomingRaw, pendingPasteEndState);
+    pendingPasteEndState = consumed.nextState;
+    if (consumed.swallowed && !consumed.remaining) {
+      pasteLog(`SWALLOWED trailing paste-end debris json=${JSON.stringify(incomingRaw)}`);
+      return true;
+    }
+
+    const incoming = consumed.remaining;
+    if (!incoming) {
+      return true;
+    }
 
     // Important: do NOT strip bracketed-paste markers before parsing.
     // The state machine below needs to see the real \x1b[200~ / \x1b[201~
@@ -244,6 +258,7 @@ export function setupPasteInterceptor(): PasteEventBus {
         pasteLog(`BRACKETED COMPLETE len=${bracketedBuffer.length}`);
         emitPaste(bracketedBuffer);
         bracketedBuffer = "";
+        pendingPasteEndState = { active: true, buffer: "" };
 
         // Continue processing anything after the end marker
         // (could be more input or even another paste)
