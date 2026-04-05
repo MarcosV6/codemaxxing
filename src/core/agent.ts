@@ -171,6 +171,7 @@ export interface AgentOptions {
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
   onThinking?: (text: string) => void;
+  onLoopStatus?: (stage: string, meta?: Record<string, unknown>) => void;
   onToolApproval?: (name: string, args: Record<string, unknown>, diff?: string) => Promise<"yes" | "no" | "always">;
   onGitCommit?: (message: string) => void;
   onContextCompressed?: (oldTokens: number, newTokens: number) => void;
@@ -340,6 +341,7 @@ export class CodingAgent {
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
+      this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
       let stream;
       try {
@@ -458,9 +460,12 @@ export class CodingAgent {
 
       // If no tool calls, we're done — return the text
       if (toolCalls.size === 0) {
+        this.options.onLoopStatus?.("response completed", { iteration: iterations });
         updateTokenEstimate(this.sessionId, this.estimateTokens());
         return contentText || "(empty response)";
       }
+
+      this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.size });
 
       // Process tool calls
       for (const toolCall of toolCalls.values()) {
@@ -556,7 +561,14 @@ export class CodingAgent {
         };
         this.messages.push(toolMsg);
         saveMessage(this.sessionId, toolMsg);
+        this.options.onLoopStatus?.("tool result appended to conversation", {
+          iteration: iterations,
+          toolName: toolCall.name,
+          resultLength: result.length,
+        });
       }
+
+      this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
 
       // Reset content for next iteration (tool results → model responds again)
       // The onToken callback will stream the next response too
@@ -653,6 +665,7 @@ export class CodingAgent {
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
+      this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
       const anthropicMessages = this.getAnthropicMessages();
       const anthropicTools = this.getAnthropicTools();
@@ -760,9 +773,12 @@ export class CodingAgent {
 
       // If no tool calls, we're done
       if (toolCalls.length === 0) {
+        this.options.onLoopStatus?.("response completed", { iteration: iterations });
         updateTokenEstimate(this.sessionId, this.estimateTokens());
         return contentText || "(empty response)";
       }
+
+      this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
 
       // Process tool calls
       for (const toolCall of toolCalls) {
@@ -851,7 +867,14 @@ export class CodingAgent {
         };
         this.messages.push(toolMsg);
         saveMessage(this.sessionId, toolMsg);
+        this.options.onLoopStatus?.("tool result appended to conversation", {
+          iteration: iterations,
+          toolName: toolCall.name,
+          resultLength: result.length,
+        });
       }
+
+      this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
     }
 
     return "Max iterations reached. The agent may be stuck in a loop.";
@@ -867,6 +890,7 @@ export class CodingAgent {
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
+      this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
       try {
         const currentKey = this.currentApiKey || this.options.provider.apiKey;
@@ -913,9 +937,12 @@ export class CodingAgent {
 
         // If no tool calls, we're done
         if (toolCalls.length === 0) {
+          this.options.onLoopStatus?.("response completed", { iteration: iterations });
           updateTokenEstimate(this.sessionId, this.estimateTokens());
           return contentText || "(empty response)";
         }
+
+        this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
 
         // Process tool calls (same as Chat Completions flow)
         for (const toolCall of toolCalls) {
@@ -1003,7 +1030,14 @@ export class CodingAgent {
           };
           this.messages.push(toolMsg);
           saveMessage(this.sessionId, toolMsg);
+          this.options.onLoopStatus?.("tool result appended to conversation", {
+            iteration: iterations,
+            toolName: toolCall.name,
+            resultLength: result.length,
+          });
         }
+
+        this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
       } catch (err: any) {
         throw err;
       }

@@ -224,7 +224,33 @@ export async function connectToProvider(
       ctx.setLastToolName(name);
       const numLines = result.split("\n").length;
       const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-      ctx.addMsg("tool-result", `└ ${numLines} lines (${size})`);
+      const preview = result
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140);
+      ctx.addMsg("tool-result", `└ ${numLines} lines (${size})${preview ? ` · ${preview}${result.length > 140 ? "..." : ""}` : ""}`);
+    },
+    onLoopStatus: (stage, meta) => {
+      ctx.setLastActivityAt(Date.now());
+      if (stage === "opening model stream" || stage === "opening next model stream") {
+        ctx.setLoading(true);
+        ctx.setStreaming(false);
+        ctx.setSpinnerMsg(stage === "opening next model stream" ? "Opening follow-up stream..." : "Opening model stream...");
+      }
+      if (stage === "tool result appended to conversation") {
+        ctx.setAgentStage("waiting after tool result");
+        const toolName = typeof meta?.toolName === "string" ? meta.toolName : undefined;
+        if (toolName) ctx.setLastToolName(toolName);
+      } else if (stage !== "response completed") {
+        ctx.setAgentStage(stage);
+      }
+      if (stage === "processing tool calls") {
+        ctx.setSpinnerMsg("Processing tool calls...");
+      }
+      if (stage === "response completed") {
+        ctx.setAgentStage("idle");
+        ctx.setLastToolName(null);
+      }
     },
     onThinking: (text) => {
       ctx.setLastActivityAt(Date.now());
