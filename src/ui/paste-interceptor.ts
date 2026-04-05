@@ -128,14 +128,11 @@ export function setupPasteInterceptor(): PasteEventBus {
           ? chunk.toString("utf-8")
           : String(chunk);
 
-    // CRITICAL: Strip stray markers that might leak through if state got out of sync
-    // This handles the case where [201~ arrives as a separate tiny chunk after paste end
+    // CRITICAL: only strip complete bracketed-paste markers.
+    // Do NOT strip bare "200~" / "201~" fragments globally — that can corrupt
+    // normal terminal key sequences on macOS and make Cmd+V-style paste fail.
     data = data.replace(/\x1b\[201~/g, "");
-    data = data.replace(/\[201~/g, "");
-    data = data.replace(/201~/g, "");
     data = data.replace(/\x1b\[200~/g, "");
-    data = data.replace(/\[200~/g, "");
-    data = data.replace(/200~/g, "");
 
     // Log raw bytes in hex for debugging marker fragments
     const hexPreview = data.substring(0, 50).split('').map(c => c.charCodeAt(0).toString(16)).join(' ');
