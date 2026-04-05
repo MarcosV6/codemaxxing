@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { sanitizeInputArtifacts } from "./utils/paste.js";
@@ -228,6 +228,8 @@ function App() {
   const [lastActivityAt, setLastActivityAt] = useState(Date.now());
   const [agentStage, setAgentStage] = useState("idle");
   const [lastToolName, setLastToolName] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState(0);
+  const activeRequestIdRef = useRef(0);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
   const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
@@ -268,9 +270,14 @@ function App() {
 
   useEffect(() => {
     if (!loading || !agent) return;
+    const requestIdAtStart = activeRequestId;
+    let warned = false;
+
     const interval = setInterval(() => {
+      if (warned) return;
       const idleMs = Date.now() - lastActivityAt;
-      if (idleMs > 60000) {
+      if (idleMs > 60000 && requestIdAtStart === activeRequestIdRef.current) {
+        warned = true;
         const toolSuffix = lastToolName ? ` (${lastToolName})` : "";
         addMsg("error", `⏱️ No model activity for 60s while ${agentStage}${toolSuffix}. Request may be hung.`);
         setLoading(false);
@@ -279,7 +286,7 @@ function App() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [loading, agent, lastActivityAt, agentStage, lastToolName]);
+  }, [loading, agent, lastActivityAt, agentStage, lastToolName, activeRequestId]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -886,6 +893,9 @@ function App() {
       setSessionPickerIndex(0);
       return;
     }
+    const requestId = Date.now();
+    activeRequestIdRef.current = requestId;
+    setActiveRequestId(requestId);
     setLoading(true);
     setStreaming(false);
     setLastActivityAt(Date.now());
@@ -901,10 +911,12 @@ function App() {
       addMsg("error", `Error: ${err.message}`);
     }
 
-    setLoading(false);
-    setStreaming(false);
-    setLastActivityAt(Date.now());
-    setAgentStage("idle");
+    if (requestId === activeRequestIdRef.current) {
+      setLoading(false);
+      setStreaming(false);
+      setLastActivityAt(Date.now());
+      setAgentStage("idle");
+    }
   }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {
