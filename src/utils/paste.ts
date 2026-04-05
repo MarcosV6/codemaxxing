@@ -18,17 +18,18 @@ export function sanitizeInputArtifacts(value: string): string {
 
   let out = value;
 
-  // Remove only real escape-sequence bracketed-paste markers.
-  // Do NOT strip plain-text fragments like `[200~` or `200~` from arbitrary
-  // content here — that can visually mangle pasted text previews.
-  out = out.replace(/\x1b\[20[01]~/g, "");
+  // Strip canonical bracketed-paste markers whether they arrive as real escape
+  // sequences or as already-rendered visible fragments leaked by the terminal.
+  out = out.replace(/\x1b\[200~/g, "");
+  out = out.replace(/\x1b\[201~/g, "");
+  out = out.replace(/\[200~/g, "");
+  out = out.replace(/\[201~/g, "");
 
-  // Defensive UI-layer cleanup: only wipe the input if it is clearly just raw
-  // control-sequence debris, not normal visible text.
+  // Defensive UI cleanup for tiny raw marker remnants.
+  const trimmed = out.trim();
   const looksLikeDebris =
-    out.length <= 8 &&
-    /^[\x1b\[\]0-9;~]+$/.test(out) &&
-    out.includes("\x1b");
+    trimmed.length <= 8 &&
+    /^(?:\x1b\[)?20[01]~$/.test(trimmed);
 
   if (looksLikeDebris) {
     return "";
