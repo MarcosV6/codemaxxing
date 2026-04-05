@@ -36,6 +36,7 @@ export function setupPasteInterceptor(): PasteEventBus {
   process.stdout.write("\x1b[?2004h");
 
   // ── State ──
+  let streamBuffer = "";
   let bracketedBuffer = "";
   let inBracketedPaste = false;
   let burstBuffer = "";
@@ -136,7 +137,7 @@ export function setupPasteInterceptor(): PasteEventBus {
     }
 
     const chunk = args[0];
-    let data =
+    const incoming =
       typeof chunk === "string"
         ? chunk
         : Buffer.isBuffer(chunk)
@@ -146,20 +147,42 @@ export function setupPasteInterceptor(): PasteEventBus {
     // Important: do NOT strip bracketed-paste markers before parsing.
     // The state machine below needs to see the real \x1b[200~ / \x1b[201~
     // boundaries so one user paste gesture becomes one paste event.
+    streamBuffer += incoming;
 
     // Log raw bytes in hex for debugging marker fragments
-    const hexPreview = data.substring(0, 50).split('').map(c => c.charCodeAt(0).toString(16)).join(' ');
-    pasteLog(`CHUNK len=${data.length} inBracketed=${inBracketedPaste} hex=${hexPreview}`);
+    const hexPreview = incoming.substring(0, 50).split('').map(c => c.charCodeAt(0).toString(16)).join(' ');
+    pasteLog(`CHUNK len=${incoming.length} inBracketed=${inBracketedPaste} buffered=${streamBuffer.length} hex=${hexPreview}`);
 
-    // ── Process the chunk, potentially containing multiple markers ──
+    let data = streamBuffer;
+    streamBuffer = "";
+
+    // ── Process the buffered stream, potentially containing multiple markers ──
     while (data.length > 0) {
       if (!inBracketedPaste) {
         // Look for paste start marker
         const startIdx = data.indexOf(PASTE_START);
 
         if (startIdx === -1) {
+          // No marker yet. If the current buffered data looks like the start of a
+          // bracketed paste marker fragment, keep it in the stream buffer until the
+          // next chunk arrives instead of misclassifying it as ordinary input.
+          const markerPrefixes = ["\x1b", "\x1b[", "\x1b[2", "\x1b[20", "\x1b[200", "\x1b[200~"];
+          const trailingPrefix = markerPrefixes.find((prefix) => data.endsWith(prefix) && prefix !== "\x1b[200~");
+          if (trailingPrefix) {
+            const safe = data.slice(0, -trailingPrefix.length);
+            if (safe) {
+              burstBuffer += safe;
+              if (burstTimer) clearTimeout(burstTimer);
+              burstTimer = setTimeout(() => {
+                burstTimer = null;
+                flushBurst();
+              }, BURST_WINDOW_MS);
+            }
+            streamBuffer = trailingPrefix;
+            break;
+          }
+
           // No marker — this is normal input or non-bracketed paste
-          // Flush any burst timer and buffer it
           burstBuffer += data;
           if (burstTimer) clearTimeout(burstTimer);
           burstTimer = setTimeout(() => {
@@ -199,8 +222,16 @@ export function setupPasteInterceptor(): PasteEventBus {
         const endIdx = data.indexOf(PASTE_END);
 
         if (endIdx === -1) {
-          // No end marker yet — buffer everything
-          bracketedBuffer += data;
+          // No end marker yet — if the chunk ends with a partial end-marker prefix,
+          // keep that fragment in the stream buffer for the next read.
+          const endPrefixes = ["\x1b", "\x1b[", "\x1b[2", "\x1b[20", "\x1b[201", "\x1b[201~"];
+          const trailingPrefix = endPrefixes.find((prefix) => data.endsWith(prefix) && prefix !== "\x1b[201~");
+          if (trailingPrefix) {
+            bracketedBuffer += data.slice(0, -trailingPrefix.length);
+            streamBuffer = trailingPrefix;
+          } else {
+            bracketedBuffer += data;
+          }
           pasteLog(`BUFFERING total=${bracketedBuffer.length}`);
           break;
         }
