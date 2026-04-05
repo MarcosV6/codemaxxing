@@ -143,11 +143,9 @@ export function setupPasteInterceptor(): PasteEventBus {
           ? chunk.toString("utf-8")
           : String(chunk);
 
-    // CRITICAL: only strip complete bracketed-paste markers.
-    // Do NOT strip bare "200~" / "201~" fragments globally — that can corrupt
-    // normal terminal key sequences on macOS and make Cmd+V-style paste fail.
-    data = data.replace(/\x1b\[201~/g, "");
-    data = data.replace(/\x1b\[200~/g, "");
+    // Important: do NOT strip bracketed-paste markers before parsing.
+    // The state machine below needs to see the real \x1b[200~ / \x1b[201~
+    // boundaries so one user paste gesture becomes one paste event.
 
     // Log raw bytes in hex for debugging marker fragments
     const hexPreview = data.substring(0, 50).split('').map(c => c.charCodeAt(0).toString(16)).join(' ');
@@ -175,7 +173,12 @@ export function setupPasteInterceptor(): PasteEventBus {
         if (startIdx > 0) {
           const before = data.substring(0, startIdx);
           pasteLog(`PRE-MARKER normal input len=${before.length}`);
-          origEmit("data", before);
+          burstBuffer += before;
+          if (burstTimer) clearTimeout(burstTimer);
+          burstTimer = setTimeout(() => {
+            burstTimer = null;
+            flushBurst();
+          }, BURST_WINDOW_MS);
         }
 
         // Enter bracketed paste mode
