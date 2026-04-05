@@ -245,6 +245,17 @@ function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
   return typedInput;
 }
 
+function renderPastePreview(content: string, maxLines = 8, maxWidth = 100): string[] {
+  const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const preview = lines.slice(0, maxLines).map((line) =>
+    line.length > maxWidth ? `${line.slice(0, maxWidth - 1)}…` : line
+  );
+  if (lines.length > maxLines) {
+    preview.push(`… ${lines.length - maxLines} more line${lines.length - maxLines === 1 ? "" : "s"}`);
+  }
+  return preview;
+}
+
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
@@ -1256,9 +1267,17 @@ function App() {
           <Box flexDirection="column" width="100%">
             {pastedChunks.length > 0 && (
               <Box flexDirection="column" marginBottom={0}>
-                {pastedChunks.map((p) => (
-                  <Text key={p.id} color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
-                ))}
+                {pastedChunks.map((p) => {
+                  const previewLines = renderPastePreview(p.content, 8, Math.max(40, termWidth - 8));
+                  return (
+                    <Box key={p.id} flexDirection="column" marginBottom={1}>
+                      <Text color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
+                      {previewLines.map((line, i) => (
+                        <Text key={i} color={theme.colors.muted} wrap="truncate-end">  {line}</Text>
+                      ))}
+                    </Box>
+                  );
+                })}
               </Box>
             )}
             <TextInput
