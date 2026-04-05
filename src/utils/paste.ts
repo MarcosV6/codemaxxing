@@ -23,8 +23,9 @@ export function sanitizeInputArtifacts(value: string): string {
 
   const trimmed = out.trim();
   const looksLikeDebris =
+    trimmed.length > 0 &&
     trimmed.length <= 8 &&
-    (/^[\x1b\[\]0-9;~]+$/.test(trimmed) || /^(?:\[)?20[01]~$/.test(trimmed));
+    (/^(?:\x1b\[?)?20[01]~$/.test(trimmed) || /^(?:\[)?20[01]~$/.test(trimmed));
 
   if (looksLikeDebris) {
     return "";

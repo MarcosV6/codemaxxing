@@ -261,6 +261,7 @@ function App() {
   const [input, setInput] = useState("");
   const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
   const inlinePasteValueRef = useRef<string | null>(null);
+  const suppressNextEmptyChangeRef = useRef(false);
   const [pasteCount, setPasteCount] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -359,6 +360,7 @@ function App() {
       if (inline) {
         const nextValue = `${inputRef.current}${content}`;
         inlinePasteValueRef.current = nextValue;
+        suppressNextEmptyChangeRef.current = true;
         setInput(nextValue);
         setInputKey((k) => k + 1);
         return;
@@ -1287,13 +1289,23 @@ function App() {
                 const sanitized = sanitizeInputArtifacts(v);
                 const forcedInlineValue = inlinePasteValueRef.current;
                 if (forcedInlineValue !== null) {
-                  if (sanitized === "" || sanitized === forcedInlineValue.slice(0, -1)) {
+                  if (suppressNextEmptyChangeRef.current && sanitized === "") {
+                    suppressNextEmptyChangeRef.current = false;
                     setInput(forcedInlineValue);
-                    inlinePasteValueRef.current = null;
                     setCmdIndex(0);
                     return;
                   }
+
+                  if (sanitized === forcedInlineValue.slice(0, -1)) {
+                    setInput(forcedInlineValue);
+                    inlinePasteValueRef.current = null;
+                    suppressNextEmptyChangeRef.current = false;
+                    setCmdIndex(0);
+                    return;
+                  }
+
                   inlinePasteValueRef.current = null;
+                  suppressNextEmptyChangeRef.current = false;
                 }
                 setInput(sanitized);
                 setCmdIndex(0);

@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris, sanitizeInputArtifacts } from "../src/utils/paste.js";
 
+function applyInlinePasteChangeSequence(forcedInlineValue: string, changes: string[]): string {
+  let input = forcedInlineValue;
+  let inlinePasteValue: string | null = forcedInlineValue;
+  let suppressNextEmptyChange = true;
+
+  for (const change of changes) {
+    const sanitized = sanitizeInputArtifacts(change);
+    const forced = inlinePasteValue;
+
+    if (forced !== null) {
+      if (suppressNextEmptyChange && sanitized === "") {
+        suppressNextEmptyChange = false;
+        input = forced;
+        continue;
+      }
+
+      if (sanitized === forced.slice(0, -1)) {
+        input = forced;
+        inlinePasteValue = null;
+        suppressNextEmptyChange = false;
+        continue;
+      }
+
+      inlinePasteValue = null;
+      suppressNextEmptyChange = false;
+    }
+
+    input = sanitized;
+  }
+
+  return input;
+}
+
 const idle = { active: false, buffer: "" };
 const armed = { active: true, buffer: "" };
 
@@ -34,6 +67,20 @@ describe("sanitizeInputArtifacts", () => {
     expect(sanitizeInputArtifacts("[")).toBe("[");
     expect(sanitizeInputArtifacts("123")).toBe("123");
     expect(sanitizeInputArtifacts("[123")).toBe("[123");
+  });
+});
+
+describe("inline single-line paste reconciliation", () => {
+  it("keeps a pasted one-liner when ink briefly reports an empty value", () => {
+    expect(applyInlinePasteChangeSequence("hello", [""])).toBe("hello");
+  });
+
+  it("keeps a pasted one-liner when ink briefly reports the value minus its last character", () => {
+    expect(applyInlinePasteChangeSequence("hello", ["hell"])).toBe("hello");
+  });
+
+  it("still accepts subsequent real user edits after paste reconciliation", () => {
+    expect(applyInlinePasteChangeSequence("hello", ["", "hello!"])).toBe("hello!");
   });
 });
 
