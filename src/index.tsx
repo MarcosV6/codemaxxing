@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { appendFileSync } from "node:fs";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
@@ -209,6 +210,12 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   );
 }
 
+function pasteDebugLog(msg: string): void {
+  try {
+    appendFileSync("/tmp/codemaxxing-paste-pipeline.log", `[${Date.now()}] ${msg}\n`);
+  } catch {}
+}
+
 function formatPastedTextRef(id: number, numLines: number): string {
   if (numLines <= 1) return `[Pasted text #${id}]`;
   return `[Pasted text #${id} +${numLines - 1} lines]`;
@@ -345,6 +352,7 @@ function App() {
   // Listen for paste events from stdin interceptor
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number; inline?: boolean }) => {
+      pasteDebugLog(`STATE STORE incoming lines=${lines} len=${content.length} json=${JSON.stringify(content)}`);
       const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
       if (!normalized) return;
 
@@ -357,6 +365,7 @@ function App() {
         const newId = c + 1;
         setPastedChunks((prev) => {
           const next = [...prev, { id: newId, lines, content: normalized }];
+          pasteDebugLog(`STATE STORE chunks=${next.length} latestId=${newId} latestJson=${JSON.stringify(normalized)}`);
           return next;
         });
         return newId;
@@ -583,6 +592,7 @@ function App() {
     if (!submittedValue.trim()) return;
 
     const trimmed = submittedValue.trim();
+    pasteDebugLog(`SUBMIT FINAL visible=${JSON.stringify(trimmedVisibleValue)} chunkCount=${chunks.length} submittedLen=${submittedValue.length} json=${JSON.stringify(submittedValue)}`);
     addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {
