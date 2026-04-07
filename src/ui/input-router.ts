@@ -233,15 +233,22 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
     const providerId = ctx.loginMethodPicker.provider;
     ctx.setLoginMethodPicker(null);
 
+    // After successful auth, reconnect automatically so the new token
+    // takes effect without the user needing to run /connect manually.
+    const reconnectAfterAuth = async () => {
+      ctx.addMsg("info", "🔄 Reconnecting with new credentials...");
+      ctx.connectToProvider?.(true);
+    };
+
     if (method === "oauth" && providerId === "openrouter") {
       ctx.addMsg("info", "Starting OpenRouter OAuth — opening browser...");
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Waiting for authorization...");
       openRouterOAuth((msg: string) => ctx.addMsg("info", msg))
         .then(async () => {
-          ctx.addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.\n  Opening model picker...`);
+          ctx.addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.`);
           ctx.setLoading(false);
-          await ctx.openModelPicker();
+          await reconnectAfterAuth();
         })
         .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
     } else if (method === "oauth" && providerId === "anthropic") {
@@ -249,47 +256,47 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Waiting for Anthropic authorization...");
       loginAnthropicOAuth((msg: string) => ctx.addMsg("info", msg))
-        .then(async (cred) => { 
-          ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})\n  Opening model picker...`); 
-          ctx.setLoading(false); 
-          await ctx.openModelPicker();
+        .then(async (cred) => {
+          ctx.addMsg("info", `✅ Anthropic authenticated! (${cred.label})`);
+          ctx.setLoading(false);
+          await reconnectAfterAuth();
         })
         .catch((err: any) => {
           ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key anthropic <your-key>\n  Or set ANTHROPIC_API_KEY env var and restart.\n  Get key at: console.anthropic.com/settings/keys`);
           ctx.setLoading(false);
         });
     } else if (method === "oauth" && providerId === "openai") {
-      // Try cached Codex token first as a quick path
-      const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
-      if (imported) {
-        ctx.addMsg("info", `✅ Imported Codex credentials! (${imported.label})\n  Opening model picker...`);
-        void ctx.openModelPicker();
-      } else {
-        // Primary flow: browser OAuth
-        ctx.addMsg("info", "Opening browser for ChatGPT login...");
-        ctx.setLoading(true);
-        ctx.setSpinnerMsg("Waiting for OpenAI authorization...");
-        loginOpenAICodexOAuth((msg: string) => ctx.addMsg("info", msg))
-          .then(async (cred) => {
-            ctx.addMsg("info", `✅ OpenAI authenticated! (${cred.label})\n  Opening model picker...`);
-            ctx.setLoading(false);
-            await ctx.openModelPicker();
-          })
-          .catch((err: any) => {
-            ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys`);
-            ctx.setLoading(false);
-          });
-      }
+      ctx.addMsg("info", "Opening browser for ChatGPT login...");
+      ctx.setLoading(true);
+      ctx.setSpinnerMsg("Waiting for OpenAI authorization...");
+      loginOpenAICodexOAuth((msg: string) => ctx.addMsg("info", msg))
+        .then(async (cred) => {
+          ctx.addMsg("info", `✅ OpenAI authenticated! (${cred.label})`);
+          ctx.setLoading(false);
+          await reconnectAfterAuth();
+        })
+        .catch((err: any) => {
+          ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys`);
+          ctx.setLoading(false);
+        });
     } else if (method === "cached-token" && providerId === "qwen") {
       const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
-      if (imported) { ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})\n  Opening model picker...`); void ctx.openModelPicker(); }
-      else { ctx.addMsg("info", "No Qwen CLI found. Install Qwen CLI and sign in first."); }
+      if (imported) {
+        ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
+        void reconnectAfterAuth();
+      } else {
+        ctx.addMsg("info", "No Qwen CLI token found.\n  Install Qwen CLI, run `qwen login`, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>");
+      }
     } else if (method === "device-flow") {
       ctx.addMsg("info", "Starting GitHub Copilot device flow...");
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Waiting for GitHub authorization...");
       copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-        .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Opening model picker...`); ctx.setLoading(false); await ctx.openModelPicker(); })
+        .then(async () => {
+          ctx.addMsg("info", `✅ GitHub Copilot authenticated!`);
+          ctx.setLoading(false);
+          await reconnectAfterAuth();
+        })
         .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
     } else if (method === "api-key") {
       const provider = PROVIDERS.find((p) => p.id === providerId);
@@ -318,6 +325,8 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
     const methods = selected.methods.filter((m) => m !== "none");
 
     if (methods.length === 1) {
+      // Single auth method — skip the method picker and go straight to it.
+      // For providers with only one method, auto-reconnect after auth.
       ctx.setLoginMethodPicker({ provider: selected.id, methods });
       ctx.setLoginMethodIndex(() => 0);
       if (methods[0] === "oauth" && selected.id === "openrouter") {
@@ -326,7 +335,7 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for authorization...");
         openRouterOAuth((msg: string) => ctx.addMsg("info", msg))
-          .then(async () => { ctx.addMsg("info", `✅ OpenRouter authenticated! Access to 200+ models.\n  Opening model picker...`); ctx.setLoading(false); await ctx.openModelPicker(); })
+          .then(async () => { ctx.addMsg("info", `✅ OpenRouter authenticated!`); ctx.setLoading(false); ctx.connectToProvider?.(true); })
           .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "device-flow") {
         ctx.setLoginMethodPicker(null);
@@ -334,7 +343,7 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         ctx.setLoading(true);
         ctx.setSpinnerMsg("Waiting for GitHub authorization...");
         copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-          .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!\n  Opening model picker...`); ctx.setLoading(false); await ctx.openModelPicker(); })
+          .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!`); ctx.setLoading(false); ctx.connectToProvider?.(true); })
           .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "api-key") {
         ctx.setLoginMethodPicker(null);
