@@ -26,14 +26,48 @@ class PasteFilterStream extends Transform {
   private streamBuffer = "";
   private bracketedBuffer = "";
   private inBracketedPaste = false;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   public readonly pasteEvents = new EventEmitter();
+
+  // Escape sequences (arrow keys etc.) arrive within ~1-2ms.
+  // Bracketed paste start markers arrive within ~5ms.
+  // If a partial marker prefix sits in the buffer longer than this,
+  // it was a real keystroke (e.g. Escape key), not a paste marker.
+  private static readonly MARKER_TIMEOUT_MS = 10;
 
   constructor() {
     super({ encoding: "utf-8", decodeStrings: false });
   }
 
+  /** Flush any held-back partial marker prefix as normal input. */
+  private flushHeldBuffer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.streamBuffer) {
+      this.push(this.streamBuffer);
+      this.streamBuffer = "";
+    }
+  }
+
+  /** Schedule a flush of the held buffer if no new data arrives soon. */
+  private scheduleFlush(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushHeldBuffer();
+    }, PasteFilterStream.MARKER_TIMEOUT_MS);
+  }
+
   _transform(chunk: Buffer | string, _encoding: string, callback: TransformCallback): void {
     const incoming = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+
+    // Cancel any pending flush — we have new data to combine with the buffer.
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
 
     this.streamBuffer += incoming;
     let data = this.streamBuffer;
@@ -46,12 +80,13 @@ class PasteFilterStream extends Transform {
 
         if (startIdx === -1) {
           // Check for partial start-marker prefix at end of chunk —
-          // hold it back until the next chunk confirms or denies.
+          // hold it back briefly in case the rest of the marker arrives.
           const markerPrefixes = ["\x1b", "\x1b[", "\x1b[2", "\x1b[20", "\x1b[200"];
           const trailingPrefix = markerPrefixes.find((p) => data.endsWith(p));
           if (trailingPrefix) {
             forward += data.slice(0, -trailingPrefix.length);
             this.streamBuffer = trailingPrefix;
+            this.scheduleFlush();
           } else {
             forward += data;
           }
@@ -77,6 +112,8 @@ class PasteFilterStream extends Transform {
           if (trailingPrefix) {
             this.bracketedBuffer += data.slice(0, -trailingPrefix.length);
             this.streamBuffer = trailingPrefix;
+            // No scheduleFlush here — we're inside a paste, so we wait
+            // for the end marker. Paste content arrives fast enough.
           } else {
             this.bracketedBuffer += data;
           }
@@ -94,7 +131,6 @@ class PasteFilterStream extends Transform {
     }
 
     // Push filtered content downstream (to Ink).
-    // Empty string is fine — Transform handles it correctly.
     if (forward) {
       this.push(forward);
     }
