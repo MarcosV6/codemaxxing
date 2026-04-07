@@ -238,16 +238,6 @@ function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
   return typedInput;
 }
 
-function renderPastePreview(content: string, maxLines = 8, maxWidth = 100): string[] {
-  const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const preview = lines.slice(0, maxLines).map((line) =>
-    line.length > maxWidth ? `${line.slice(0, maxWidth - 1)}…` : line
-  );
-  if (lines.length > maxLines) {
-    preview.push(`… ${lines.length - maxLines} more line${lines.length - maxLines === 1 ? "" : "s"}`);
-  }
-  return preview;
-}
 
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
@@ -260,8 +250,6 @@ function App() {
 
   const [input, setInput] = useState("");
   const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
-  const inlinePasteValueRef = useRef<string | null>(null);
-  const suppressNextEmptyChangeRef = useRef(false);
   const [pasteCount, setPasteCount] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -354,18 +342,10 @@ function App() {
   const [wizardPullError, setWizardPullError] = useState<string | null>(null);
   const [wizardSelectedModel, setWizardSelectedModel] = useState<ScoredModel | null>(null);
 
-  // Listen for paste events from stdin interceptor
+  // Listen for paste events from stdin interceptor — all pastes arrive as
+  // attachment blocks (never inline) to avoid the ink-text-input reconciliation race.
   useEffect(() => {
-    const handler = ({ content, lines, inline }: { content: string; lines: number; inline?: boolean }) => {
-      if (inline) {
-        const nextValue = `${inputRef.current}${content}`;
-        inlinePasteValueRef.current = nextValue;
-        suppressNextEmptyChangeRef.current = true;
-        setInput(nextValue);
-        setInputKey((k) => k + 1);
-        return;
-      }
-
+    const handler = ({ content, lines }: { content: string; lines: number }) => {
       setPasteCount((c) => {
         const newId = c + 1;
         setPastedChunks((prev) => {
@@ -1269,45 +1249,16 @@ function App() {
           <Box flexDirection="column" width="100%">
             {pastedChunks.length > 0 && (
               <Box flexDirection="column" marginBottom={0}>
-                {pastedChunks.map((p) => {
-                  const previewLines = renderPastePreview(p.content, 8, Math.max(40, termWidth - 8));
-                  return (
-                    <Box key={p.id} flexDirection="column" marginBottom={1}>
-                      <Text color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
-                      {previewLines.map((line, i) => (
-                        <Text key={i} color={theme.colors.muted} wrap="truncate-end">  {line}</Text>
-                      ))}
-                    </Box>
-                  );
-                })}
+                {pastedChunks.map((p) => (
+                  <Text key={p.id} color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
+                ))}
               </Box>
             )}
             <TextInput
               key={inputKey}
               value={input}
               onChange={(v) => {
-                const sanitized = sanitizeInputArtifacts(v);
-                const forcedInlineValue = inlinePasteValueRef.current;
-                if (forcedInlineValue !== null) {
-                  if (suppressNextEmptyChangeRef.current && sanitized === "") {
-                    suppressNextEmptyChangeRef.current = false;
-                    setInput(forcedInlineValue);
-                    setCmdIndex(0);
-                    return;
-                  }
-
-                  if (sanitized === forcedInlineValue.slice(0, -1)) {
-                    setInput(forcedInlineValue);
-                    inlinePasteValueRef.current = null;
-                    suppressNextEmptyChangeRef.current = false;
-                    setCmdIndex(0);
-                    return;
-                  }
-
-                  inlinePasteValueRef.current = null;
-                  suppressNextEmptyChangeRef.current = false;
-                }
-                setInput(sanitized);
+                setInput(sanitizeInputArtifacts(v));
                 setCmdIndex(0);
               }}
               onSubmit={handleSubmit}
