@@ -13,6 +13,7 @@ import { buildSkillPrompts, getActiveSkillCount } from "../bridge/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "../utils/sessions.js";
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "../bridge/mcp.js";
 import { refreshAnthropicOAuthToken } from "../utils/anthropic-oauth.js";
+import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
 import { getCredential, saveCredential } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
 import type { ProviderConfig } from "../config.js";
@@ -361,6 +362,15 @@ export class CodingAgent {
             `Try a GPT-5.x model (which uses the Responses API automatically), ` +
             `or use an API key for full model access (/login openai → api-key).`
           );
+        }
+        // Try refreshing expired OAuth token
+        if (err.status === 401) {
+          const refreshed = await this.tryRefreshOpenAIToken();
+          if (refreshed) {
+            iterations--;
+            continue;
+          }
+          throw new Error("OpenAI OAuth token expired and could not be refreshed. Run /login to re-authenticate.");
         }
         throw err;
       }
@@ -1039,6 +1049,19 @@ export class CodingAgent {
 
         this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
       } catch (err: any) {
+        // Handle 401 — try refreshing OAuth token before failing
+        const is401 = err.status === 401 ||
+          (err.message && (err.message.includes("401") || err.message.includes("token_expired") || err.message.includes("token is expired")));
+
+        if (is401) {
+          const refreshed = await this.tryRefreshOpenAIToken();
+          if (refreshed) {
+            // Token refreshed — retry this iteration
+            iterations--;
+            continue;
+          }
+          throw new Error("OpenAI OAuth token expired and could not be refreshed. Run /login to re-authenticate.");
+        }
         throw err;
       }
     }
@@ -1116,6 +1139,31 @@ export class CodingAgent {
       // Rebuild client with new token
       this.currentApiKey = refreshed.access;
       this.anthropicClient = createAnthropicClient(refreshed.access);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Attempt to refresh an expired OpenAI OAuth token.
+   * Returns true if refresh succeeded and client was rebuilt.
+   */
+  private async tryRefreshOpenAIToken(): Promise<boolean> {
+    const cred = getCredential("openai");
+    if (!cred?.refreshToken) return false;
+
+    try {
+      const refreshed = await refreshOpenAICodexToken(cred.refreshToken);
+      cred.apiKey = refreshed.access;
+      cred.refreshToken = refreshed.refresh;
+      cred.oauthExpires = refreshed.expires;
+      saveCredential(cred);
+      this.currentApiKey = refreshed.access;
+      this.client = new OpenAI({
+        baseURL: this.currentBaseUrl,
+        apiKey: refreshed.access,
+      });
       return true;
     } catch {
       return false;
