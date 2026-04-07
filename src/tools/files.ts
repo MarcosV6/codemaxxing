@@ -2,6 +2,26 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSy
 import { join, relative, dirname } from "path";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
+function normalizeWindowsCommand(command: string): { command: string; notes: string[] } {
+  const notes: string[] = [];
+  let normalized = command;
+
+  const mkdirPMatch = normalized.match(/^mkdir\s+-p\s+(.+)$/);
+  if (mkdirPMatch) {
+    const raw = mkdirPMatch[1].trim();
+    const paths = raw.match(/(?:"[^"]+"|'[^']+'|[^\s]+)/g) ?? [raw];
+    const converted = paths
+      .map((p) => p.replace(/^['"]|['"]$/g, "").replace(/\//g, "\\"))
+      .map((p) => `mkdir \"${p}\"`)
+      .join(" && ");
+    normalized = converted;
+    notes.push("translated Unix mkdir -p to Windows mkdir");
+  }
+
+  return { command: normalized, notes };
+}
+
+
 /**
  * Tool definitions for the OpenAI function calling API
  */
@@ -123,7 +143,7 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "run_command",
       description:
-        "Execute a shell command and return the output. Use for running tests, builds, linters, etc.",
+        "Execute a shell command and return the output. Use for running tests, builds, linters, etc. Commands should match the current OS shell (Windows vs Unix).",
       parameters: {
         type: "object",
         properties: {
@@ -216,15 +236,34 @@ export async function executeTool(
     case "run_command": {
       try {
         const { execSync } = await import("child_process");
-        const output = execSync(args.command as string, {
+        const original = String(args.command ?? "");
+        let command = original;
+        let notes: string[] = [];
+
+        const options: any = {
           cwd,
           encoding: "utf-8",
           timeout: 30000,
           maxBuffer: 1024 * 1024,
-        });
-        return output || "(no output)";
+        };
+
+        if (process.platform === "win32") {
+          const normalized = normalizeWindowsCommand(original);
+          command = normalized.command;
+          notes = normalized.notes;
+          options.shell = process.env.ComSpec || "cmd.exe";
+        }
+
+        const output = execSync(command, options);
+        const prefix = notes.length > 0 ? `[note: ${notes.join(", ")}]\n` : "";
+        return prefix + (output || "(no output)");
       } catch (e: any) {
-        return `Command failed: ${e.stderr || e.message}`;
+        const stderr = e.stderr || e.message || String(e);
+        const original = String(args.command ?? "");
+        if (process.platform === "win32" && /mkdir\s+-p/i.test(original)) {
+          return `Command failed: ${stderr}\nHint: Unix-style \`mkdir -p\` was used on Windows. Use plain \`mkdir path\` commands or let Codemaxxing retry with a Windows-safe command.`;
+        }
+        return `Command failed: ${stderr}`;
       }
     }
 

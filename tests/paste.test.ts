@@ -31,9 +31,12 @@ describe("sanitizeInputArtifacts", () => {
 
   it("keeps normal user text intact", () => {
     expect(sanitizeInputArtifacts("and keep it simple")).toBe("and keep it simple");
-    expect(sanitizeInputArtifacts("[")).toBe("");
+    expect(sanitizeInputArtifacts("[")).toBe("[");
+    expect(sanitizeInputArtifacts("123")).toBe("123");
+    expect(sanitizeInputArtifacts("[123")).toBe("[123");
   });
 });
+
 
 describe("consumePendingPasteEndMarkerChunk", () => {
   it("passes through normally when not armed", () => {

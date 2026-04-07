@@ -41,6 +41,24 @@ export interface InputRouterContext extends WizardContext {
   skillsPickerIndex: number;
   setSkillsPickerIndex: (fn: (prev: number) => number) => void;
   setSkillsPicker: (val: "menu" | "browse" | "installed" | "remove" | null) => void;
+
+  // Agent picker
+  agentPicker: boolean;
+  agentPickerIndex: number;
+  setAgentPickerIndex: (fn: (prev: number) => number) => void;
+  setAgentPicker: (val: boolean) => void;
+
+  // Schedule picker
+  schedulePicker: boolean;
+  schedulePickerIndex: number;
+  setSchedulePickerIndex: (fn: (prev: number) => number) => void;
+  setSchedulePicker: (val: boolean) => void;
+
+  // Orchestrate picker
+  orchestratePicker: boolean;
+  orchestratePickerIndex: number;
+  setOrchestratePickerIndex: (fn: (prev: number) => number) => void;
+  setOrchestratePicker: (val: boolean) => void;
   sessionDisabledSkills: Set<string>;
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
@@ -142,6 +160,9 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleLoginMethodPicker(inputChar, key, ctx)) return true;
   if (handleLoginPicker(inputChar, key, ctx)) return true;
   if (handleSkillsPicker(inputChar, key, ctx)) return true;
+  if (handleAgentPicker(inputChar, key, ctx)) return true;
+  if (handleSchedulePicker(inputChar, key, ctx)) return true;
+  if (handleOrchestratePicker(inputChar, key, ctx)) return true;
   if (handleProviderPicker(inputChar, key, ctx)) return true;
   if (handleModelPicker(inputChar, key, ctx)) return true;
   if (handleOllamaDeletePicker(inputChar, key, ctx)) return true;
@@ -476,6 +497,111 @@ function handleSkillsPicker(_inputChar: string, key: Key, ctx: InputRouterContex
   }
 
   return true; // absorb all keys when skills picker is active
+}
+
+function queueCommand(ctx: InputRouterContext, command: string): void {
+  ctx.setInput(command);
+  ctx.setInputKey((k) => k + 1);
+  setTimeout(() => {
+    ctx.setInput("");
+    ctx.handleSubmit(command);
+  }, 50);
+}
+
+function handleAgentPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.agentPicker) return false;
+  const commands = ["list", "pause", "delete"];
+  if (key.upArrow) {
+    ctx.setAgentPickerIndex((prev) => (prev - 1 + commands.length) % commands.length);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setAgentPickerIndex((prev) => (prev + 1) % commands.length);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setAgentPicker(false);
+    ctx.setAgentPickerIndex(() => 0);
+    return true;
+  }
+  if (key.return) {
+    const selected = commands[ctx.agentPickerIndex];
+    ctx.setAgentPicker(false);
+    ctx.setAgentPickerIndex(() => 0);
+    if (selected === "list") {
+      queueCommand(ctx, "/agent list");
+    } else {
+      ctx.setInput(`/agent ${selected} `);
+      ctx.setInputKey((k) => k + 1);
+    }
+    return true;
+  }
+  return true;
+}
+
+function handleSchedulePicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.schedulePicker) return false;
+  const commands = ["list", "disable", "delete", "history"];
+  if (key.upArrow) {
+    ctx.setSchedulePickerIndex((prev) => (prev - 1 + commands.length) % commands.length);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setSchedulePickerIndex((prev) => (prev + 1) % commands.length);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setSchedulePicker(false);
+    ctx.setSchedulePickerIndex(() => 0);
+    return true;
+  }
+  if (key.return) {
+    const selected = commands[ctx.schedulePickerIndex];
+    ctx.setSchedulePicker(false);
+    ctx.setSchedulePickerIndex(() => 0);
+    if (selected === "list") {
+      queueCommand(ctx, "/schedule list");
+    } else {
+      ctx.setInput(`/schedule ${selected} `);
+      ctx.setInputKey((k) => k + 1);
+    }
+    return true;
+  }
+  return true;
+}
+
+function handleOrchestratePicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.orchestratePicker) return false;
+  const commands = ["fullstack", "review", "custom"];
+  if (key.upArrow) {
+    ctx.setOrchestratePickerIndex((prev) => (prev - 1 + commands.length) % commands.length);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setOrchestratePickerIndex((prev) => (prev + 1) % commands.length);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setOrchestratePicker(false);
+    ctx.setOrchestratePickerIndex(() => 0);
+    return true;
+  }
+  if (key.return) {
+    const selected = commands[ctx.orchestratePickerIndex];
+    ctx.setOrchestratePicker(false);
+    ctx.setOrchestratePickerIndex(() => 0);
+    if (selected === "review") {
+      queueCommand(ctx, "/orchestrate review");
+    } else if (selected === "custom") {
+      ctx.setInput("/orchestrate ");
+      ctx.setInputKey((k) => k + 1);
+    } else {
+      ctx.setInput(`/orchestrate ${selected} `);
+      ctx.setInputKey((k) => k + 1);
+    }
+    return true;
+  }
+  return true;
 }
 
 function handleProviderPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {

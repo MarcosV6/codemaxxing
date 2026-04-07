@@ -5,6 +5,19 @@ import { isGitRepo, getBranch, getStatus } from "../utils/git.js";
 import { getCredential } from "../utils/auth.js";
 import type { ConnectionContext } from "./connection-types.js";
 
+const OPENING_STREAM_MESSAGES = [
+  "Locking onto the stream...",
+  "Tapping into the sauce...",
+  "Opening the firehose...",
+  "Warming up the tokens...",
+  "Dialing into the mainframe...",
+  "Booting the word cannon...",
+  "Channeling the machine spirit...",
+  "Connecting to the yap dimension...",
+  "Cracking open the response...",
+  "Spinning up the next move...",
+];
+
 function describeActiveConnection(baseUrl: string, model: string): string {
   const url = baseUrl.toLowerCase();
   if (url.includes("localhost:1234")) return `${model} via LM Studio`;
@@ -183,6 +196,8 @@ export async function connectToProvider(
     autoApprove: config.defaults.autoApprove,
     onToken: (token) => {
       // Switch from big spinner to streaming mode
+      ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("streaming response");
       ctx.setLoading(false);
       ctx.setStreaming(true);
 
@@ -203,6 +218,9 @@ export async function connectToProvider(
       });
     },
     onToolCall: (name, args) => {
+      ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("executing tool");
+      ctx.setLastToolName(name);
       ctx.setLoading(true);
       ctx.setSpinnerMsg("Executing tools...");
       const argStr = Object.entries(args)
@@ -213,12 +231,44 @@ export async function connectToProvider(
         .join(", ");
       ctx.addMsg("tool", `${name}(${argStr})`);
     },
-    onToolResult: (_name, result) => {
+    onToolResult: (name, result) => {
+      ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("waiting after tool result");
+      ctx.setLastToolName(name);
       const numLines = result.split("\n").length;
       const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
-      ctx.addMsg("tool-result", `└ ${numLines} lines (${size})`);
+      const preview = result
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140);
+      ctx.addMsg("tool-result", `└ ${numLines} lines (${size})${preview ? ` · ${preview}${result.length > 140 ? "..." : ""}` : ""}`);
+    },
+    onLoopStatus: (stage, meta) => {
+      ctx.setLastActivityAt(Date.now());
+      if (stage === "opening model stream" || stage === "opening next model stream") {
+        ctx.setLoading(true);
+        ctx.setStreaming(false);
+        const msg = OPENING_STREAM_MESSAGES[Math.floor(Math.random() * OPENING_STREAM_MESSAGES.length)];
+        ctx.setSpinnerMsg(stage === "opening next model stream" ? `${msg} (round 2)` : msg);
+      }
+      if (stage === "tool result appended to conversation") {
+        ctx.setAgentStage("waiting after tool result");
+        const toolName = typeof meta?.toolName === "string" ? meta.toolName : undefined;
+        if (toolName) ctx.setLastToolName(toolName);
+      } else if (stage !== "response completed") {
+        ctx.setAgentStage(stage);
+      }
+      if (stage === "processing tool calls") {
+        ctx.setSpinnerMsg("Processing tool calls...");
+      }
+      if (stage === "response completed") {
+        ctx.setAgentStage("idle");
+        ctx.setLastToolName(null);
+      }
     },
     onThinking: (text) => {
+      ctx.setLastActivityAt(Date.now());
+      ctx.setAgentStage("thinking");
       if (text.length > 0) {
         ctx.addMsg("info", `💭 Thought for ${text.split(/\s+/).length} words`);
       }

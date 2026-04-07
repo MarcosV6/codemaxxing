@@ -286,7 +286,7 @@ Switch models mid-session with an interactive picker:
 One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys.
 
 ### 📋 Smart Paste
-Multi-line pastes collapse into `[Pasted text #1 +N lines]` badges instead of dumping raw text into the input box. This was specifically hardened for bracketed-paste terminal weirdness.
+Multi-line and large pastes become attached paste blocks above the input instead of dumping raw text into the prompt row. Short normal typing stays inline. This was specifically hardened for bracketed-paste terminal weirdness.
 
 ### ⌨️ Slash Commands
 Type `/` for autocomplete suggestions. Arrow keys to navigate, Tab or Enter to select.

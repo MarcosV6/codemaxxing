@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { CodingAgent } from "../agent.js";
-import { getActiveSkillCount } from "../utils/skills.js";
+import { getActiveSkillCount } from "../bridge/skills.js";
 
 interface StatusBarProps {
   agent: CodingAgent;

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { sanitizeInputArtifacts } from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
-import type { CodingAgent } from "./agent.js";
+import type { CodingAgent } from "./core/agent.js";
 import { loadConfig, saveConfig, listModels } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { tryHandleGitCommand } from "./commands/git.js";
@@ -13,8 +13,12 @@ import { tryHandleOllamaCommand } from "./commands/ollama.js";
 import { dispatchRegisteredCommands } from "./commands/registry.js";
 import { getTheme, DEFAULT_THEME, type Theme } from "./themes.js";
 import { tryHandleUiCommand } from "./commands/ui.js";
-import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./utils/mcp.js";
+import { listServers, addServer, removeServer, getAllMCPTools, getConnectedServers } from "./bridge/mcp.js";
 import { tryHandleSkillsCommand } from "./commands/skills.js";
+import { tryHandleBackgroundAgentCommand } from "./commands/background-agents.js";
+import { listBackgroundAgents, getBackgroundAgent, startBackgroundAgent } from "./background-agents.js";
+import { tryHandleScheduleCommand } from "./commands/schedule.js";
+import { tryHandleOrchestrateCommand } from "./commands/orchestrate.js";
 import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
@@ -31,7 +35,8 @@ import {
 } from "./ui/connection.js";
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
-  SkillsInstalled, SkillsRemove, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
+  OrchestrateCommandPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
   DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
@@ -67,6 +72,9 @@ const SLASH_COMMANDS = [
   { cmd: "/push", desc: "push to remote" },
   { cmd: "/git on", desc: "enable auto-commits" },
   { cmd: "/git off", desc: "disable auto-commits" },
+  { cmd: "/agent", desc: "background agent management (list, start, pause, delete)" },
+  { cmd: "/schedule", desc: "cron job scheduling (add, list, remove)" },
+  { cmd: "/orchestrate", desc: "multi-agent collaboration orchestration" },
   { cmd: "/models", desc: "switch model" },
   { cmd: "/theme", desc: "switch color theme" },
   { cmd: "/sessions", desc: "list past sessions" },
@@ -153,8 +161,31 @@ function NeonSpinner({ message, colors }: { message: string; colors: Theme['colo
 
 // ── Streaming Indicator (subtle, shows model is still working) ──
 const STREAM_DOTS = ["·  ", "·· ", "···", " ··", "  ·", "   "];
+const STREAM_MESSAGES = [
+  "Streaming...",
+  "Yapping live...",
+  "Typing with intent...",
+  "Cooking response...",
+  "Locked in...",
+  "Spitting tokens...",
+  "Channeling the machine spirit...",
+  "Vibing through the output...",
+  "Absolutely flowing...",
+  "Free styling the answer...",
+  "Transmitting sauce...",
+  "Pushing pixels and prayers...",
+  "Deep in the bag right now...",
+  "Farming intelligence...",
+  "Manifesting the response...",
+  "Printing heat...",
+  "In my typing arc...",
+  "Going word for word...",
+  "Generating cinema...",
+  "No cap streaming...",
+];
 function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   const [frame, setFrame] = useState(0);
+  const [message, setMessage] = useState(() => STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -163,13 +194,50 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessage(STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <Text dimColor>
       {"  "}<Text color={colors.spinner}>{STREAM_DOTS[frame]}</Text>
-      {" "}<Text color={colors.muted}>streaming</Text>
+      {" "}<Text color={colors.muted}>{message}</Text>
     </Text>
   );
 }
+
+function longestOverlapSuffixPrefix(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  for (let len = max; len > 0; len--) {
+    if (a.slice(-len) === b.slice(0, len)) return len;
+  }
+  return 0;
+}
+
+function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
+  const typed = typedInput.trim();
+  const pasted = pasteText.trim();
+  if (!typed || !pasted) return typedInput;
+
+  if (pasted.startsWith(typed)) {
+    return "";
+  }
+
+  if (typed.includes(pasted)) {
+    return typedInput.replace(pasteText, "").trim();
+  }
+
+  const overlap = longestOverlapSuffixPrefix(typed, pasted);
+  if (overlap >= Math.min(typed.length, 32)) {
+    return typedInput.slice(0, typedInput.length - overlap).trimEnd();
+  }
+
+  return typedInput;
+}
+
 
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
@@ -187,6 +255,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [spinnerMsg, setSpinnerMsg] = useState("");
+  const [lastActivityAt, setLastActivityAt] = useState(Date.now());
+  const [agentStage, setAgentStage] = useState("idle");
+  const [lastToolName, setLastToolName] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState(0);
+  const activeRequestIdRef = useRef(0);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
   const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
@@ -209,6 +282,14 @@ function App() {
   const [loginMethodIndex, setLoginMethodIndex] = useState(0);
   const [skillsPicker, setSkillsPicker] = useState<"menu" | "browse" | "installed" | "remove" | null>(null);
   const [skillsPickerIndex, setSkillsPickerIndex] = useState(0);
+
+  // Agent/schedule/orchestrate pickers
+  const [agentPicker, setAgentPicker] = useState(false);
+  const [agentPickerIndex, setAgentPickerIndex] = useState(0);
+  const [schedulePicker, setSchedulePicker] = useState(false);
+  const [schedulePickerIndex, setSchedulePickerIndex] = useState(0);
+  const [orchestratePicker, setOrchestratePicker] = useState(false);
+  const [orchestratePickerIndex, setOrchestratePickerIndex] = useState(0);
   const [sessionDisabledSkills, setSessionDisabledSkills] = useState<Set<string>>(new Set());
   const [approval, setApproval] = useState<{
     tool: string;
@@ -216,6 +297,26 @@ function App() {
     diff?: string;
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
+
+  useEffect(() => {
+    if (!loading || !agent) return;
+    const requestIdAtStart = activeRequestId;
+    let warned = false;
+
+    const interval = setInterval(() => {
+      if (warned) return;
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs > 60000 && requestIdAtStart === activeRequestIdRef.current) {
+        warned = true;
+        const toolSuffix = lastToolName ? ` (${lastToolName})` : "";
+        addMsg("error", `⏱️ No model activity for 60s while ${agentStage}${toolSuffix}. Request may be hung.`);
+        setLoading(false);
+        setStreaming(false);
+        setAgentStage("hung");
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [loading, agent, lastActivityAt, agentStage, lastToolName, activeRequestId]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -241,12 +342,16 @@ function App() {
   const [wizardPullError, setWizardPullError] = useState<string | null>(null);
   const [wizardSelectedModel, setWizardSelectedModel] = useState<ScoredModel | null>(null);
 
-  // Listen for paste events from stdin interceptor
+  // Listen for paste events from stdin interceptor — all pastes arrive as
+  // attachment blocks (never inline) to avoid the ink-text-input reconciliation race.
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number }) => {
       setPasteCount((c) => {
         const newId = c + 1;
-        setPastedChunks((prev) => [...prev, { id: newId, lines, content }]);
+        setPastedChunks((prev) => {
+          const next = [...prev, { id: newId, lines, content }];
+          return next;
+        });
         return newId;
       });
     };
@@ -270,6 +375,9 @@ function App() {
       setLoading,
       setStreaming,
       setSpinnerMsg,
+      setLastActivityAt,
+      setAgentStage,
+      setLastToolName,
       setMessages,
       addMsg,
       nextMsgId,
@@ -304,6 +412,8 @@ function App() {
   showSuggestionsRef.current = showSuggestions;
   const pastedChunksRef = React.useRef(pastedChunks);
   pastedChunksRef.current = pastedChunks;
+  const inputRef = React.useRef(input);
+  inputRef.current = input;
 
   const openModelPicker = useCallback(async () => {
     addMsg("info", "Fetching available models...");
@@ -464,7 +574,8 @@ function App() {
     let submittedValue = trimmedValue;
     if (chunks.length > 0) {
       const pasteText = chunks.map(p => p.content).join("\n\n");
-      submittedValue = trimmedValue ? `${trimmedValue}\n\n${pasteText}` : pasteText;
+      const dedupedInput = dedupeLeakedPasteInput(trimmedValue, pasteText).trim();
+      submittedValue = dedupedInput ? `${dedupedInput}\n\n${pasteText}` : pasteText;
     }
     setInput("");
     setPastedChunks([]);
@@ -501,6 +612,21 @@ function App() {
       await connectToProvider(true);
       return;
     }
+    if (trimmed === "/agent") {
+      setAgentPicker(true);
+      setAgentPickerIndex(0);
+      return;
+    }
+    if (trimmed === "/schedule") {
+      setSchedulePicker(true);
+      setSchedulePickerIndex(0);
+      return;
+    }
+    if (trimmed === "/orchestrate") {
+      setOrchestratePicker(true);
+      setOrchestratePickerIndex(0);
+      return;
+    }
     if (trimmed === "/help") {
       addMsg("info", [
         "Commands:",
@@ -518,9 +644,12 @@ function App() {
         "  /undo      — revert last codemaxxing commit",
         "  /commit    — commit all changes",
         "  /push      — push to remote",
-        "  /git on    — enable auto-commits",
-        "  /git off   — disable auto-commits",
-        "  /skills    — manage skill packs",
+        "  /git on       — enable auto-commits",
+        "  /git off      — disable auto-commits",
+        "  /agent        — background agent management (list, start, pause, delete)",
+        "  /schedule     — cron job scheduling (add, list, remove)",
+        "  /orchestrate  — multi-agent collaboration orchestration",
+        "  /skills       — manage skill packs",
         "  /architect — toggle architect mode (plan then execute)",
         "  /lint      — show auto-lint status & detected linter",
         "  /lint on   — enable auto-lint",
@@ -540,7 +669,26 @@ function App() {
       ].join("\n"));
       return;
     }
+    const config = loadConfig();
+    const commandAgentOptions = {
+      provider: config.provider,
+      cwd: process.cwd(),
+      maxTokens: config.defaults.maxTokens ?? 8192,
+      autoApprove: config.defaults.autoApprove,
+    };
+
     if (await dispatchRegisteredCommands([
+      // Phase B & C: Agent/Schedule/Orchestrate commands
+      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg, { setAgentPicker }).then(r => r ?? false),
+      () => tryHandleScheduleCommand(trimmed, commandAgentOptions, addMsg, { setSchedulePicker }).then(r => r ?? false),
+      () => tryHandleOrchestrateCommand(
+        trimmed,
+        process.cwd(),
+        commandAgentOptions,
+        addMsg,
+        { setOrchestratePicker }
+      ),
+      // Existing commands
       () => tryHandleSkillsCommand({
         trimmed,
         cwd: process.cwd(),
@@ -782,8 +930,14 @@ function App() {
       setSessionPickerIndex(0);
       return;
     }
+    const requestId = Date.now();
+    activeRequestIdRef.current = requestId;
+    setActiveRequestId(requestId);
     setLoading(true);
     setStreaming(false);
+    setLastActivityAt(Date.now());
+    setAgentStage("waiting for first token");
+    setLastToolName(null);
     setSpinnerMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
 
     try {
@@ -794,8 +948,12 @@ function App() {
       addMsg("error", `Error: ${err.message}`);
     }
 
-    setLoading(false);
-    setStreaming(false);
+    if (requestId === activeRequestIdRef.current) {
+      setLoading(false);
+      setStreaming(false);
+      setLastActivityAt(Date.now());
+      setAgentStage("idle");
+    }
   }, [agent, exit, refreshConnectionBanner]);
 
   useInput((inputChar, key) => {
@@ -818,6 +976,18 @@ function App() {
       skillsPickerIndex,
       setSkillsPickerIndex,
       setSkillsPicker,
+      agentPicker,
+      agentPickerIndex,
+      setAgentPickerIndex,
+      setAgentPicker,
+      schedulePicker,
+      schedulePickerIndex,
+      setSchedulePickerIndex,
+      setSchedulePicker,
+      orchestratePicker,
+      orchestratePickerIndex,
+      setOrchestratePickerIndex,
+      setOrchestratePicker,
       sessionDisabledSkills,
       setSessionDisabledSkills,
       modelPickerGroups,
@@ -911,8 +1081,12 @@ function App() {
         switch (msg.type) {
           case "user":
             return (
-              <Box key={msg.id} marginTop={1}>
-                <Text color={theme.colors.userInput}>{"  > "}{msg.text}</Text>
+              <Box key={msg.id} marginTop={1} flexDirection="column">
+                {msg.text.split("\n").map((line, i) => (
+                  <Text key={i} color={theme.colors.userInput} wrap="wrap">
+                    {i === 0 ? "  > " : "    "}{line}
+                  </Text>
+                ))}
               </Box>
             );
           case "response":
@@ -948,7 +1122,7 @@ function App() {
 
       {/* ═══ SPINNER ═══ */}
       {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} colors={theme.colors} />}
-      {streaming && !loading && <StreamingIndicator colors={theme.colors} />}
+      {streaming && <StreamingIndicator colors={theme.colors} />}
 
       {/* ═══ APPROVAL PROMPT ═══ */}
       {approval && (
@@ -977,6 +1151,21 @@ function App() {
       )}
       {skillsPicker === "remove" && (
         <SkillsRemove skillsPickerIndex={skillsPickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ AGENT PICKER ═══ */}
+      {agentPicker && (
+        <AgentCommandPicker selectedIndex={agentPickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ SCHEDULE PICKER ═══ */}
+      {schedulePicker && (
+        <ScheduleCommandPicker selectedIndex={schedulePickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ ORCHESTRATE PICKER ═══ */}
+      {orchestratePicker && (
+        <OrchestrateCommandPicker selectedIndex={orchestratePickerIndex} colors={theme.colors} />
       )}
 
       {/* ═══ THEME PICKER ═══ */}
@@ -1068,7 +1257,10 @@ function App() {
             <TextInput
               key={inputKey}
               value={input}
-              onChange={(v) => { setInput(sanitizeInputArtifacts(v)); setCmdIndex(0); }}
+              onChange={(v) => {
+                setInput(sanitizeInputArtifacts(v));
+                setCmdIndex(0);
+              }}
               onSubmit={handleSubmit}
             />
           </Box>

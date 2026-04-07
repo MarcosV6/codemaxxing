@@ -18,15 +18,16 @@ export function sanitizeInputArtifacts(value: string): string {
 
   let out = value;
 
-  // Remove full bracketed-paste markers wherever they appear.
   out = out.replace(/\x1b\[20[01]~/g, "");
   out = out.replace(/\[20[01]~/g, "");
-  out = out.replace(/(^|\s)20[01]~(?=\s|$)/g, "$1");
 
-  // Defensive UI-layer cleanup: if the entire current input consists only of
-  // tiny control-fragment characters, wipe it completely instead of rendering
-  // terminal debris like `[201~` to the user.
-  if (out.length <= 8 && /^[\x1b\[\]0-9;~]+$/.test(out)) {
+  const trimmed = out.trim();
+  const looksLikeDebris =
+    trimmed.length > 0 &&
+    trimmed.length <= 8 &&
+    (/^(?:\x1b\[?)?20[01]~$/.test(trimmed) || /^(?:\[)?20[01]~$/.test(trimmed));
+
+  if (looksLikeDebris) {
     return "";
   }
 
