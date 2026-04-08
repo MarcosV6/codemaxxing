@@ -10,7 +10,7 @@
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
-**🆕 v1.1.4:** GPT-5.4 via ChatGPT Plus OAuth, Anthropic OAuth auto-refresh, better Windows terminal behavior, Escape-to-cancel, model picker fixes, smoother first-run auth/model selection, and refreshed recommendation/docs copy.
+**🆕 Testing build:** this branch includes improved paste interception, approval prompt key handling fixes, OpenAI OAuth auto-refresh, and smoother `/login` re-auth + auto-reconnect behavior. It has been tested a bit and is working well so far, but it still needs broader real-world testing across terminals and platforms.
 
 ## Why?
 
