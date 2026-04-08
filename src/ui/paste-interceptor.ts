@@ -81,7 +81,11 @@ class PasteFilterStream extends Transform {
         if (startIdx === -1) {
           // Check for partial start-marker prefix at end of chunk —
           // hold it back briefly in case the rest of the marker arrives.
-          const markerPrefixes = ["\x1b", "\x1b[", "\x1b[2", "\x1b[20", "\x1b[200"];
+          // Only hold back prefixes that are SPECIFIC to the paste marker
+          // (\x1b[2, \x1b[20, \x1b[200). A bare \x1b or \x1b[ are too
+          // common (Escape key, arrow keys, function keys) — holding them
+          // causes input corruption during fast typing, especially on Windows.
+          const markerPrefixes = ["\x1b[2", "\x1b[20", "\x1b[200"];
           const trailingPrefix = markerPrefixes.find((p) => data.endsWith(p));
           if (trailingPrefix) {
             forward += data.slice(0, -trailingPrefix.length);
@@ -107,7 +111,7 @@ class PasteFilterStream extends Transform {
 
         if (endIdx === -1) {
           // Check for partial end-marker prefix at end of chunk
-          const endPrefixes = ["\x1b", "\x1b[", "\x1b[2", "\x1b[20", "\x1b[201"];
+          const endPrefixes = ["\x1b[2", "\x1b[20", "\x1b[201"];
           const trailingPrefix = endPrefixes.find((p) => data.endsWith(p));
           if (trailingPrefix) {
             this.bracketedBuffer += data.slice(0, -trailingPrefix.length);
@@ -155,13 +159,18 @@ class PasteFilterStream extends Transform {
  * paste markers and emits paste content on the returned EventEmitter.
  */
 export function setupPasteInterceptor(): PasteEventBus {
-  // Windows CMD/conhost don't support bracketed paste
-  const isWindowsLegacyTerminal =
-    process.platform === "win32" &&
-    !process.env.WT_SESSION &&
-    !process.env.TERM_PROGRAM;
+  // Windows terminals have inconsistent bracketed paste support.
+  // - CMD/conhost: no support at all
+  // - PowerShell: ignores \x1b[?2004h, never sends paste markers
+  // - Windows Terminal (WT_SESSION): supports bracketed paste
+  //
+  // Only enable the Transform stream filter on terminals that actually
+  // support bracketed paste. On others, the filter adds latency and
+  // the partial-marker buffering corrupts fast typing.
+  const isWindows = process.platform === "win32";
+  const isWindowsTerminal = !!process.env.WT_SESSION;
 
-  if (isWindowsLegacyTerminal) {
+  if (isWindows && !isWindowsTerminal) {
     return new EventEmitter();
   }
 
