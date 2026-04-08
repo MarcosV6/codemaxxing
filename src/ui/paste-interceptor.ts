@@ -204,6 +204,10 @@ export function setupPasteInterceptor(): PasteEventBus {
   rawStdin.setEncoding("utf-8");
   rawStdin.pipe(filter);
 
+  // Handle pipe errors gracefully instead of crashing
+  filter.on("error", () => { /* swallow — broken pipe or encoding issue */ });
+  rawStdin.on("error", () => { /* swallow — stdin closed or encoding issue */ });
+
   // Replace process.stdin so Ink picks up the filtered stream
   Object.defineProperty(process, "stdin", {
     value: filteredStdin,

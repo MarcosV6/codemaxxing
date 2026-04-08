@@ -1,5 +1,22 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
-import { join, relative, dirname } from "path";
+import { join, relative, dirname, resolve } from "path";
+
+/**
+ * Resolve a user-provided path against cwd and ensure it doesn't escape the project root.
+ * Returns the resolved absolute path, or null if the path escapes cwd.
+ */
+function safePath(cwd: string, userPath: string): string | null {
+  const resolved = resolve(cwd, userPath);
+  const root = resolve(cwd);
+  if (!resolved.startsWith(root + "/") && resolved !== root) {
+    // Windows: also check backslash separator
+    if (process.platform === "win32" && resolved.startsWith(root + "\\")) {
+      return resolved;
+    }
+    return null;
+  }
+  return resolved;
+}
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 function normalizeWindowsCommand(command: string): { command: string; notes: string[] } {
@@ -168,28 +185,31 @@ export async function executeTool(
 ): Promise<string> {
   switch (name) {
     case "read_file": {
-      const filePath = join(cwd, args.path as string);
+      const filePath = safePath(cwd, args.path as string);
+      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
       if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
       try {
         return readFileSync(filePath, "utf-8");
-      } catch (e) {
-        return `Error reading file: ${e}`;
+      } catch (e: any) {
+        return `Error reading file: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "write_file": {
-      const filePath = join(cwd, args.path as string);
+      const filePath = safePath(cwd, args.path as string);
+      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
       try {
         mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, args.content as string, "utf-8");
         return `✅ Wrote ${(args.content as string).length} bytes to ${args.path}`;
-      } catch (e) {
-        return `Error writing file: ${e}`;
+      } catch (e: any) {
+        return `Error writing file: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "edit_file": {
-      const filePath = join(cwd, args.path as string);
+      const filePath = safePath(cwd, args.path as string);
+      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
       if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
       try {
         const oldText = String(args.oldText ?? "");
@@ -208,28 +228,30 @@ export async function executeTool(
 
         writeFileSync(filePath, nextContent, "utf-8");
         return `✅ Edited ${args.path} (${replaceAll ? matchCount : 1} replacement${replaceAll ? (matchCount === 1 ? "" : "s") : ""})`;
-      } catch (e) {
-        return `Error editing file: ${e}`;
+      } catch (e: any) {
+        return `Error editing file: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "list_files": {
-      const dirPath = join(cwd, (args.path as string) || ".");
+      const dirPath = safePath(cwd, (args.path as string) || ".");
+      if (!dirPath) return `Error: Path escapes project root: ${args.path}`;
       if (!existsSync(dirPath)) return `Error: Directory not found: ${args.path}`;
       try {
         const entries = listDir(dirPath, cwd, args.recursive as boolean);
         return entries.join("\n");
-      } catch (e) {
-        return `Error listing files: ${e}`;
+      } catch (e: any) {
+        return `Error listing files: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "search_files": {
-      const searchPath = join(cwd, (args.path as string) || ".");
+      const searchPath = safePath(cwd, (args.path as string) || ".");
+      if (!searchPath) return `Error: Path escapes project root: ${args.path}`;
       try {
         return searchInFiles(searchPath, args.pattern as string, cwd);
-      } catch (e) {
-        return `Error searching: ${e}`;
+      } catch (e: any) {
+        return `Error searching: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
@@ -390,8 +412,8 @@ function computeLCS(a: string[], b: string[]): string[] {
  * Get existing file content for diff preview (returns null if file doesn't exist)
  */
 export function getExistingContent(filePath: string, cwd: string): string | null {
-  const fullPath = join(cwd, filePath);
-  if (!existsSync(fullPath)) return null;
+  const fullPath = safePath(cwd, filePath);
+  if (!fullPath || !existsSync(fullPath)) return null;
   try {
     return readFileSync(fullPath, "utf-8");
   } catch {

@@ -1,10 +1,11 @@
-import { exec as execAsync } from "child_process";
+import { exec as execAsync, execFile as execFileAsync } from "child_process";
 import { promisify } from "util";
 import { getDiff, undoLastCommit } from "../utils/git.js";
 import type { AddMsg } from "./types.js";
 import { compactCommandOutput, getCommandErrorMessage } from "./output.js";
 
 const execPromise = promisify(execAsync);
+const execFilePromise = promisify(execFileAsync);
 
 export function tryHandleGitCommand(
   trimmed: string,
@@ -46,7 +47,7 @@ export function tryHandleGitCommand(
 
     addMsg("info", "⏳ Committing...");
     execPromise("git add -A", { cwd })
-      .then(() => execPromise(`git commit -m ${JSON.stringify(msg)}`, { cwd }))
+      .then(() => execFilePromise("git", ["commit", "-m", msg], { cwd }))
       .then(({ stdout, stderr }) => {
         const out = compactCommandOutput(stdout + stderr);
         addMsg("info", `✅ Committed: ${msg}${out ? ` — ${out}` : ""}`);

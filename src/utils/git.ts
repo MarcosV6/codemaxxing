@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -56,9 +56,9 @@ export function getStatus(cwd: string): string {
  */
 export function autoCommit(cwd: string, filePath: string, action: string): boolean {
   try {
-    execSync(`git add "${filePath}"`, { cwd, stdio: "pipe" });
+    execFileSync("git", ["add", filePath], { cwd, stdio: "pipe" });
     const msg = `codemaxxing: ${action} ${filePath}`;
-    execSync(`git commit -m "${msg}" --no-verify`, { cwd, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", msg, "--no-verify"], { cwd, stdio: "pipe" });
     return true;
   } catch {
     return false;

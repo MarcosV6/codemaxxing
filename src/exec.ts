@@ -56,11 +56,25 @@ async function readStdin(): Promise<string> {
 
   return new Promise((resolve) => {
     let data = "";
+    let resolved = false;
+    const done = (result: string) => {
+      if (resolved) return;
+      resolved = true;
+      process.stdin.removeListener("data", onData);
+      process.stdin.removeListener("end", onEnd);
+      process.stdin.removeListener("error", onError);
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const onData = (chunk: string) => { data += chunk; };
+    const onEnd = () => done(data.trim());
+    const onError = () => done(data.trim());
     process.stdin.setEncoding("utf-8");
-    process.stdin.on("data", (chunk) => { data += chunk; });
-    process.stdin.on("end", () => resolve(data.trim()));
-    // Timeout after 1s if no data arrives
-    setTimeout(() => resolve(data.trim()), 1000);
+    process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
+    process.stdin.on("error", onError);
+    // Timeout after 3s if no EOF arrives (covers slow pipes on Windows)
+    const timer = setTimeout(() => done(data.trim()), 3000);
   });
 }
 
@@ -170,13 +184,13 @@ export async function runExec(argv: string[]): Promise<void> {
       process.stdout.write(JSON.stringify(output, null, 2) + "\n");
     }
 
-    await disconnectAll();
+    await Promise.race([disconnectAll(), new Promise(r => setTimeout(r, 5000))]);
     // Exit 0 = success (always, with or without file changes)
     // Exit 2 = no file changes were made (useful for CI scripts that check if work was done)
     // Only exit(1) is reserved for actual errors (see catch block below)
     process.exit(0);
   } catch (err: any) {
-    await disconnectAll();
+    await Promise.race([disconnectAll(), new Promise(r => setTimeout(r, 5000))]);
     process.stderr.write(`Error: ${err.message}\n`);
     if (args.json) {
       process.stdout.write(JSON.stringify({ error: err.message }, null, 2) + "\n");

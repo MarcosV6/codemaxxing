@@ -1,4 +1,4 @@
-import { execSync, spawn } from "child_process";
+import { execSync, execFileSync, spawn } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -142,33 +142,37 @@ function pullModelViaAPI(
         return;
       }
       const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.status === "success") {
-              onProgress?.({ status: "success", percent: 100 });
-              resolve();
-              return;
-            }
-            if (data.total && data.completed) {
-              const percent = Math.round((data.completed / data.total) * 100);
-              onProgress?.({ status: "downloading", total: data.total, completed: data.completed, percent });
-            } else {
-              onProgress?.({ status: data.status || "working...", percent: 0 });
-            }
-          } catch {}
+      try {
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const data = JSON.parse(line);
+              if (data.status === "success") {
+                onProgress?.({ status: "success", percent: 100 });
+                resolve();
+                return;
+              }
+              if (data.total && data.completed) {
+                const percent = Math.round((data.completed / data.total) * 100);
+                onProgress?.({ status: "downloading", total: data.total, completed: data.completed, percent });
+              } else {
+                onProgress?.({ status: data.status || "working...", percent: 0 });
+              }
+            } catch {}
+          }
         }
+        resolve();
+      } finally {
+        reader.cancel().catch(() => {});
       }
-      resolve();
     } catch (err: any) {
       reject(err);
     }
@@ -325,7 +329,7 @@ export async function stopOllama(): Promise<{ ok: boolean; message: string }> {
 export function deleteModel(modelId: string): { ok: boolean; message: string } {
   try {
     const bin = findOllamaBinary();
-    execSync(`"${bin}" rm ${modelId}`, { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
+    execFileSync(bin, ["rm", modelId], { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
     return { ok: true, message: `Deleted ${modelId}` };
   } catch (err: any) {
     return { ok: false, message: `Failed to delete ${modelId}: ${err.stderr?.toString().trim() || err.message}` };
