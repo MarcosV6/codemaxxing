@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Box, Text } from "ink";
 import type { Theme } from "../themes.js";
 import { THEMES, listThemes } from "../themes.js";
@@ -132,8 +132,8 @@ interface SkillsBrowseProps {
 }
 
 export function SkillsBrowse({ skillsPickerIndex, colors }: SkillsBrowseProps) {
-  const registry = getRegistrySkills();
-  const installed = listInstalledSkills().map((s) => s.name);
+  const registry = useMemo(() => getRegistrySkills(), []);
+  const installed = useMemo(() => listInstalledSkills().map((s) => s.name), []);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
       <Text bold color={colors.secondary}>Browse Skills Registry:</Text>
@@ -159,8 +159,8 @@ interface SkillsInstalledProps {
 }
 
 export function SkillsInstalled({ skillsPickerIndex, sessionDisabledSkills, colors }: SkillsInstalledProps) {
-  const installed = listInstalledSkills();
-  const active = getActiveSkills(process.cwd(), sessionDisabledSkills);
+  const installed = useMemo(() => listInstalledSkills(), []);
+  const active = useMemo(() => getActiveSkills(process.cwd(), sessionDisabledSkills), [sessionDisabledSkills]);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
       <Text bold color={colors.secondary}>Installed Skills:</Text>
@@ -187,7 +187,7 @@ interface SkillsRemoveProps {
 }
 
 export function SkillsRemove({ skillsPickerIndex, colors }: SkillsRemoveProps) {
-  const installed = listInstalledSkills();
+  const installed = useMemo(() => listInstalledSkills(), []);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={colors.error} paddingX={1} marginBottom={0}>
       <Text bold color={colors.error}>Remove a skill:</Text>
@@ -465,7 +465,7 @@ export function OllamaDeletePicker({ models, selectedIndex, colors }: OllamaDele
 
 // ── Ollama Pull Picker ──
 
-const PULL_MODELS = [
+export const PULL_MODELS = [
   { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Recommended default for coding if your machine can handle it" },
   { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2 16B", size: "9 GB", desc: "Strong higher-quality alternative" },
   { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Fallback for mid-range machines" },

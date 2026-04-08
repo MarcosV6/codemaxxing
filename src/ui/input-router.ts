@@ -14,6 +14,7 @@ import type { ScoredModel } from "../utils/models.js";
 import type { HardwareInfo } from "../utils/hardware.js";
 import type { WizardContext } from "./wizard-types.js";
 import { handleWizardScreen } from "./wizard.js";
+import { PULL_MODELS } from "./pickers.js";
 
 // ── Context interface ──
 
@@ -722,15 +723,7 @@ function handleOllamaDeletePicker(_inputChar: string, key: Key, ctx: InputRouter
 
 function handleOllamaPullPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
   if (!ctx.ollamaPullPicker) return false;
-  const pullModels = [
-    { id: "qwen2.5-coder:14b", name: "Qwen 2.5 Coder 14B", size: "9 GB", desc: "Recommended default for coding if your machine can handle it" },
-    { id: "deepseek-coder-v2:16b", name: "DeepSeek Coder V2 16B", size: "9 GB", desc: "Strong higher-quality alternative" },
-    { id: "qwen2.5-coder:7b", name: "Qwen 2.5 Coder 7B", size: "5 GB", desc: "Fallback for mid-range machines" },
-    { id: "qwen2.5-coder:32b", name: "Qwen 2.5 Coder 32B", size: "20 GB", desc: "Premium quality, needs lots of RAM" },
-    { id: "codellama:7b", name: "CodeLlama 7B", size: "4 GB", desc: "Older fallback coding model" },
-    { id: "starcoder2:7b", name: "StarCoder2 7B", size: "4 GB", desc: "Completion-focused fallback" },
-    { id: "qwen2.5-coder:3b", name: "Qwen 2.5 Coder 3B", size: "2 GB", desc: "⚠️ Last resort — may struggle with tool calls" },
-  ];
+  const pullModels = PULL_MODELS;
   if (key.upArrow) {
     ctx.setOllamaPullPickerIndex((prev) => (prev - 1 + pullModels.length) % pullModels.length);
     return true;
