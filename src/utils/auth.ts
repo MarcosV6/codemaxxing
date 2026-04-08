@@ -17,7 +17,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { randomBytes, createHash } from "crypto";
-import { execSync, exec } from "child_process";
+import { execSync, exec, execFile } from "child_process";
 import { detectOpenAICodexOAuth } from "./openai-oauth.js";
 
 // ── Types ──
@@ -133,7 +133,8 @@ function loadAuthStore(): AuthStore {
   try {
     const raw = readFileSync(AUTH_FILE, "utf-8");
     return JSON.parse(raw);
-  } catch {
+  } catch (err: any) {
+    process.stderr.write(`Warning: Failed to load auth store (${err instanceof Error ? err.message : String(err)}). Starting with empty credentials.\n`);
     return { version: 1, credentials: [] };
   }
 }
@@ -285,12 +286,15 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
 
       // Open browser
       try {
-        const cmd = process.platform === "darwin"
-          ? `open "${authUrl}"`
+        const opener = process.platform === "darwin"
+          ? "open"
           : process.platform === "win32"
-          ? `start "" "${authUrl}"`
-          : `xdg-open "${authUrl}"`;
-        exec(cmd);
+          ? "cmd"
+          : "xdg-open";
+        const openerArgs = process.platform === "win32"
+          ? ["/c", "start", "", authUrl]
+          : [authUrl];
+        execFile(opener, openerArgs, () => {});
       } catch {
         onStatus?.(`Could not open browser. Please visit:\n${authUrl}`);
       }

@@ -158,7 +158,11 @@ class PasteFilterStream extends Transform {
  * Replaces process.stdin with a Transform stream that strips bracketed
  * paste markers and emits paste content on the returned EventEmitter.
  */
+let _pasteEventBus: PasteEventBus | null = null;
+
 export function setupPasteInterceptor(): PasteEventBus {
+  // Guard against duplicate registration — only set up once
+  if (_pasteEventBus) return _pasteEventBus;
   // Windows terminals have inconsistent bracketed paste support.
   // - CMD/conhost: no support at all
   // - PowerShell: ignores \x1b[?2004h, never sends paste markers
@@ -171,7 +175,8 @@ export function setupPasteInterceptor(): PasteEventBus {
   const isWindowsTerminal = !!process.env.WT_SESSION;
 
   if (isWindows && !isWindowsTerminal) {
-    return new EventEmitter();
+    _pasteEventBus = new EventEmitter();
+    return _pasteEventBus;
   }
 
   // Enable bracketed paste mode
@@ -220,5 +225,6 @@ export function setupPasteInterceptor(): PasteEventBus {
     process.stdout.write("\x1b[?2004l");
   });
 
-  return filter.pasteEvents;
+  _pasteEventBus = filter.pasteEvents;
+  return _pasteEventBus;
 }

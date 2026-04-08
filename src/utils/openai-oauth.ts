@@ -7,7 +7,7 @@
 
 import { createServer } from "http";
 import { randomBytes, createHash } from "crypto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -45,13 +45,15 @@ function decodeJwtPayload(token: string): Record<string, any> {
 // ── Browser opener ──
 
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === "darwin"
-      ? `open "${url}"`
-      : process.platform === "win32"
-        ? `start "" "${url}"`
-        : `xdg-open "${url}"`;
-  exec(cmd);
+  const opener = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "cmd"
+      : "xdg-open";
+  const args = process.platform === "win32"
+    ? ["/c", "start", "", url]
+    : [url];
+  execFile(opener, args, () => {});
 }
 
 // ── Detect existing OpenClaw auth-profiles ──

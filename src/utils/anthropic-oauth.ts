@@ -7,7 +7,7 @@
 
 import { createServer } from "http";
 import { randomBytes, createHash } from "crypto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { saveCredential, type AuthCredential } from "./auth.js";
 
 // ── Constants ──
@@ -41,13 +41,15 @@ function generatePKCE(): { verifier: string; challenge: string } {
 // ── Browser opener ──
 
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === "darwin"
-      ? `open "${url}"`
-      : process.platform === "win32"
-        ? `start "" "${url}"`
-        : `xdg-open "${url}"`;
-  exec(cmd);
+  const opener = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "cmd"
+      : "xdg-open";
+  const args = process.platform === "win32"
+    ? ["/c", "start", "", url]
+    : [url];
+  execFile(opener, args, () => {});
 }
 
 // ── Token refresh ──
