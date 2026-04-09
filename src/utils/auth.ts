@@ -516,12 +516,15 @@ export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promi
 
   // Try to open browser
   try {
-    const cmd = process.platform === "darwin"
-      ? `open "${deviceData.verification_uri}"`
+    const opener = process.platform === "darwin"
+      ? "open"
       : process.platform === "win32"
-      ? `start "" "${deviceData.verification_uri}"`
-      : `xdg-open "${deviceData.verification_uri}"`;
-    exec(cmd);
+      ? "cmd"
+      : "xdg-open";
+    const openerArgs = process.platform === "win32"
+      ? ["/c", "start", "", deviceData.verification_uri]
+      : [deviceData.verification_uri];
+    execFile(opener, openerArgs, () => {});
   } catch { /* ignore */ }
 
   // Step 2: Poll for token
