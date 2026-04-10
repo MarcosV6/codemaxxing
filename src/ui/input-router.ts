@@ -157,6 +157,8 @@ export interface InputRouterContext extends WizardContext {
 // ── Main router ──
 
 export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  // Approval prompts must be checked first — they block all other input
+  if (handleApprovalPrompts(inputChar, key, ctx)) return true;
   if (handleSlashCommandNavigation(inputChar, key, ctx)) return true;
   if (handleLoginMethodPicker(inputChar, key, ctx)) return true;
   if (handleLoginPicker(inputChar, key, ctx)) return true;
@@ -176,7 +178,6 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleDeleteSessionConfirm(inputChar, key, ctx)) return true;
   if (handleDeleteSessionPicker(inputChar, key, ctx)) return true;
   if (handleBackspaceRemovesPasteChunk(inputChar, key, ctx)) return true;
-  if (handleApprovalPrompts(inputChar, key, ctx)) return true;
   // Escape to abort generation (when loading or streaming)
   if (key.escape && (ctx.streaming || ctx.loading) && ctx.agent) {
     ctx.agent.abort();

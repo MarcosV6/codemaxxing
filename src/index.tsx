@@ -202,9 +202,9 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   }, []);
 
   return (
-    <Text dimColor>
+    <Text>
       {"  "}<Text color={colors.spinner}>{STREAM_DOTS[frame]}</Text>
-      {" "}<Text color={colors.muted}>{message}</Text>
+      {" "}<Text color={colors.secondary}>{message}</Text>
     </Text>
   );
 }

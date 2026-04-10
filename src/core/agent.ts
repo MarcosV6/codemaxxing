@@ -25,6 +25,31 @@ function sanitizeSurrogates(text: string): string {
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+// ── Helper: Build tool result message (with image support) ──
+function buildToolResultMessage(
+  toolCallId: string,
+  toolName: string,
+  result: string,
+): ChatCompletionMessageParam {
+  // For view_image, parse the JSON and create a multimodal content array
+  if (toolName === "view_image" && result.startsWith("{")) {
+    try {
+      const img = JSON.parse(result);
+      if (img.type === "image") {
+        return {
+          role: "tool",
+          tool_call_id: toolCallId,
+          content: [
+            { type: "image_url", image_url: { url: `data:${img.mime};base64,${img.base64}` } } as any,
+            { type: "text", text: `Image: ${img.path} (${img.size})` },
+          ],
+        } as any;
+      }
+    } catch { /* fall through to plain text */ }
+  }
+  return { role: "tool", tool_call_id: toolCallId, content: result };
+}
+
 // ── Helper: Create Anthropic client with proper auth ──
 function createAnthropicClient(apiKey: string): Anthropic {
   // OAuth tokens start with "sk-ant-oat" — need special handling
@@ -564,11 +589,7 @@ export class CodingAgent {
           }
         }
 
-        const toolMsg: ChatCompletionMessageParam = {
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result,
-        };
+        const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
         this.messages.push(toolMsg);
         saveMessage(this.sessionId, toolMsg);
         this.options.onLoopStatus?.("tool result appended to conversation", {
@@ -870,11 +891,7 @@ export class CodingAgent {
           }
         }
 
-        const toolMsg: ChatCompletionMessageParam = {
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result,
-        };
+        const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
         this.messages.push(toolMsg);
         saveMessage(this.sessionId, toolMsg);
         this.options.onLoopStatus?.("tool result appended to conversation", {
@@ -1033,11 +1050,7 @@ export class CodingAgent {
           }
 
           // Save tool result
-          const toolMsg: ChatCompletionMessageParam = {
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: result,
-          };
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
           this.messages.push(toolMsg);
           saveMessage(this.sessionId, toolMsg);
           this.options.onLoopStatus?.("tool result appended to conversation", {

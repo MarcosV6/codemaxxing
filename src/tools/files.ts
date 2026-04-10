@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
-import { join, relative, dirname, resolve } from "path";
+import { join, relative, dirname, resolve, extname } from "path";
 
 /**
  * Resolve a user-provided path against cwd and ensure it doesn't escape the project root.
@@ -160,7 +160,7 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "run_command",
       description:
-        "Execute a shell command and return the output. Use for running tests, builds, linters, etc. Commands should match the current OS shell (Windows vs Unix).",
+        "Execute a shell command and return the output. Use for running tests, builds, linters, etc. Commands should match the current OS shell (Windows vs Unix). Has a 30s timeout — use run_background_command for long-running processes like dev servers.",
       parameters: {
         type: "object",
         properties: {
@@ -170,6 +170,42 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
           },
         },
         required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_background_command",
+      description:
+        "Start a long-running command in the background (e.g. dev servers, watch modes). Returns immediately with the process ID. Use this instead of run_command for processes that should keep running.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            description: "Shell command to run in the background",
+          },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "view_image",
+      description:
+        "View an image file and describe what you see. Supports PNG, JPG, GIF, WebP. Returns the image as base64 for the model to analyze.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to the image file (relative to project root, or absolute path)",
+          },
+        },
+        required: ["path"],
       },
     },
   },
@@ -286,6 +322,91 @@ export async function executeTool(
           return `Command failed: ${stderr}\nHint: Unix-style \`mkdir -p\` was used on Windows. Use plain \`mkdir path\` commands or let Codemaxxing retry with a Windows-safe command.`;
         }
         return `Command failed: ${stderr}`;
+      }
+    }
+
+    case "run_background_command": {
+      try {
+        const { spawn } = await import("child_process");
+        const command = String(args.command ?? "");
+        const shell = process.platform === "win32"
+          ? (process.env.ComSpec || "cmd.exe")
+          : true;
+
+        const child = spawn(command, [], {
+          shell,
+          cwd,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        // Collect first few lines of output to confirm it started
+        let earlyOutput = "";
+        const collectEarly = (chunk: Buffer) => {
+          earlyOutput += chunk.toString("utf-8");
+          if (earlyOutput.length > 2000) {
+            child.stdout?.removeListener("data", collectEarly);
+            child.stderr?.removeListener("data", collectEarly);
+          }
+        };
+        child.stdout?.on("data", collectEarly);
+        child.stderr?.on("data", collectEarly);
+
+        // Give it a moment to start and produce output
+        await new Promise(r => setTimeout(r, 1500));
+
+        child.stdout?.removeListener("data", collectEarly);
+        child.stderr?.removeListener("data", collectEarly);
+        child.unref();
+
+        const pid = child.pid ?? "unknown";
+        const preview = earlyOutput.trim().slice(0, 500);
+        return `✅ Started in background (PID ${pid})${preview ? `\n\nEarly output:\n${preview}` : ""}`;
+      } catch (e: any) {
+        return `Failed to start background command: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    case "view_image": {
+      try {
+        const userPath = String(args.path ?? "");
+        // Support both absolute paths and project-relative paths
+        const filePath = userPath.startsWith("/")
+          ? userPath
+          : safePath(cwd, userPath);
+        if (!filePath) return `Error: Path escapes project root: ${userPath}`;
+        if (!existsSync(filePath)) return `Error: Image not found: ${userPath}`;
+
+        const ext = extname(filePath).toLowerCase();
+        const supportedExts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"];
+        if (!supportedExts.includes(ext)) {
+          return `Error: Unsupported image format: ${ext}. Supported: ${supportedExts.join(", ")}`;
+        }
+
+        const data = readFileSync(filePath);
+        const base64 = data.toString("base64");
+        const mimeTypes: Record<string, string> = {
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+          ".bmp": "image/bmp",
+          ".svg": "image/svg+xml",
+        };
+        const mime = mimeTypes[ext] || "image/png";
+        const sizeKB = (data.length / 1024).toFixed(1);
+
+        // Return as a structured response the agent can use for vision
+        return JSON.stringify({
+          type: "image",
+          mime,
+          base64,
+          path: userPath,
+          size: `${sizeKB} KB`,
+        });
+      } catch (e: any) {
+        return `Error viewing image: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
