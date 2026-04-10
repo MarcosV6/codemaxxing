@@ -297,6 +297,7 @@ function App() {
     diff?: string;
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null>(null);
+  const askUserResolveRef = useRef<((answer: string) => void) | null>(null);
 
   useEffect(() => {
     if (!loading || !agent) return;
@@ -382,6 +383,9 @@ function App() {
       addMsg,
       nextMsgId,
       setApproval,
+      setAskUserResolve: (fn: () => (answer: string) => void) => {
+        askUserResolveRef.current = fn();
+      },
       setWizardScreen,
       setWizardIndex,
       openModelPicker,
@@ -583,6 +587,18 @@ function App() {
     if (!submittedValue.trim()) return;
 
     const trimmed = submittedValue.trim();
+
+    // If the agent is waiting for a user answer (ask_user tool), resolve it
+    if (askUserResolveRef.current) {
+      const resolve = askUserResolveRef.current;
+      askUserResolveRef.current = null;
+      addMsg("user", submittedValue);
+      setLoading(true);
+      setSpinnerMsg("Processing...");
+      resolve(trimmed);
+      return;
+    }
+
     addMsg("user", submittedValue);
 
     if (trimmed === "/quit" || trimmed === "/exit") {

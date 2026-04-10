@@ -199,6 +199,7 @@ export interface AgentOptions {
   onThinking?: (text: string) => void;
   onLoopStatus?: (stage: string, meta?: Record<string, unknown>) => void;
   onToolApproval?: (name: string, args: Record<string, unknown>, diff?: string) => Promise<"yes" | "no" | "always">;
+  onAskUser?: (question: string) => Promise<string>;
   onGitCommit?: (message: string) => void;
   onContextCompressed?: (oldTokens: number, newTokens: number) => void;
   onArchitectPlan?: (plan: string) => void;
@@ -553,6 +554,22 @@ export class CodingAgent {
           }
         }
 
+        // Handle special tools (think, ask_user) before routing
+        if (toolCall.name === "think") {
+          this.options.onThinking?.(String(args.thought ?? ""));
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          continue;
+        }
+        if (toolCall.name === "ask_user" && this.options.onAskUser) {
+          const answer = await this.options.onAskUser(String(args.question ?? ""));
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          continue;
+        }
+
         // Route to MCP or built-in tool
         const mcpParsed = parseMCPToolName(toolCall.name);
         let result: string;
@@ -855,6 +872,22 @@ export class CodingAgent {
           }
         }
 
+        // Handle special tools (think, ask_user) before routing
+        if (toolCall.name === "think") {
+          this.options.onThinking?.(String(args.thought ?? ""));
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          continue;
+        }
+        if (toolCall.name === "ask_user" && this.options.onAskUser) {
+          const answer = await this.options.onAskUser(String(args.question ?? ""));
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          continue;
+        }
+
         // Route to MCP or built-in tool
         const mcpParsed = parseMCPToolName(toolCall.name);
         let result: string;
@@ -1011,6 +1044,22 @@ export class CodingAgent {
                 this.alwaysApproved.add(toolCall.name);
               }
             }
+          }
+
+          // Handle special tools (think, ask_user) before routing
+          if (toolCall.name === "think") {
+            this.options.onThinking?.(String(args.thought ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            continue;
+          }
+          if (toolCall.name === "ask_user" && this.options.onAskUser) {
+            const answer = await this.options.onAskUser(String(args.question ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            continue;
           }
 
           // Execute tool

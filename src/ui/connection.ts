@@ -297,6 +297,13 @@ export async function connectToProvider(
         ctx.setLoading(false);
       });
     },
+    onAskUser: (question) => {
+      return new Promise((resolve) => {
+        ctx.addMsg("info", `❓ ${question}`);
+        ctx.setLoading(false);
+        ctx.setAskUserResolve?.(() => resolve);
+      });
+    },
   });
 
   // Initialize async context (repo map)

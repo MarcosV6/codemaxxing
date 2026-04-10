@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, globSync as fsGlobSync } from "fs";
 import { join, relative, dirname, resolve, extname } from "path";
 
 /**
@@ -209,6 +209,90 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "glob",
+      description:
+        "Find files matching a glob pattern. Use this to locate files by name or extension across the project (e.g. '**/*.tsx', 'src/**/test.*', '*.json').",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "Glob pattern to match files (e.g. '**/*.ts', 'src/**/*.test.*')",
+          },
+          path: {
+            type: "string",
+            description: "Directory to search in (relative to project root, defaults to '.')",
+          },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_fetch",
+      description:
+        "Fetch the content of a URL. Use this to read documentation, APIs, or any web page. Returns the text content of the response.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The URL to fetch",
+          },
+          method: {
+            type: "string",
+            description: "HTTP method (default: GET)",
+          },
+          headers: {
+            type: "object",
+            description: "Optional HTTP headers as key-value pairs",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "think",
+      description:
+        "Use this tool to think through complex problems step-by-step. Your thoughts are private and not shown to the user. Use this when you need to reason about architecture, plan multi-step changes, or work through a tricky bug before acting.",
+      parameters: {
+        type: "object",
+        properties: {
+          thought: {
+            type: "string",
+            description: "Your internal reasoning or analysis",
+          },
+        },
+        required: ["thought"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "ask_user",
+      description:
+        "Ask the user a question and wait for their response. Use this when you need clarification, confirmation, or additional information before proceeding. The question will be displayed to the user and their response will be returned.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description: "The question to ask the user",
+          },
+        },
+        required: ["question"],
+      },
+    },
+  },
 ];
 
 /**
@@ -408,6 +492,72 @@ export async function executeTool(
       } catch (e: any) {
         return `Error viewing image: ${e instanceof Error ? e.message : String(e)}`;
       }
+    }
+
+    case "glob": {
+      try {
+        const pattern = String(args.pattern ?? "");
+        const baseDir = safePath(cwd, (args.path as string) || ".") || cwd;
+        const matches = fsGlobSync(pattern, { cwd: baseDir })
+          .map((f: string) => relative(cwd, join(baseDir, f)))
+          .filter((f: string) => !f.includes("node_modules") && !f.startsWith(".git/"))
+          .sort();
+        if (matches.length === 0) return `No files matching: ${pattern}`;
+        return matches.slice(0, 100).join("\n") + (matches.length > 100 ? `\n... (${matches.length - 100} more)` : "");
+      } catch (e: any) {
+        return `Error globbing: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    case "web_fetch": {
+      try {
+        const url = String(args.url ?? "");
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+          return "Error: URL must start with http:// or https://";
+        }
+        const method = String(args.method ?? "GET").toUpperCase();
+        const headers = (args.headers as Record<string, string>) || {};
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(url, {
+          method,
+          headers,
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        const contentType = res.headers.get("content-type") || "";
+        const text = await res.text();
+        // Strip HTML tags for readability if it's HTML
+        let content = text;
+        if (contentType.includes("text/html")) {
+          content = text
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+        }
+        // Truncate very long responses
+        if (content.length > 50000) {
+          content = content.slice(0, 50000) + `\n\n... (truncated, ${text.length} total chars)`;
+        }
+        return `HTTP ${res.status} ${res.statusText}\nContent-Type: ${contentType}\n\n${content}`;
+      } catch (e: any) {
+        return `Error fetching URL: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    case "think": {
+      // Think tool is a no-op — the model's reasoning is captured in the tool call itself.
+      // We return a brief acknowledgment so the model knows it was processed.
+      return "(thinking complete)";
+    }
+
+    case "ask_user": {
+      // The ask_user tool is handled specially by the agent — it pauses execution
+      // and shows the question to the user. The result comes from user input.
+      // This fallback shouldn't normally be reached since the agent intercepts it.
+      return `[Question for user]: ${args.question}`;
     }
 
     default:

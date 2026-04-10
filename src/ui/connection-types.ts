@@ -42,6 +42,9 @@ export interface ConnectionContext {
     resolve: (decision: "yes" | "no" | "always") => void;
   } | null) => void;
 
+  // Ask user
+  setAskUserResolve?: (fn: () => (answer: string) => void) => void;
+
   // Wizard triggers
   setWizardScreen: (val: WizardScreen) => void;
   setWizardIndex: (val: number) => void;
