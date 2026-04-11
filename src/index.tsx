@@ -70,10 +70,8 @@ const SLASH_COMMANDS = [
   { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
-  { cmd: "/context", desc: "show message count" },
   { cmd: "/compact", desc: "compress conversation context" },
   { cmd: "/cost", desc: "show token usage and cost" },
-  { cmd: "/tokens", desc: "show current context token count" },
   { cmd: "/read-only", desc: "add file as read-only context" },
   { cmd: "/checkpoint", desc: "save current state as checkpoint" },
   { cmd: "/restore", desc: "restore to a checkpoint" },
@@ -1094,10 +1092,8 @@ function App() {
         "  /session delete — delete a session",
         "  /resume    — resume a past session",
         "  /reset     — clear conversation",
-        "  /context   — show message count",
         "  /compact   — compress conversation context",
         "  /cost      — show token usage and estimated cost",
-        "  /tokens    — show current context token count",
         "  /read-only <file> — add file as read-only context",
         "  /checkpoint [label] — save current state",
         "  /checkpoints — list saved checkpoints",
@@ -1283,10 +1279,6 @@ function App() {
       addMsg("info", "✅ Conversation reset.");
       return;
     }
-    if (trimmed === "/context") {
-      addMsg("info", `Messages in context: ${agent!.getContextLength()}`);
-      return;
-    }
     if (trimmed === "/compact") {
       const tokens = agent!.estimateTokens();
       const msgs = agent!.getContextLength();
@@ -1321,13 +1313,6 @@ function App() {
         `  Total tokens:      ${totalStr}\n` +
         `  Estimated cost:    ${costStr}`
       );
-      return;
-    }
-    if (trimmed === "/tokens") {
-      const contextTokens = agent!.estimateTokens();
-      const msgs = agent!.getContextLength();
-      const tokStr = contextTokens >= 1000 ? `${(contextTokens / 1000).toFixed(1)}k` : String(contextTokens);
-      addMsg("info", `📊 Context: ${msgs} messages, ~${tokStr} tokens`);
       return;
     }
     if (trimmed.startsWith("/read-only")) {
