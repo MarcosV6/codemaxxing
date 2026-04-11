@@ -4,9 +4,12 @@ import {
   getBackgroundAgent,
   pauseBackgroundAgent,
   deleteBackgroundAgent,
+  createBackgroundAgent,
+  startBackgroundAgent,
   type BackgroundAgentRecord,
 } from "../background-agents.js";
 import { displayAgent, listAgents, showAgentDetail } from "../background-agents-cli.js";
+import type { AgentOptions } from "../core/agent.js";
 import type { AddMsg } from "./types.js";
 
 /**
@@ -22,7 +25,7 @@ export async function tryHandleBackgroundAgentCommand(
   input: string,
   cwd: string,
   addMsg: AddMsg,
-  ctx?: { setAgentPicker?: (val: boolean) => void }
+  ctx?: { setAgentPicker?: (val: boolean) => void; agentOptions?: AgentOptions }
 ): Promise<boolean> {
   const parts = input.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
@@ -35,6 +38,32 @@ export async function tryHandleBackgroundAgentCommand(
   const agentId = parts[2];
 
   switch (subcommand) {
+    case "start": {
+      const rest = parts.slice(2).join(" ").trim();
+      if (!rest) {
+        addMsg("error", "Usage: /agent start <task description>");
+        return true;
+      }
+      if (!ctx?.agentOptions) {
+        addMsg("error", "Cannot start agent: no active provider. Run /login first.");
+        return true;
+      }
+      // Use first few words as name, rest as prompt
+      const words = rest.split(/\s+/);
+      const name = words.slice(0, 4).join(" ").slice(0, 40);
+      try {
+        const record = await createBackgroundAgent(name, cwd, rest, ctx.agentOptions);
+        addMsg("info", `✓ Background agent ${record.id} created: "${name}"\n  Running in background. Use /agent list to check status.`);
+        // Fire and forget — run in background without awaiting
+        startBackgroundAgent(record.id).catch((err) => {
+          addMsg("error", `Agent ${record.id} failed: ${err.message}`);
+        });
+      } catch (err: any) {
+        addMsg("error", `Failed to start agent: ${err.message}`);
+      }
+      return true;
+    }
+
     case "list": {
       const agents = listBackgroundAgents(cwd);
       if (agents.length === 0) {
@@ -81,6 +110,7 @@ export async function tryHandleBackgroundAgentCommand(
       if (ctx?.setAgentPicker) ctx.setAgentPicker(true);
       else addMsg("info", [
         "Background Agent Commands:",
+        "  /agent start <task>      — spawn a new background agent",
         "  /agent list              — list all agents",
         "  /agent pause <id>        — pause a running agent",
         "  /agent delete <id>       — delete an agent",
@@ -98,7 +128,7 @@ export async function tryHandleBackgroundAgentCommand(
       }
 
       // If not found as ID, maybe they misspelled
-      addMsg("error", `Unknown subcommand: ${subcommand}\nUsage: /agent [list|pause|delete] [agent-id]`);
+      addMsg("error", `Unknown subcommand: ${subcommand}\nUsage: /agent [start|list|pause|delete] [agent-id]`);
       return true;
     }
   }

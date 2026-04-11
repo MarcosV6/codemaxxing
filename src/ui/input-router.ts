@@ -539,7 +539,7 @@ function queueCommand(ctx: InputRouterContext, command: string): void {
 
 function handleAgentPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
   if (!ctx.agentPicker) return false;
-  const commands = ["list", "pause", "delete"];
+  const commands = ["start", "list", "pause", "delete"];
   if (key.upArrow) {
     ctx.setAgentPickerIndex((prev) => (prev - 1 + commands.length) % commands.length);
     return true;
@@ -570,7 +570,7 @@ function handleAgentPicker(_inputChar: string, key: Key, ctx: InputRouterContext
 
 function handleSchedulePicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
   if (!ctx.schedulePicker) return false;
-  const commands = ["list", "disable", "delete", "history"];
+  const commands = ["add", "list", "disable", "delete", "history"];
   if (key.upArrow) {
     ctx.setSchedulePickerIndex((prev) => (prev - 1 + commands.length) % commands.length);
     return true;

@@ -281,11 +281,10 @@ export function getMemoryStats(): { total: number; byType: Record<string, number
  * Called periodically during long conversations.
  */
 export function getMemoryNudgePrompt(): string {
-  return `[MEMORY NUDGE] Review the conversation so far. If you've learned anything worth remembering for future sessions, use the remember_memory tool to save it. Consider:
-- User preferences or coding style
-- Project architecture decisions
-- Workflows that worked well
-- Important facts about the codebase
-- User corrections (what NOT to do)
-Only save genuinely useful cross-session knowledge. Do not save trivial or ephemeral information.`;
+  return `[MEMORY CHECK] Before your next reply, scan the recent conversation for durable facts worth persisting across sessions, then call remember_memory for each one. You MUST call remember_memory at least once if any of these apply:
+- The user told you how they like to work, their role, tools, or preferences
+- The user corrected you ("don't do X", "stop doing Y")
+- You learned a non-obvious fact about this project: architecture, conventions, test commands, deploy steps, key file locations
+- A multi-step workflow just succeeded that you'd want to repeat
+Use type="user" for personal preferences, "project" for repo-specific facts, "preference" for cross-project coding style, "workflow" for repeatable procedures, "fact" for everything else. Keep the content field to ~1 sentence. If nothing qualifies, say so in one line and skip the tool.`;
 }

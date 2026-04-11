@@ -480,8 +480,8 @@ export class CodingAgent {
       result = await this.chat(userMessage);
     }
 
-    // Memory nudge: every 10 sends, inject a nudge so the agent saves useful knowledge
-    if (this.sendCount - this.lastMemoryNudge >= 10) {
+    // Memory nudge: every 3 sends, inject a nudge so the agent saves useful knowledge
+    if (this.sendCount - this.lastMemoryNudge >= 3) {
       this.lastMemoryNudge = this.sendCount;
       try {
         const { getMemoryNudgePrompt } = await import("../utils/memory.js");

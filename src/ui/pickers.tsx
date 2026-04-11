@@ -236,6 +236,7 @@ interface CommandPickerProps {
 
 export function AgentCommandPicker({ selectedIndex, colors }: CommandPickerProps) {
   const options = [
+    { key: "start", label: "start", desc: "spawn a new background agent" },
     { key: "list", label: "list", desc: "show all background agents" },
     { key: "pause", label: "pause", desc: "pause a running agent" },
     { key: "delete", label: "delete", desc: "delete an agent" },
@@ -257,6 +258,7 @@ export function AgentCommandPicker({ selectedIndex, colors }: CommandPickerProps
 
 export function ScheduleCommandPicker({ selectedIndex, colors }: CommandPickerProps) {
   const options = [
+    { key: "add", label: "add", desc: 'schedule a new job: /schedule add "<cron>" <task>' },
     { key: "list", label: "list", desc: "show scheduled jobs" },
     { key: "disable", label: "disable", desc: "pause a scheduled job" },
     { key: "delete", label: "delete", desc: "delete a scheduled job" },

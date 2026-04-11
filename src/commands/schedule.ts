@@ -9,7 +9,7 @@ import {
   getCronJobHistory,
   type CronJobRecord,
 } from "../cron-scheduling.js";
-import type { AgentOptions } from "../agent.js";
+import type { AgentOptions } from "../core/agent.js";
 import type { AddMsg } from "./types.js";
 
 /**
@@ -52,6 +52,43 @@ export async function tryHandleScheduleCommand(
   const arg = parts[2] ?? "";
 
   switch (sub) {
+    case "add":
+    case "create": {
+      // /schedule add "<cron expr>" <task description>
+      // The cron expression must be quoted because it contains spaces.
+      const rest = input.trim().slice(input.indexOf(sub) + sub.length).trim();
+      const match = rest.match(/^["']([^"']+)["']\s+(.+)$/);
+      if (!match) {
+        addMsg("error", [
+          'Usage: /schedule add "<cron expression>" <task description>',
+          '  Example: /schedule add "0 9 * * *" run the test suite and report failures',
+          '  Quote the cron expression — it contains spaces.',
+        ].join("\n"));
+        return true;
+      }
+      const [, cronExpr, prompt] = match;
+      if (!agentOptions) {
+        addMsg("error", "Cannot schedule job: no active provider. Run /login first.");
+        return true;
+      }
+      const words = prompt.split(/\s+/);
+      const name = words.slice(0, 5).join(" ").slice(0, 50);
+      try {
+        const job = await createCronJob(
+          name,
+          process.cwd(),
+          agentOptions.provider.model,
+          prompt,
+          cronExpr,
+          agentOptions,
+        );
+        addMsg("info", `✓ Scheduled job ${job.id}: "${name}"\n  Schedule: ${cronExpr}\n  Use /schedule list to check status.`);
+      } catch (err: any) {
+        addMsg("error", `Failed to schedule: ${err.message}`);
+      }
+      return true;
+    }
+
     case "list": {
       const jobs = listCronJobs();
       if (jobs.length === 0) {
@@ -112,6 +149,7 @@ export async function tryHandleScheduleCommand(
       if (ctx?.setSchedulePicker) ctx.setSchedulePicker(true);
       else addMsg("info", [
         "Scheduled Job Commands:",
+        '  /schedule add "<cron>" <task>  — schedule a new job',
         "  /schedule list              — list all jobs",
         "  /schedule <id>              — show job details",
         "  /schedule disable <id>      — pause a job",

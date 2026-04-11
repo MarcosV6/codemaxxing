@@ -1156,7 +1156,7 @@ function App() {
 
     if (await dispatchRegisteredCommands([
       // Phase B & C: Agent/Schedule/Orchestrate commands
-      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg, { setAgentPicker }).then(r => r ?? false),
+      () => tryHandleBackgroundAgentCommand(trimmed, process.cwd(), addMsg, { setAgentPicker, agentOptions: commandAgentOptions }).then(r => r ?? false),
       () => tryHandleScheduleCommand(trimmed, commandAgentOptions, addMsg, { setSchedulePicker }).then(r => r ?? false),
       () => tryHandleOrchestrateCommand(
         trimmed,
