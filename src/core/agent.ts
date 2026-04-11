@@ -17,6 +17,7 @@ import { refreshAnthropicOAuthToken } from "../utils/anthropic-oauth.js";
 import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
 import { getCredential, saveCredential } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
+import { detectModelContextWindow, getStaticContextWindow } from "../utils/model-context.js";
 import type { ProviderConfig } from "../config.js";
 
 // ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
@@ -246,6 +247,13 @@ export class CodingAgent {
   private totalCost: number = 0;
   // Tokens-per-second of the most recent assistant completion (null until first response)
   private lastTokensPerSecond: number | null = null;
+  // Detected model context window in tokens. Starts as a static-table guess
+  // (best effort, sync) and gets refined by an async runtime detection that
+  // queries Ollama / LM Studio / OpenRouter native APIs once per model switch.
+  private contextWindow: number | null = null;
+  // Whether the user explicitly set a compression threshold in config — if so,
+  // we leave it alone and don't auto-derive it from the detected window.
+  private compressionThresholdLocked: boolean = false;
   private systemPrompt: string = "";
   private compressionThreshold: number;
   private sessionDisabledSkills: Set<string> = new Set();
@@ -286,6 +294,39 @@ export class CodingAgent {
     }
     this.gitEnabled = isGitRepo(this.cwd);
     this.compressionThreshold = options.contextCompressionThreshold ?? 80000;
+    this.compressionThresholdLocked = options.contextCompressionThreshold !== undefined;
+    // Best-effort sync seed from the static lookup so the status bar has
+    // something sensible before the async detection finishes.
+    this.contextWindow = getStaticContextWindow(this.model);
+    void this.refreshContextWindow();
+  }
+
+  /**
+   * Async runtime detection of the loaded model's context window. Queries
+   * Ollama / LM Studio / OpenRouter native APIs (with short timeouts) and
+   * falls back through static lookup. Updates compressionThreshold to ~75%
+   * of the detected window unless the user explicitly pinned it in config.
+   *
+   * Safe to call repeatedly; failures are silent.
+   */
+  private async refreshContextWindow(): Promise<void> {
+    try {
+      const detected = await detectModelContextWindow({
+        model: this.model,
+        baseUrl: this.currentBaseUrl,
+        providerType: this.providerType,
+      });
+      if (detected > 0) {
+        this.contextWindow = detected;
+        if (!this.compressionThresholdLocked) {
+          // Compact when we hit ~75% of the window so the model still has
+          // headroom to actually generate a response after summarization.
+          this.compressionThreshold = Math.floor(detected * 0.75);
+        }
+      }
+    } catch {
+      // detection is best-effort; static seed remains in place
+    }
   }
 
   /**
@@ -553,7 +594,15 @@ export class CodingAgent {
       const toolCalls: Map<number, AssembledToolCall> = new Map();
       let chunkPromptTokens = 0;
       let chunkCompletionTokens = 0;
-      let firstTokenMs: number | null = null;
+      // Visible-content throughput tracking. We count only content deltas the user
+      // actually sees stream on screen (excluding <think> blocks and tool-call
+      // arg deltas) and time from the first such delta to the last. Each delta is
+      // ~1 token on Ollama / LM Studio / llama.cpp, so this approximates real
+      // tok/s without depending on the server reporting usage.completion_tokens
+      // (which can also wrongly include thinking/tool tokens for the whole turn).
+      let firstVisibleMs: number | null = null;
+      let lastVisibleMs: number | null = null;
+      let visibleDeltaCount = 0;
 
       for await (const chunk of stream) {
         // Check for abort
@@ -571,7 +620,6 @@ export class CodingAgent {
 
         // Handle content tokens (the actual response text)
         if (delta.content) {
-          if (firstTokenMs === null) firstTokenMs = Date.now();
           const token = delta.content;
 
           // Detect <think> blocks from reasoning models (Qwen, DeepSeek, etc.)
@@ -589,6 +637,12 @@ export class CodingAgent {
             thinkingText += token;
             continue;
           }
+
+          // Visible content — count it for throughput measurement
+          const now = Date.now();
+          if (firstVisibleMs === null) firstVisibleMs = now;
+          lastVisibleMs = now;
+          visibleDeltaCount++;
 
           contentText += token;
           this.options.onToken?.(token);
@@ -635,14 +689,19 @@ export class CodingAgent {
         updateSessionCost(this.sessionId, this.totalPromptTokens, this.totalCompletionTokens, this.totalCost);
       }
 
-      // Compute throughput from first-token to end of stream — better than including
-      // network latency to the first byte. Skip if we never saw a content token
-      // (e.g., a turn that produced only tool calls).
-      if (chunkCompletionTokens > 0 && firstTokenMs !== null) {
-        const elapsedSec = (Date.now() - firstTokenMs) / 1000;
-        if (elapsedSec > 0.05) {
-          this.lastTokensPerSecond = chunkCompletionTokens / elapsedSec;
-        }
+      // Visible-content throughput. Need at least 2 deltas to have a real time
+      // window — a single-delta response (e.g., just "yes") gives elapsed ≈ 0
+      // and no useful measurement.
+      if (
+        visibleDeltaCount >= 2 &&
+        firstVisibleMs !== null &&
+        lastVisibleMs !== null &&
+        lastVisibleMs > firstVisibleMs
+      ) {
+        const elapsedSec = (lastVisibleMs - firstVisibleMs) / 1000;
+        // (visibleDeltaCount - 1) deltas arrived AFTER the first one in the
+        // measured window — that's the count that corresponds to elapsedSec.
+        this.lastTokensPerSecond = (visibleDeltaCount - 1) / elapsedSec;
       }
 
       // If aborted, return what we have so far
@@ -1463,6 +1522,11 @@ export class CodingAgent {
         apiKey: apiKey ?? this.options.provider.apiKey,
       });
     }
+    // Re-seed and re-detect for the new model. Static guess updates synchronously
+    // so the status bar reflects the change immediately; runtime detection
+    // refines it once it returns.
+    this.contextWindow = getStaticContextWindow(this.model);
+    void this.refreshContextWindow();
   }
 
   /**
@@ -1649,6 +1713,15 @@ export class CodingAgent {
   /** Throughput of the most recent assistant completion, or null if not measured yet. */
   getLastTokensPerSecond(): number | null {
     return this.lastTokensPerSecond;
+  }
+
+  /**
+   * The detected context window for the active model in tokens, or null if
+   * neither the static lookup nor runtime detection produced a value.
+   * Best-effort: callers should fall back to a sensible default when null.
+   */
+  getContextWindow(): number | null {
+    return this.contextWindow;
   }
 
   /**
