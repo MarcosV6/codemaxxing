@@ -23,6 +23,8 @@ import type { HardwareInfo } from "./utils/hardware.js";
 import type { ScoredModel } from "./utils/models.js";
 import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProgress } from "./utils/ollama.js";
 import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
+import { loadHistory, addToHistory, resetHistoryCursor } from "./utils/input-history.js";
+import { checkForUpdate } from "./utils/update-check.js";
 import type { GroupedModels, ModelEntry, ProviderPickerEntry } from "./ui/pickers.js";
 import { getCredential } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
@@ -33,6 +35,9 @@ import {
   refreshConnectionBanner as refreshConnectionBannerImpl,
   connectToProvider as connectToProviderImpl,
 } from "./ui/connection.js";
+import { MarkdownText } from "./ui/markdown.js";
+import { TaskList } from "./ui/task-list.js";
+import { getTasks, onTaskChange, clearTasks, type AgentTask } from "./utils/task-tracker.js";
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
@@ -66,6 +71,13 @@ const SLASH_COMMANDS = [
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
   { cmd: "/context", desc: "show message count" },
+  { cmd: "/compact", desc: "compress conversation context" },
+  { cmd: "/cost", desc: "show token usage and cost" },
+  { cmd: "/tokens", desc: "show current context token count" },
+  { cmd: "/read-only", desc: "add file as read-only context" },
+  { cmd: "/checkpoint", desc: "save current state as checkpoint" },
+  { cmd: "/restore", desc: "restore to a checkpoint" },
+  { cmd: "/checkpoints", desc: "list saved checkpoints" },
   { cmd: "/diff", desc: "show git changes" },
   { cmd: "/undo", desc: "revert last codemaxxing commit" },
   { cmd: "/commit", desc: "commit all changes" },
@@ -82,6 +94,9 @@ const SLASH_COMMANDS = [
   { cmd: "/resume", desc: "resume a past session" },
   { cmd: "/skills", desc: "manage skill packs" },
   { cmd: "/architect", desc: "toggle architect mode" },
+  { cmd: "/test", desc: "run project tests" },
+  { cmd: "/test on", desc: "enable auto-test after changes" },
+  { cmd: "/test off", desc: "disable auto-test" },
   { cmd: "/lint", desc: "show auto-lint status" },
   { cmd: "/lint on", desc: "enable auto-lint" },
   { cmd: "/lint off", desc: "disable auto-lint" },
@@ -97,6 +112,19 @@ const SLASH_COMMANDS = [
   { cmd: "/ollama stop", desc: "stop Ollama server" },
   { cmd: "/ollama pull", desc: "download a model" },
   { cmd: "/ollama delete", desc: "delete a model" },
+  { cmd: "/init", desc: "create CODEMAXXING.md project rules" },
+  { cmd: "/export", desc: "export conversation to file" },
+  { cmd: "/approve", desc: "set approval mode (suggest/auto-edit/full-auto)" },
+  { cmd: "/image", desc: "send an image for analysis" },
+  { cmd: "/doctor", desc: "run diagnostics" },
+  { cmd: "/copy", desc: "copy last response to clipboard" },
+  { cmd: "/voice", desc: "toggle voice input (hold to record)" },
+  { cmd: "/skills learned", desc: "show auto-learned skills" },
+  { cmd: "/hooks", desc: "show configured hooks" },
+  { cmd: "/memory", desc: "view persistent memories" },
+  { cmd: "/memory search", desc: "search memories" },
+  { cmd: "/memory forget", desc: "delete a memory by ID" },
+  { cmd: "/memory stats", desc: "show memory statistics" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -136,31 +164,58 @@ const SPINNER_MESSAGES = [
   "Living rent free in your RAM...", "Ate and left no crumbs...",
 ];
 
-// ── Neon Spinner ──
+// ── Gradient color helpers ──
+function lerpHex(hex1: string, hex2: string, t: number): string {
+  const parse = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const [r1, g1, b1] = parse(hex1);
+  const [r2, g2, b2] = parse(hex2);
+  const c = (a: number, b: number) => Math.round(a + (b - a) * t).toString(16).padStart(2, "0");
+  return `#${c(r1, r2)}${c(g1, g2)}${c(b1, b2)}`;
+}
+
+// ── Spinner bar: animated gradient pulse ──
+const SPINNER_BAR_WIDTH = 20;
+const SPINNER_BAR_CHAR = "━";
+const SPINNER_BAR_DOT = "●";
+
 function NeonSpinner({ message, colors }: { message: string; colors: Theme['colors'] }) {
-  const [frame, setFrame] = useState(0);
+  const [tick, setTick] = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     const start = Date.now();
     const interval = setInterval(() => {
-      setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+      setTick((t) => t + 1);
       setElapsed(Math.floor((Date.now() - start) / 1000));
-    }, 80);
+    }, 60);
     return () => clearInterval(interval);
   }, []);
 
+  const c1 = colors.primary.startsWith("#") ? colors.primary : "#00FFFF";
+  const c2 = colors.secondary.startsWith("#") ? colors.secondary : "#FF00FF";
+
+  // Bouncing dot position
+  const pos = Math.floor((Math.sin(tick * 0.08) + 1) * 0.5 * (SPINNER_BAR_WIDTH - 1));
+
+  const bar: React.ReactNode[] = [];
+  for (let i = 0; i < SPINNER_BAR_WIDTH; i++) {
+    const dist = Math.abs(i - pos);
+    const glow = Math.max(0, 1 - dist / 4);
+    const color = lerpHex(colors.muted.startsWith("#") ? colors.muted : "#444444", c1, glow);
+    bar.push(<Text key={i} color={color}>{i === pos ? SPINNER_BAR_DOT : SPINNER_BAR_CHAR}</Text>);
+  }
+
   return (
-    <Text>
-      {"  "}<Text color={colors.spinner}>{SPINNER_FRAMES[frame]}</Text>
-      {" "}<Text bold color={colors.secondary}>{message}</Text>
-      {" "}<Text color={colors.muted}>[{elapsed}s]</Text>
-    </Text>
+    <Box marginLeft={2} marginTop={0}>
+      <Text>{bar}</Text>
+      <Text>{" "}</Text>
+      <Text bold color={c2}>{message}</Text>
+      <Text color={colors.muted}>{" "}{elapsed}s</Text>
+    </Box>
   );
 }
 
-// ── Streaming Indicator (subtle, shows model is still working) ──
-const STREAM_DOTS = ["·  ", "·· ", "···", " ··", "  ·", "   "];
+// ── Streaming Indicator: pulsing dots with gradient ──
 const STREAM_MESSAGES = [
   "Streaming...",
   "Yapping live...",
@@ -183,14 +238,13 @@ const STREAM_MESSAGES = [
   "Generating cinema...",
   "No cap streaming...",
 ];
+
 function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
-  const [frame, setFrame] = useState(0);
+  const [tick, setTick] = useState(0);
   const [message, setMessage] = useState(() => STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setFrame((f) => (f + 1) % STREAM_DOTS.length);
-    }, 300);
+    const interval = setInterval(() => setTick((t) => t + 1), 150);
     return () => clearInterval(interval);
   }, []);
 
@@ -201,11 +255,23 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
     return () => clearInterval(interval);
   }, []);
 
+  const c1 = colors.primary.startsWith("#") ? colors.primary : "#00FFFF";
+  const c2 = colors.secondary.startsWith("#") ? colors.secondary : "#FF00FF";
+
+  // Three pulsing dots with staggered phase
+  const dots = [0, 1, 2].map((i) => {
+    const phase = (tick + i * 3) % 12;
+    const brightness = phase < 6 ? phase / 6 : (12 - phase) / 6;
+    const color = lerpHex(colors.muted.startsWith("#") ? colors.muted : "#444444", c1, brightness);
+    return <Text key={i} color={color} bold>{"●"}</Text>;
+  });
+
   return (
-    <Text>
-      {"  "}<Text color={colors.spinner}>{STREAM_DOTS[frame]}</Text>
-      {" "}<Text color={colors.secondary}>{message}</Text>
-    </Text>
+    <Box marginLeft={2}>
+      <Text>{dots[0]} {dots[1]} {dots[2]}</Text>
+      <Text>{" "}</Text>
+      <Text color={c2}>{message}</Text>
+    </Box>
   );
 }
 
@@ -239,6 +305,22 @@ function dedupeLeakedPasteInput(typedInput: string, pasteText: string): string {
 }
 
 
+// ── Tool icons for visual flair ──
+function getToolIcon(toolText: string): string {
+  const t = toolText.toLowerCase();
+  if (t.includes("read_file") || t.includes("read file")) return "\u{1F4C4}";
+  if (t.includes("write_file") || t.includes("write file") || t.includes("create_file")) return "\u270F\uFE0F";
+  if (t.includes("edit_file") || t.includes("edit file") || t.includes("apply_diff") || t.includes("replace")) return "\u2702\uFE0F";
+  if (t.includes("run_command") || t.includes("bash") || t.includes("execute") || t.includes("shell")) return "\u{1F4BB}";
+  if (t.includes("search") || t.includes("grep") || t.includes("find") || t.includes("glob")) return "\u{1F50D}";
+  if (t.includes("list_dir") || t.includes("list dir") || t.includes("directory")) return "\u{1F4C1}";
+  if (t.includes("web_search") || t.includes("web search") || t.includes("browse")) return "\u{1F310}";
+  if (t.includes("ask_user") || t.includes("ask user")) return "\u{1F4AC}";
+  if (t.includes("git")) return "\u{1F33F}";
+  if (t.includes("test")) return "\u{1F9EA}";
+  return "\u2699\uFE0F";
+}
+
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
@@ -262,7 +344,17 @@ function App() {
   const activeRequestIdRef = useRef(0);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
-  const [theme, setTheme] = useState<Theme>(getTheme(DEFAULT_THEME));
+  const [theme, setTheme] = useState<Theme>(() => {
+    // Honor the persisted preference from settings.json so the user's choice
+    // survives restarts. Falls back to DEFAULT_THEME if unset or invalid.
+    try {
+      const savedName = loadConfig().defaults.theme;
+      if (savedName) return getTheme(savedName);
+    } catch {
+      // ignore — config read is best-effort
+    }
+    return getTheme(DEFAULT_THEME);
+  });
   const providerRef = React.useRef<{ baseUrl: string; apiKey: string }>({ baseUrl: "", apiKey: "" });
   const [ready, setReady] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState<string[]>([]);
@@ -304,20 +396,20 @@ function App() {
     const requestIdAtStart = activeRequestId;
     let warned = false;
 
+    // Heads-up only — large local models can legitimately take 2+ minutes for the
+    // first token on a fresh load. Don't tear down state; just let the user know
+    // it's still working so they can decide whether to wait or Ctrl+C.
     const interval = setInterval(() => {
       if (warned) return;
       const idleMs = Date.now() - lastActivityAt;
-      if (idleMs > 60000 && requestIdAtStart === activeRequestIdRef.current) {
+      if (idleMs > 120000 && requestIdAtStart === activeRequestIdRef.current) {
         warned = true;
         const toolSuffix = lastToolName ? ` (${lastToolName})` : "";
-        addMsg("error", `⏱️ No model activity for 60s while ${agentStage}${toolSuffix}. Request may be hung.`);
-        setLoading(false);
-        setStreaming(false);
-        setAgentStage("hung");
+        addMsg("info", `still waiting on the model… ${Math.round(idleMs / 1000)}s since last activity${toolSuffix}. Press Ctrl+C twice to cancel.`);
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [loading, agent, lastActivityAt, agentStage, lastToolName, activeRequestId]);
+  }, [loading, agent, lastActivityAt, lastToolName, activeRequestId]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -343,6 +435,21 @@ function App() {
   const [wizardPullError, setWizardPullError] = useState<string | null>(null);
   const [wizardSelectedModel, setWizardSelectedModel] = useState<ScoredModel | null>(null);
 
+  // ── Agent Task Progress ──
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  useEffect(() => {
+    onTaskChange(() => setAgentTasks(getTasks()));
+  }, []);
+  // Clear completed tasks a few seconds after loading stops
+  const prevLoading = useRef(false);
+  useEffect(() => {
+    if (prevLoading.current && !loading && agentTasks.length > 0) {
+      const timer = setTimeout(() => clearTasks(), 3000);
+      return () => clearTimeout(timer);
+    }
+    prevLoading.current = loading;
+  }, [loading, agentTasks.length]);
+
   // Listen for paste events from stdin interceptor — all pastes arrive as
   // attachment blocks (never inline) to avoid the ink-text-input reconciliation race.
   useEffect(() => {
@@ -358,6 +465,18 @@ function App() {
     };
     pasteEvents.on("paste", handler);
     return () => { pasteEvents.off("paste", handler); };
+  }, []);
+
+  // Load input history on mount
+  useEffect(() => { loadHistory(); }, []);
+
+  // Check for updates (non-blocking)
+  useEffect(() => {
+    checkForUpdate(VERSION).then((latest) => {
+      if (latest) {
+        addMsg("info", `📦 Update available: v${VERSION} → v${latest}\n   Run: npm i -g codemaxxing@latest`);
+      }
+    });
   }, []);
 
   // Refresh the connection banner to reflect current provider status
@@ -584,9 +703,11 @@ function App() {
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
+    resetHistoryCursor();
     if (!submittedValue.trim()) return;
 
     const trimmed = submittedValue.trim();
+    addToHistory(trimmed);
 
     // If the agent is waiting for a user answer (ask_user tool), resolve it
     if (askUserResolveRef.current) {
@@ -601,6 +722,324 @@ function App() {
 
     addMsg("user", submittedValue);
 
+    if (trimmed === "/init") {
+      const fs = await import("fs");
+      const path = await import("path");
+      const rulesPath = path.join(process.cwd(), "CODEMAXXING.md");
+      if (fs.existsSync(rulesPath)) {
+        addMsg("info", `CODEMAXXING.md already exists. Edit it directly to update project rules.`);
+        return;
+      }
+      // Detect project info for the template
+      let projectName = "my-project";
+      let projectDesc = "";
+      const pkgPath = path.join(process.cwd(), "package.json");
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+          if (pkg.name) projectName = pkg.name;
+          if (pkg.description) projectDesc = pkg.description;
+        } catch {}
+      }
+      const template = [
+        `# ${projectName}`,
+        "",
+        projectDesc ? `${projectDesc}\n` : "",
+        "## Project Guidelines",
+        "",
+        "<!-- Add project-specific instructions for the AI agent here. -->",
+        "<!-- These rules are loaded into every conversation automatically. -->",
+        "",
+        "### Code Style",
+        "- Follow existing code conventions in this project",
+        "- Use TypeScript strict mode where applicable",
+        "",
+        "### Testing",
+        "- Write tests for new functionality",
+        "- Run tests before committing",
+        "",
+        "### Git",
+        "- Use conventional commit messages",
+        "- Keep PRs focused and small",
+        "",
+        "### Do NOT",
+        "- Modify files outside the project root",
+        "- Commit sensitive credentials",
+        "- Skip existing tests",
+        "",
+      ].join("\n");
+      fs.writeFileSync(rulesPath, template, "utf-8");
+      addMsg("info", `📋 Created CODEMAXXING.md — edit it to customize agent behavior for this project.`);
+      return;
+    }
+    if (trimmed === "/export" || trimmed.startsWith("/export ")) {
+      const outPath = trimmed.replace("/export", "").trim() || `codemaxxing-chat-${Date.now()}.md`;
+      const fs = await import("fs");
+      const path = await import("path");
+      const resolved = path.resolve(outPath);
+      const lines: string[] = [`# Codemaxxing Chat Export\n`, `Date: ${new Date().toISOString()}`, `Model: ${modelName}\n`, "---\n"];
+      for (const msg of messages) {
+        if (msg.type === "user") lines.push(`## User\n${msg.text}\n`);
+        else if (msg.type === "response") lines.push(`## Assistant\n${msg.text}\n`);
+        else if (msg.type === "tool") lines.push(`> Tool: ${msg.text}\n`);
+        else if (msg.type === "tool-result") lines.push(`> ${msg.text}\n`);
+        else if (msg.type === "error") lines.push(`**Error:** ${msg.text}\n`);
+        else if (msg.type === "info") lines.push(`*${msg.text}*\n`);
+      }
+      try {
+        fs.writeFileSync(resolved, lines.join("\n"), "utf-8");
+        addMsg("info", `📝 Exported ${messages.length} messages to ${resolved}`);
+      } catch (err: any) {
+        addMsg("error", `Export failed: ${err.message}`);
+      }
+      return;
+    }
+    if (trimmed === "/approve" || trimmed.startsWith("/approve ")) {
+      if (!agent) { addMsg("error", "Not connected."); return; }
+      const mode = trimmed.replace("/approve", "").trim();
+      if (!mode) {
+        const current = agent.getApprovalMode();
+        addMsg("info",
+          `🔒 Approval mode: ${current}\n` +
+          `  /approve suggest    — ask before all dangerous tools (default)\n` +
+          `  /approve auto-edit  — auto-approve file edits, ask for commands\n` +
+          `  /approve full-auto  — auto-approve everything (yolo mode)`
+        );
+        return;
+      }
+      if (mode === "suggest" || mode === "auto-edit" || mode === "full-auto") {
+        agent.setApprovalMode(mode);
+        const labels: Record<string, string> = {
+          "suggest": "🔒 Suggest — all dangerous tools require approval",
+          "auto-edit": "🔓 Auto-edit — file edits auto-approved, commands need approval",
+          "full-auto": "⚡ Full-auto — everything auto-approved (yolo mode)",
+        };
+        addMsg("info", `Approval mode: ${labels[mode]}`);
+      } else {
+        addMsg("error", `Unknown mode: ${mode}. Use: suggest, auto-edit, or full-auto`);
+      }
+      return;
+    }
+    if (trimmed.startsWith("/image")) {
+      const imgPath = trimmed.replace("/image", "").trim();
+      if (!imgPath) {
+        addMsg("info", "Usage: /image <file-path> [question]\n  Send an image for the model to analyze.\n  Example: /image screenshot.png what's wrong with this UI?");
+        return;
+      }
+      // Split path and optional question
+      const parts = imgPath.split(/\s+/);
+      const filePath = parts[0];
+      const question = parts.slice(1).join(" ") || "Describe this image in detail.";
+
+      const fs = await import("fs");
+      const path = await import("path");
+      const resolved = path.resolve(filePath);
+      if (!fs.existsSync(resolved)) {
+        addMsg("error", `Image not found: ${resolved}`);
+        return;
+      }
+      const ext = path.extname(resolved).toLowerCase();
+      const supportedExts: Record<string, string> = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+      };
+      if (!supportedExts[ext]) {
+        addMsg("error", `Unsupported image format: ${ext}. Supported: ${Object.keys(supportedExts).join(", ")}`);
+        return;
+      }
+      const data = fs.readFileSync(resolved);
+      const base64 = data.toString("base64");
+      const sizeKB = (data.length / 1024).toFixed(1);
+      addMsg("info", `🖼️ Sending image: ${resolved} (${sizeKB}KB)`);
+      setLoading(true);
+      setSpinnerMsg("Analyzing image...");
+      try {
+        const response = await agent!.send(question, [{ mime: supportedExts[ext], base64 }]);
+        setLoading(false);
+        setStreaming(false);
+        if (!response.startsWith("(")) {
+          // Response was already streamed via onToken
+        }
+      } catch (err: any) {
+        setLoading(false);
+        addMsg("error", `Image analysis failed: ${err.message}`);
+      }
+      return;
+    }
+    if (trimmed === "/voice") {
+      const { detectVoiceCapabilities, isRecording, startRecording, stopRecording, transcribeAudio, cleanupVoiceFiles } = await import("./utils/voice.js");
+
+      if (isRecording()) {
+        // Stop recording and transcribe
+        const result = stopRecording();
+        if (!result) {
+          addMsg("error", "No active recording.");
+          return;
+        }
+        addMsg("info", `\u{1F3A4} Recording stopped (${result.duration}s). Transcribing...`);
+        setLoading(true);
+        setSpinnerMsg("Transcribing audio...");
+        const { text, error } = await transcribeAudio(result.filePath);
+        setLoading(false);
+        if (error) {
+          addMsg("error", `Transcription failed: ${error}`);
+          return;
+        }
+        if (!text.trim()) {
+          addMsg("info", "No speech detected.");
+          return;
+        }
+        addMsg("info", `\u{1F3A4} Transcribed: "${text}"`);
+        // Feed the transcribed text to the agent
+        setInput(text);
+        setInputKey((k) => k + 1);
+        cleanupVoiceFiles();
+        return;
+      }
+
+      // Check capabilities first
+      const caps = detectVoiceCapabilities();
+      if (!caps.canRecord) {
+        addMsg("error", `\u{1F3A4} Voice input not available.\nMissing: ${caps.missing.join("\n  ")}`);
+        return;
+      }
+      if (!caps.canTranscribe) {
+        addMsg("error", `\u{1F3A4} Transcription not available.\nMissing: ${caps.missing.join("\n  ")}`);
+        return;
+      }
+
+      // Start recording
+      const { success, error } = startRecording();
+      if (!success) {
+        addMsg("error", `Recording failed: ${error}`);
+        return;
+      }
+      addMsg("info", "\u{1F3A4} Recording... Type /voice again to stop and transcribe.");
+      return;
+    }
+    if (trimmed === "/skills learned") {
+      const { listLearnedSkills, deleteLearnedSkill } = await import("./utils/skill-learner.js");
+      const skills = listLearnedSkills();
+      if (skills.length === 0) {
+        addMsg("info", "\u{1F9E0} No learned skills yet. The agent will auto-learn from successful multi-step workflows.");
+        return;
+      }
+      const lines = skills.map(s =>
+        `  \u2022 ${s.name} (used ${s.times_applied}x)\n    ${s.description}\n    Tools: ${s.tools_used.join(", ")}`
+      );
+      addMsg("info", `\u{1F9E0} ${skills.length} learned skills:\n${lines.join("\n")}`);
+      return;
+    }
+    if (trimmed === "/hooks") {
+      const { getHooksSummary } = await import("./utils/hooks.js");
+      addMsg("info", `\u{1FA9D} Hooks:\n${getHooksSummary(process.cwd())}`);
+      return;
+    }
+    if (trimmed === "/memory" || trimmed.startsWith("/memory ")) {
+      const { getMemories, recall, forget, getMemoryStats } = await import("./utils/memory.js");
+      const sub = trimmed.replace("/memory", "").trim();
+
+      if (sub === "stats") {
+        const stats = getMemoryStats();
+        const typeLines = Object.entries(stats.byType).map(([t, c]) => `  ${t}: ${c}`).join("\n");
+        const scopeLines = Object.entries(stats.byScope).map(([s, c]) => `  ${s}: ${c}`).join("\n");
+        addMsg("info", `\u{1F9E0} Memory Stats\n  Total: ${stats.total}\n\nBy type:\n${typeLines}\n\nBy scope:\n${scopeLines}`);
+        return;
+      }
+
+      if (sub.startsWith("search ")) {
+        const query = sub.replace("search ", "").trim();
+        if (!query) { addMsg("info", "Usage: /memory search <query>"); return; }
+        const results = recall(query, { limit: 15 });
+        if (results.length === 0) { addMsg("info", "No memories found."); return; }
+        const lines = results.map(m => `  #${m.id} [${m.type}] ${m.key}: ${m.content}`);
+        addMsg("info", `\u{1F9E0} Found ${results.length} memories:\n${lines.join("\n")}`);
+        return;
+      }
+
+      if (sub.startsWith("forget ")) {
+        const idStr = sub.replace("forget ", "").trim();
+        const id = parseInt(idStr, 10);
+        if (isNaN(id)) { addMsg("error", "Usage: /memory forget <id>"); return; }
+        const ok = forget(id);
+        addMsg(ok ? "info" : "error", ok ? `\u2713 Memory #${id} deleted.` : `Memory #${id} not found.`);
+        return;
+      }
+
+      // Default: show all memories
+      const mems = getMemories({ limit: 30 });
+      if (mems.length === 0) {
+        addMsg("info", "\u{1F9E0} No memories yet. The agent will automatically save useful information as you work together.");
+        return;
+      }
+      const lines = mems.map(m => `  #${m.id} [${m.type}] ${m.key}: ${m.content} (importance: ${m.importance})`);
+      addMsg("info", `\u{1F9E0} ${mems.length} memories:\n${lines.join("\n")}`);
+      return;
+    }
+    if (trimmed === "/doctor") {
+      const lines: string[] = ["🩺 Diagnostics:"];
+      // Node version
+      lines.push(`  Node.js: ${process.version}`);
+      lines.push(`  Platform: ${process.platform} ${process.arch}`);
+      lines.push(`  CWD: ${process.cwd()}`);
+      // Git
+      const { isGitRepo: isGit, getBranch: getBr, getStatus: getSt } = await import("./utils/git.js");
+      if (isGit(process.cwd())) {
+        lines.push(`  Git: ${getBr(process.cwd())} (${getSt(process.cwd())})`);
+      } else {
+        lines.push("  Git: not a git repo");
+      }
+      // Connection
+      if (agent) {
+        lines.push(`  Model: ${modelName}`);
+        const cost = agent.getCostInfo();
+        lines.push(`  Session tokens: ${cost.promptTokens + cost.completionTokens}`);
+        const linter = agent.getDetectedLinter();
+        lines.push(`  Linter: ${linter ? `${linter.name} (${agent.isAutoLintEnabled() ? "ON" : "OFF"})` : "none detected"}`);
+        const testRunner = agent.getDetectedTestRunner();
+        lines.push(`  Test runner: ${testRunner ? `${testRunner.name} (auto: ${agent.isAutoTestEnabled() ? "ON" : "OFF"})` : "none detected"}`);
+        lines.push(`  Context: ${agent.getContextLength()} messages, ~${agent.estimateTokens()} tokens`);
+        const mcpCount = agent.getMCPServerCount();
+        lines.push(`  MCP servers: ${mcpCount}`);
+      } else {
+        lines.push("  Agent: not connected");
+      }
+      // Check Ollama
+      const ollamaUp = await isOllamaRunning();
+      lines.push(`  Ollama: ${ollamaUp ? "running" : "not running"}`);
+      // Credentials
+      const creds: string[] = [];
+      if (getCredential("openai")) creds.push("OpenAI");
+      if (getCredential("anthropic")) creds.push("Anthropic");
+      if (getCredential("openrouter")) creds.push("OpenRouter");
+      if (getCredential("qwen")) creds.push("Qwen");
+      if (getCredential("copilot")) creds.push("Copilot");
+      lines.push(`  Credentials: ${creds.length > 0 ? creds.join(", ") : "none"}`);
+      addMsg("info", lines.join("\n"));
+      return;
+    }
+    if (trimmed === "/copy") {
+      // Find last response message
+      const lastResponse = [...messages].reverse().find((m) => m.type === "response");
+      if (lastResponse) {
+        const { execSync: cpExec } = await import("child_process");
+        try {
+          if (process.platform === "darwin") {
+            cpExec("pbcopy", { input: lastResponse.text });
+          } else if (process.platform === "win32") {
+            cpExec("clip", { input: lastResponse.text });
+          } else {
+            cpExec("xclip -selection clipboard", { input: lastResponse.text });
+          }
+          addMsg("info", "📋 Last response copied to clipboard.");
+        } catch {
+          addMsg("error", "Failed to copy — clipboard tool not available.");
+        }
+      } else {
+        addMsg("info", "No response to copy.");
+      }
+      return;
+    }
     if (trimmed === "/quit" || trimmed === "/exit") {
       // Check if Ollama is running and offer to stop it
       const ollamaUp = await isOllamaRunning();
@@ -656,12 +1095,22 @@ function App() {
         "  /resume    — resume a past session",
         "  /reset     — clear conversation",
         "  /context   — show message count",
+        "  /compact   — compress conversation context",
+        "  /cost      — show token usage and estimated cost",
+        "  /tokens    — show current context token count",
+        "  /read-only <file> — add file as read-only context",
+        "  /checkpoint [label] — save current state",
+        "  /checkpoints — list saved checkpoints",
+        "  /restore <id> — restore to a checkpoint",
         "  /diff      — show git changes",
         "  /undo      — revert last codemaxxing commit",
         "  /commit    — commit all changes",
         "  /push      — push to remote",
         "  /git on       — enable auto-commits",
         "  /git off      — disable auto-commits",
+        "  /test      — run project tests",
+        "  /test on   — enable auto-test after file changes",
+        "  /test off  — disable auto-test",
         "  /agent        — background agent management (list, start, pause, delete)",
         "  /schedule     — cron job scheduling (add, list, remove)",
         "  /orchestrate  — multi-agent collaboration orchestration",
@@ -681,6 +1130,18 @@ function App() {
         "  /ollama stop — stop Ollama server (frees GPU RAM)",
         "  /ollama pull <model> — download a model",
         "  /ollama delete <model> — delete a model from disk",
+        "  /init      — create CODEMAXXING.md project rules template",
+        "  /export [path] — export conversation to markdown file",
+        "  /approve [mode] — set approval mode (suggest/auto-edit/full-auto)",
+        "  /image <path> [question] — send image for analysis",
+        "  /doctor    — run diagnostics",
+        "  /copy      — copy last response to clipboard",
+        "  /voice     — toggle voice input (record & transcribe)",
+        "  /hooks     — show configured lifecycle hooks",
+        "  /memory    — view persistent memories",
+        "  /memory search <query> — search memories",
+        "  /memory forget <id> — delete a memory",
+        "  /memory stats — memory statistics",
         "  /quit      — exit",
       ].join("\n"));
       return;
@@ -824,6 +1285,72 @@ function App() {
     }
     if (trimmed === "/context") {
       addMsg("info", `Messages in context: ${agent!.getContextLength()}`);
+      return;
+    }
+    if (trimmed === "/compact") {
+      const tokens = agent!.estimateTokens();
+      const msgs = agent!.getContextLength();
+      if (msgs <= 11) {
+        addMsg("info", `Context too small to compress (${msgs} messages, ~${tokens} tokens).`);
+        return;
+      }
+      setLoading(true);
+      setSpinnerMsg("Compressing context...");
+      const result = await agent!.compressContext();
+      setLoading(false);
+      if (result) {
+        const saved = result.oldTokens - result.newTokens;
+        const savedStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}k` : String(saved);
+        addMsg("info", `📦 Context compressed: ~${savedStr} tokens freed (${result.oldTokens} → ${result.newTokens})`);
+      } else {
+        addMsg("info", "Nothing to compress.");
+      }
+      return;
+    }
+    if (trimmed === "/cost") {
+      const cost = agent!.getCostInfo();
+      const promptStr = cost.promptTokens >= 1000 ? `${(cost.promptTokens / 1000).toFixed(1)}k` : String(cost.promptTokens);
+      const compStr = cost.completionTokens >= 1000 ? `${(cost.completionTokens / 1000).toFixed(1)}k` : String(cost.completionTokens);
+      const totalTokens = cost.promptTokens + cost.completionTokens;
+      const totalStr = totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : String(totalTokens);
+      const costStr = cost.totalCost < 0.01 ? `$${cost.totalCost.toFixed(4)}` : `$${cost.totalCost.toFixed(2)}`;
+      addMsg("info",
+        `💰 Session Cost\n` +
+        `  Prompt tokens:     ${promptStr}\n` +
+        `  Completion tokens: ${compStr}\n` +
+        `  Total tokens:      ${totalStr}\n` +
+        `  Estimated cost:    ${costStr}`
+      );
+      return;
+    }
+    if (trimmed === "/tokens") {
+      const contextTokens = agent!.estimateTokens();
+      const msgs = agent!.getContextLength();
+      const tokStr = contextTokens >= 1000 ? `${(contextTokens / 1000).toFixed(1)}k` : String(contextTokens);
+      addMsg("info", `📊 Context: ${msgs} messages, ~${tokStr} tokens`);
+      return;
+    }
+    if (trimmed.startsWith("/read-only")) {
+      const filePath = trimmed.replace("/read-only", "").trim();
+      if (!filePath) {
+        addMsg("info", "Usage: /read-only <file-path>\n  Adds a file as read-only context for the LLM.");
+        return;
+      }
+      const fs = await import("fs");
+      const path = await import("path");
+      const resolved = path.resolve(filePath);
+      if (!fs.existsSync(resolved)) {
+        addMsg("error", `File not found: ${resolved}`);
+        return;
+      }
+      try {
+        const content = fs.readFileSync(resolved, "utf-8");
+        const sizeKB = (Buffer.byteLength(content) / 1024).toFixed(1);
+        agent!.addReadOnlyFile(resolved, content);
+        addMsg("info", `📎 Added as read-only context: ${resolved} (${sizeKB}KB)`);
+      } catch (err: any) {
+        addMsg("error", `Failed to read file: ${err.message}`);
+      }
       return;
     }
     if (trimmed === "/models" || trimmed === "/model") {
@@ -1093,48 +1620,79 @@ function App() {
       )}
 
       {/* ═══ CHAT MESSAGES ═══ */}
-      {messages.map((msg) => {
+      {messages.map((msg, idx) => {
+        // Insert separator before user messages (except the very first one)
+        const prevMsg = idx > 0 ? messages[idx - 1] : null;
+        const needsSep = msg.type === "user" && prevMsg && prevMsg.type !== "user";
+
         switch (msg.type) {
           case "user":
             return (
-              <Box key={msg.id} marginTop={1} flexDirection="column">
-                {msg.text.split("\n").map((line, i) => (
-                  <Text key={i} color={theme.colors.userInput} wrap="wrap">
-                    {i === 0 ? "  > " : "    "}{line}
-                  </Text>
-                ))}
+              <Box key={msg.id} flexDirection="column" marginTop={needsSep ? 1 : 0}>
+                {needsSep && <Text color={theme.colors.muted}>{"  "}{"\u2500".repeat(Math.min(termWidth - 6, 50))}</Text>}
+                <Box marginTop={0}>
+                  <Text color={theme.colors.userInput} bold>{"  \u276f "}</Text>
+                  <Box flexDirection="column" flexShrink={1}>
+                    {msg.text.split("\n").map((line, i) => (
+                      <Text key={i} color={theme.colors.userInput} wrap="wrap">{line}</Text>
+                    ))}
+                  </Box>
+                </Box>
               </Box>
             );
           case "response":
             return (
-              <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1}>
-                {msg.text.split("\n").map((l, i) => (
-                  <Text key={i} wrap="wrap">
-                    {i === 0 ? <Text color={theme.colors.response}>● </Text> : <Text>  </Text>}
-                    {l.startsWith("```") ? <Text color={theme.colors.muted}>{l}</Text> :
-                     l.startsWith("# ") || l.startsWith("## ") ? <Text bold color={theme.colors.secondary}>{l}</Text> :
-                     l.startsWith("**") ? <Text bold>{l}</Text> :
-                     <Text>{l}</Text>}
-                  </Text>
-                ))}
+              <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1} marginTop={0}>
+                <Box>
+                  <Text color={theme.colors.response} bold>{"\u25cf "}</Text>
+                  <Text color={theme.colors.muted} dimColor>{modelName || "assistant"}</Text>
+                </Box>
+                <Box marginLeft={2}>
+                  <MarkdownText text={msg.text} colors={theme.colors} />
+                </Box>
               </Box>
             );
-          case "tool":
+          case "tool": {
+            const toolIcon = getToolIcon(msg.text);
             return (
-              <Box key={msg.id}>
-                <Text><Text color={theme.colors.response}>  ● </Text><Text bold color={theme.colors.tool}>{msg.text}</Text></Text>
+              <Box key={msg.id} marginLeft={2}>
+                <Text color={theme.colors.tool}>{`  ${toolIcon} `}</Text>
+                <Text bold color={theme.colors.tool}>{msg.text}</Text>
               </Box>
             );
-          case "tool-result":
-            return <Text key={msg.id} color={theme.colors.toolResult}>    {msg.text}</Text>;
+          }
+          case "tool-result": {
+            // Truncate very long tool results
+            const maxLen = 200;
+            const display = msg.text.length > maxLen ? msg.text.slice(0, maxLen) + "\u2026" : msg.text;
+            return (
+              <Box key={msg.id} marginLeft={2}>
+                <Text color={theme.colors.toolResult}>{"    \u2514\u2500 "}{display}</Text>
+              </Box>
+            );
+          }
           case "error":
-            return <Text key={msg.id} color={theme.colors.error}>  {msg.text}</Text>;
+            return (
+              <Box key={msg.id} marginLeft={2}>
+                <Text color={theme.colors.error} bold>{"  \u2718 "}</Text>
+                <Text color={theme.colors.error}>{msg.text}</Text>
+              </Box>
+            );
           case "info":
-            return <Text key={msg.id} color={theme.colors.muted}>  {msg.text}</Text>;
+            return (
+              <Box key={msg.id} marginLeft={2}>
+                <Text color={theme.colors.muted}>{"  \u25cb "}{msg.text}</Text>
+              </Box>
+            );
           default:
             return <Text key={msg.id}>{msg.text}</Text>;
         }
       })}
+
+      {/* ═══ TASK PROGRESS ═══ */}
+      {agentTasks.length > 0 && (
+        <TaskList tasks={agentTasks} colors={theme.colors} />
+      )}
 
       {/* ═══ SPINNER ═══ */}
       {loading && !approval && !streaming && <NeonSpinner message={spinnerMsg} colors={theme.colors} />}
@@ -1256,33 +1814,43 @@ function App() {
         <CommandSuggestions cmdMatches={cmdMatches} cmdIndex={cmdIndex} colors={theme.colors} />
       )}
 
-      {/* ═══ INPUT BOX (always at bottom) ═══ */}
-      <Box borderStyle={process.platform === "win32" && !process.env.WT_SESSION ? "classic" : "single"} borderColor={approval ? theme.colors.warning : theme.colors.border} paddingX={1}>
-        <Text color={theme.colors.secondary} bold>{"> "}</Text>
-        {approval ? (
-          <Text color={theme.colors.warning}>waiting for approval...</Text>
-        ) : ready && !loading && !wizardScreen ? (
-          <Box flexDirection="column" width="100%">
-            {pastedChunks.length > 0 && (
-              <Box flexDirection="column" marginBottom={0}>
-                {pastedChunks.map((p) => (
-                  <Text key={p.id} color={theme.colors.muted}>[Attached paste #{p.id} · {p.lines} lines · Backspace/Esc to remove]</Text>
-                ))}
-              </Box>
-            )}
-            <TextInput
-              key={inputKey}
-              value={input}
-              onChange={(v) => {
-                setInput(sanitizeInputArtifacts(v));
-                setCmdIndex(0);
-              }}
-              onSubmit={handleSubmit}
-            />
-          </Box>
-        ) : (
-          <Text dimColor>{loading ? "waiting for response..." : "initializing..."}</Text>
-        )}
+      {/* ═══ INPUT AREA ═══ */}
+      <Box flexDirection="column" marginTop={0}>
+        <Box
+          borderStyle="round"
+          borderColor={approval ? theme.colors.warning : theme.colors.border}
+          paddingX={1}
+          width="100%"
+        >
+          <Text color={approval ? theme.colors.warning : theme.colors.primary} bold>{"\u276f "}</Text>
+          {approval ? (
+            <Text color={theme.colors.warning} italic>waiting for approval...</Text>
+          ) : ready && !loading && !wizardScreen ? (
+            <Box flexDirection="column" width="100%">
+              {pastedChunks.length > 0 && (
+                <Box flexDirection="column" marginBottom={0}>
+                  {pastedChunks.map((p) => (
+                    <Text key={p.id} color={theme.colors.muted}>
+                      {`\u{1F4CE} paste #${p.id} \u00b7 ${p.lines} lines `}
+                      <Text dimColor>(Backspace to remove)</Text>
+                    </Text>
+                  ))}
+                </Box>
+              )}
+              <TextInput
+                key={inputKey}
+                value={input}
+                onChange={(v) => {
+                  setInput(sanitizeInputArtifacts(v));
+                  setCmdIndex(0);
+                }}
+                onSubmit={handleSubmit}
+              />
+            </Box>
+          ) : (
+            <Text dimColor italic>{loading ? "thinking..." : "connecting..."}</Text>
+          )}
+        </Box>
       </Box>
 
       {/* ═══ STATUS BAR ═══ */}

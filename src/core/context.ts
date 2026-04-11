@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, extname } from "path";
 import { buildRepoMap } from "../utils/repomap.js";
+import { loadIgnorePatterns } from "../utils/ignore.js";
 
 /**
  * Load project rules from CODEMAXXING.md, .codemaxxing/CODEMAXXING.md, or .cursorrules
@@ -72,9 +73,10 @@ export async function buildProjectContext(cwd: string): Promise<string> {
   // Quick file tree (top level only)
   lines.push("\nProject structure:");
   const IGNORE = ["node_modules", ".git", "dist", ".next", "__pycache__", ".DS_Store"];
+  const isIgnored = loadIgnorePatterns(cwd);
   try {
     const entries = readdirSync(cwd)
-      .filter((e) => !IGNORE.includes(e))
+      .filter((e) => !IGNORE.includes(e) && !isIgnored(e))
       .slice(0, 30);
 
     for (const entry of entries) {
@@ -122,6 +124,9 @@ You help developers understand, write, debug, and refactor code. You have access
 - Use the run_command tool for building, testing, and linters
 - Never delete files without explicit confirmation
 
+## Task Progress
+When working on multi-step tasks, use create_task and update_task to show the user a live progress checklist. Create tasks at the start, mark them in_progress as you work, and completed when done. This helps the user see what you're doing. Only use for multi-step work (3+ steps), not simple questions.
+
 ## Editing Strategy
 - Prefer edit_file for small or localized changes — use it when you only need to change part of a file.
 - edit_file requires the exact text to be found in the file, so read the file first to confirm the exact content.
@@ -148,6 +153,28 @@ ${projectContext}
 
   if (skillPrompts) {
     prompt += "\n\n## Active Skills\n" + skillPrompts;
+  }
+
+  // Inject persistent memory from past sessions
+  try {
+    const { buildMemoryContext } = await import("../utils/memory.js");
+    const memoryCtx = buildMemoryContext(process.cwd());
+    if (memoryCtx) {
+      prompt += memoryCtx;
+    }
+  } catch {
+    // Memory module not available — skip
+  }
+
+  // Inject learned skills from past workflows
+  try {
+    const { buildLearnedSkillPrompts } = await import("../utils/skill-learner.js");
+    const learnedCtx = buildLearnedSkillPrompts();
+    if (learnedCtx) {
+      prompt += learnedCtx;
+    }
+  } catch {
+    // Skill learner not available — skip
   }
 
   return prompt;

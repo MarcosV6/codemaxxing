@@ -31,6 +31,10 @@ if (subcmd === "login" || subcmd === "auth") {
   // Headless/CI mode — no TUI
   const { runExec } = await import("./exec.js");
   await runExec(process.argv.slice(3));
+} else if (subcmd === "serve") {
+  // HTTP server mode — expose agent over HTTP/SSE
+  const { runServe } = await import("./serve.js");
+  await runServe(process.argv.slice(3));
 } else {
   // TUI mode — import directly (not spawn) to preserve raw stdin
   await import("./index.js");

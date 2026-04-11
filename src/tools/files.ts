@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, globSync as fsGlobSync } from "fs";
 import { join, relative, dirname, resolve, extname } from "path";
+import { loadIgnorePatterns } from "../utils/ignore.js";
 
 /**
  * Resolve a user-provided path against cwd and ensure it doesn't escape the project root.
@@ -260,6 +261,28 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "web_search",
+      description:
+        "Search the web for information. Returns a list of relevant results with titles, URLs, and snippets. Use this to find documentation, solutions, APIs, or any information not available locally.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The search query",
+          },
+          count: {
+            type: "number",
+            description: "Number of results to return (default: 5, max: 10)",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "think",
       description:
         "Use this tool to think through complex problems step-by-step. Your thoughts are private and not shown to the user. Use this when you need to reason about architecture, plan multi-step changes, or work through a tricky bug before acting.",
@@ -293,6 +316,106 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "remember_memory",
+      description:
+        "Save information to persistent memory for future sessions. Use this to remember user preferences, project decisions, successful workflows, or important facts. Memories persist across sessions and are automatically loaded.",
+      parameters: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            enum: ["user", "project", "workflow", "preference", "fact"],
+            description:
+              "Memory type: 'user' for user info/prefs, 'project' for architecture/decisions, 'workflow' for successful patterns, 'preference' for coding style, 'fact' for important facts",
+          },
+          key: {
+            type: "string",
+            description: "Short identifier for this memory (e.g., 'preferred-language', 'test-framework', 'deploy-process')",
+          },
+          content: {
+            type: "string",
+            description: "The information to remember",
+          },
+          importance: {
+            type: "number",
+            description: "How important is this (0.0-1.0). Default 0.5. Use 0.8+ for critical info, 0.3 for nice-to-know.",
+          },
+        },
+        required: ["type", "key", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "recall_memory",
+      description:
+        "Search persistent memory for information from past sessions. Use this when the user references past work, asks 'do you remember', or when you need context about the user or project.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query — keywords to find relevant memories",
+          },
+          type: {
+            type: "string",
+            enum: ["user", "project", "workflow", "preference", "fact"],
+            description: "Optional: filter by memory type",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_task",
+      description:
+        "Create a task in the progress checklist shown to the user. Use this to break down your work into visible steps so the user can see what you're doing. Each task appears as a checklist item. Create tasks at the start of multi-step work.",
+      parameters: {
+        type: "object",
+        properties: {
+          label: {
+            type: "string",
+            description: "Short task description (e.g., 'Read configuration files', 'Fix failing tests')",
+          },
+          active_label: {
+            type: "string",
+            description: "Optional present-tense label shown while working (e.g., 'Reading config files...')",
+          },
+        },
+        required: ["label"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_task",
+      description:
+        "Update the status of a task in the progress checklist. Mark tasks as 'in_progress' when you start working on them and 'completed' when done.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "number",
+            description: "The task ID returned by create_task",
+          },
+          status: {
+            type: "string",
+            enum: ["pending", "in_progress", "completed"],
+            description: "New status for the task",
+          },
+        },
+        required: ["id", "status"],
+      },
+    },
+  },
 ];
 
 /**
@@ -309,6 +432,44 @@ export async function executeTool(
       if (!filePath) return `Error: Path escapes project root: ${args.path}`;
       if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
       try {
+        // Handle Jupyter notebooks
+        if (extname(filePath).toLowerCase() === ".ipynb") {
+          const raw = readFileSync(filePath, "utf-8");
+          const nb = JSON.parse(raw);
+          const cells = nb.cells || [];
+          const parts: string[] = [`# Notebook: ${args.path} (${cells.length} cells)\n`];
+          for (let i = 0; i < cells.length; i++) {
+            const cell = cells[i];
+            const cellType = cell.cell_type || "unknown";
+            const source = Array.isArray(cell.source) ? cell.source.join("") : (cell.source || "");
+            parts.push(`## Cell ${i + 1} [${cellType}]`);
+            if (cellType === "code") {
+              parts.push("```python\n" + source + "\n```");
+              // Include outputs
+              if (cell.outputs && cell.outputs.length > 0) {
+                for (const output of cell.outputs) {
+                  if (output.text) {
+                    const text = Array.isArray(output.text) ? output.text.join("") : output.text;
+                    parts.push("Output:\n```\n" + text.slice(0, 2000) + "\n```");
+                  } else if (output.data?.["text/plain"]) {
+                    const text = Array.isArray(output.data["text/plain"]) ? output.data["text/plain"].join("") : output.data["text/plain"];
+                    parts.push("Output:\n```\n" + text.slice(0, 2000) + "\n```");
+                  }
+                }
+              }
+            } else {
+              parts.push(source);
+            }
+            parts.push("");
+          }
+          return parts.join("\n");
+        }
+
+        // Handle PDF files (basic text extraction)
+        if (extname(filePath).toLowerCase() === ".pdf") {
+          return `[PDF file: ${args.path}] — Use a PDF-specific tool or run: pdftotext "${filePath}" - to extract text.`;
+        }
+
         return readFileSync(filePath, "utf-8");
       } catch (e: any) {
         return `Error reading file: ${e instanceof Error ? e.message : String(e)}`;
@@ -498,9 +659,10 @@ export async function executeTool(
       try {
         const pattern = String(args.pattern ?? "");
         const baseDir = safePath(cwd, (args.path as string) || ".") || cwd;
+        const isIgnored = loadIgnorePatterns(cwd);
         const matches = fsGlobSync(pattern, { cwd: baseDir })
           .map((f: string) => relative(cwd, join(baseDir, f)))
-          .filter((f: string) => !f.includes("node_modules") && !f.startsWith(".git/"))
+          .filter((f: string) => !f.includes("node_modules") && !f.startsWith(".git/") && !isIgnored(f))
           .sort();
         if (matches.length === 0) return `No files matching: ${pattern}`;
         return matches.slice(0, 100).join("\n") + (matches.length > 100 ? `\n... (${matches.length - 100} more)` : "");
@@ -547,6 +709,55 @@ export async function executeTool(
       }
     }
 
+    case "web_search": {
+      try {
+        const query = String(args.query ?? "");
+        if (!query) return "Error: search query is required";
+        const count = Math.min(Number(args.count ?? 5), 10);
+
+        // Use DuckDuckGo HTML search (no API key needed)
+        const encodedQuery = encodeURIComponent(query);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodedQuery}`, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; codemaxxing/1.0)",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        const html = await res.text();
+
+        // Parse results from DuckDuckGo HTML
+        const results: string[] = [];
+        const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+        let match;
+        while ((match = resultRegex.exec(html)) !== null && results.length < count) {
+          const url = match[1].replace(/&amp;/g, "&");
+          const title = match[2].replace(/<[^>]+>/g, "").trim();
+          const snippet = match[3].replace(/<[^>]+>/g, "").trim();
+          if (title && url) {
+            results.push(`${results.length + 1}. ${title}\n   ${url}\n   ${snippet}`);
+          }
+        }
+
+        if (results.length === 0) {
+          // Fallback: try simpler parsing
+          const linkRegex = /<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/g;
+          while ((match = linkRegex.exec(html)) !== null && results.length < count) {
+            const title = match[1].replace(/<[^>]+>/g, "").trim();
+            if (title) results.push(`${results.length + 1}. ${title}`);
+          }
+        }
+
+        return results.length > 0
+          ? `Search results for "${query}":\n\n${results.join("\n\n")}`
+          : `No results found for "${query}". Try a different search query.`;
+      } catch (e: any) {
+        return `Error searching: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
     case "think": {
       // Think tool is a no-op — the model's reasoning is captured in the tool call itself.
       // We return a brief acknowledgment so the model knows it was processed.
@@ -558,6 +769,41 @@ export async function executeTool(
       // and shows the question to the user. The result comes from user input.
       // This fallback shouldn't normally be reached since the agent intercepts it.
       return `[Question for user]: ${args.question}`;
+    }
+
+    case "remember_memory": {
+      const { remember } = await import("../utils/memory.js");
+      const memType = String(args.type) as any;
+      const scope = cwd.replace(/\//g, "_").replace(/^_/, "");
+      const mem = remember(memType, String(args.key), String(args.content), {
+        scope: memType === "user" || memType === "preference" ? "global" : scope,
+        importance: (args.importance as number) ?? 0.5,
+      });
+      return `Memory saved: [${mem.type}] ${mem.key} (importance: ${mem.importance})`;
+    }
+
+    case "create_task": {
+      const { createTask } = await import("../utils/task-tracker.js");
+      const id = createTask(String(args.label), args.active_label ? String(args.active_label) : undefined);
+      return `Task #${id} created.`;
+    }
+
+    case "update_task": {
+      const { updateTask } = await import("../utils/task-tracker.js");
+      const ok = updateTask(Number(args.id), String(args.status) as any);
+      return ok ? `Task #${args.id} updated to ${args.status}.` : `Task #${args.id} not found.`;
+    }
+
+    case "recall_memory": {
+      const { recall } = await import("../utils/memory.js");
+      const results = recall(String(args.query), {
+        type: args.type ? String(args.type) as any : undefined,
+        limit: 10,
+      });
+      if (results.length === 0) return "No memories found matching that query.";
+      return results.map(m =>
+        `[${m.type}] ${m.key}: ${m.content} (importance: ${m.importance}, last updated: ${m.updated_at})`
+      ).join("\n");
     }
 
     default:
@@ -700,11 +946,13 @@ function listDir(
 ): string[] {
   const entries: string[] = [];
   const IGNORE = ["node_modules", ".git", "dist", ".next", "__pycache__"];
+  const isIgnored = loadIgnorePatterns(cwd);
 
   for (const entry of readdirSync(dirPath)) {
     if (IGNORE.includes(entry)) continue;
     const fullPath = join(dirPath, entry);
     const rel = relative(cwd, fullPath);
+    if (isIgnored(rel)) continue;
     const stat = statSync(fullPath);
     const prefix = "  ".repeat(depth);
 
@@ -729,11 +977,14 @@ function searchInFiles(
   const results: string[] = [];
   const IGNORE = ["node_modules", ".git", "dist", ".next", "__pycache__"];
   const regex = new RegExp(pattern, "gi");
+  const isIgnored = loadIgnorePatterns(cwd);
 
   function search(dir: string) {
     for (const entry of readdirSync(dir)) {
       if (IGNORE.includes(entry)) continue;
       const fullPath = join(dir, entry);
+      const rel = relative(cwd, fullPath);
+      if (isIgnored(rel)) continue;
       const stat = statSync(fullPath);
 
       if (stat.isDirectory()) {

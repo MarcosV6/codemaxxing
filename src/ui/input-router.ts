@@ -6,7 +6,8 @@ import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getA
 import { listThemes, getTheme, THEMES } from "../themes.js";
 import { getSession, loadMessages, deleteSession } from "../utils/sessions.js";
 import { deleteModel, stopOllama } from "../utils/ollama.js";
-import { loadConfig, saveConfig } from "../config.js";
+import { loadConfig, saveConfig, saveThemePreference } from "../config.js";
+import { historyUp, historyDown, resetHistoryCursor } from "../utils/input-history.js";
 import type { CodingAgent } from "../agent.js";
 import type { Theme } from "../themes.js";
 import type { PullProgress } from "../utils/ollama.js";
@@ -186,6 +187,23 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
     return true;
   }
   if (handleCtrlCExit(inputChar, key, ctx)) return true;
+  // Input history (up/down arrows when no picker is open)
+  if (key.upArrow && !ctx.showSuggestionsRef.current) {
+    const entry = historyUp(ctx.input);
+    if (entry !== null) {
+      ctx.setInput(entry);
+      ctx.setInputKey((prev) => prev + 1);
+    }
+    return true;
+  }
+  if (key.downArrow && !ctx.showSuggestionsRef.current) {
+    const entry = historyDown();
+    if (entry !== null) {
+      ctx.setInput(entry);
+      ctx.setInputKey((prev) => prev + 1);
+    }
+    return true;
+  }
   return false;
 }
 
@@ -811,8 +829,9 @@ function handleThemePicker(_inputChar: string, key: Key, ctx: InputRouterContext
   if (key.return) {
     const selected = themeKeys[ctx.themePickerIndex];
     ctx.setTheme(getTheme(selected));
+    saveThemePreference(selected);
     ctx.setThemePicker(false);
-    ctx.addMsg("info", `✅ Switched to theme: ${THEMES[selected].name}`);
+    ctx.addMsg("info", `✅ Switched to theme: ${THEMES[selected].name} (saved as default)`);
     return true;
   }
   if (key.escape) {

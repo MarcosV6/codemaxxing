@@ -21,16 +21,41 @@ interface CommandSuggestionsProps {
 }
 
 export function CommandSuggestions({ cmdMatches, cmdIndex, colors }: CommandSuggestionsProps) {
+  // Sliding window: keep ~8 rows visible, but scroll so the selected match
+  // stays in view. Lets users reach every command via arrow keys without the
+  // suggestion list eating the whole terminal.
+  const WINDOW = 8;
+  const total = cmdMatches.length;
+  let start = 0;
+  if (total > WINDOW) {
+    start = Math.max(0, Math.min(cmdIndex - Math.floor(WINDOW / 2), total - WINDOW));
+  }
+  const end = Math.min(start + WINDOW, total);
+  const visible = cmdMatches.slice(start, end);
+  const hiddenAbove = start;
+  const hiddenBelow = total - end;
+
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={colors.muted} paddingX={1} marginBottom={0}>
-      {cmdMatches.slice(0, 6).map((c, i) => (
-        <Text key={i}>
-          {i === cmdIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
-          <Text color={i === cmdIndex ? colors.suggestion : colors.primary} bold>{c.cmd}</Text>
-          <Text color={colors.muted}>{" — "}{c.desc}</Text>
-        </Text>
-      ))}
-      <Text dimColor>{"  ↑↓ navigate · Tab select"}</Text>
+    <Box flexDirection="column" paddingX={2} marginBottom={0}>
+      {hiddenAbove > 0 ? (
+        <Text color={colors.muted}>{`  \u2191 ${hiddenAbove} more above`}</Text>
+      ) : null}
+      {visible.map((c, i) => {
+        const absIdx = start + i;
+        return (
+          <Text key={absIdx}>
+            {absIdx === cmdIndex
+              ? <Text color={colors.suggestion} bold>{"\u25b8 "}</Text>
+              : <Text color="#333333">{"  "}</Text>}
+            <Text color={absIdx === cmdIndex ? colors.suggestion : colors.primary} bold>{c.cmd}</Text>
+            <Text color={colors.muted}>{" \u2500 "}{c.desc}</Text>
+          </Text>
+        );
+      })}
+      {hiddenBelow > 0 ? (
+        <Text color={colors.muted}>{`  \u2193 ${hiddenBelow} more below`}</Text>
+      ) : null}
+      <Text dimColor>{"  \u2191\u2193 navigate \u00b7 Tab select"}</Text>
     </Box>
   );
 }
@@ -582,17 +607,22 @@ interface ApprovalPromptProps {
 
 export function ApprovalPrompt({ approval, colors }: ApprovalPromptProps) {
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={colors.warning} paddingX={1} marginTop={1}>
-      <Text bold color={colors.warning}>⚠ Approve {approval.tool}?</Text>
+    <Box flexDirection="column" marginLeft={2} marginTop={1}>
+      <Text>
+        <Text color={colors.warning} bold>{"\u26a0 "}</Text>
+        <Text color={colors.warning} bold>Approve </Text>
+        <Text color={colors.tool} bold>{approval.tool}</Text>
+        <Text color={colors.warning} bold>?</Text>
+      </Text>
       {approval.tool === "write_file" && approval.args.path ? (
-        <Text color={colors.muted}>{"  📄 "}{String(approval.args.path)}</Text>
+        <Text color={colors.muted}>{"    \u{1F4C4} "}{String(approval.args.path)}</Text>
       ) : null}
       {approval.tool === "write_file" && approval.args.content ? (
-        <Text color={colors.muted}>{"  "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
+        <Text color={colors.muted}>{"    "}{String(approval.args.content).split("\n").length}{" lines, "}{String(approval.args.content).length}{"B"}</Text>
       ) : null}
       {approval.diff ? (
-        <Box flexDirection="column" marginTop={0} marginLeft={2}>
-          {approval.diff.split("\n").slice(0, 40).map((line, i) => (
+        <Box flexDirection="column" marginTop={0} marginLeft={4}>
+          {approval.diff.split("\n").slice(0, 30).map((line, i) => (
             <Text key={i} color={
               line.startsWith("+") ? colors.success :
               line.startsWith("-") ? colors.error :
@@ -600,18 +630,22 @@ export function ApprovalPrompt({ approval, colors }: ApprovalPromptProps) {
               colors.muted
             }>{line}</Text>
           ))}
-          {approval.diff.split("\n").length > 40 ? (
-            <Text color={colors.muted}>... ({approval.diff.split("\n").length - 40} more lines)</Text>
+          {approval.diff.split("\n").length > 30 ? (
+            <Text color={colors.muted}>{`    \u2026 ${approval.diff.split("\n").length - 30} more lines`}</Text>
           ) : null}
         </Box>
       ) : null}
       {approval.tool === "run_command" && approval.args.command ? (
-        <Text color={colors.muted}>{"  $ "}{String(approval.args.command)}</Text>
+        <Text color={colors.muted}>{"    \u{1F4BB} "}<Text color={colors.text}>{String(approval.args.command)}</Text></Text>
       ) : null}
+      <Text> </Text>
       <Text>
-        <Text color={colors.success} bold> [y]</Text><Text>es  </Text>
-        <Text color={colors.error} bold>[n]</Text><Text>o  </Text>
-        <Text color={colors.primary} bold>[a]</Text><Text>lways</Text>
+        {"    "}
+        <Text color={colors.success} bold>y</Text><Text color={colors.muted}> accept</Text>
+        {"  "}
+        <Text color={colors.error} bold>n</Text><Text color={colors.muted}> reject</Text>
+        {"  "}
+        <Text color={colors.primary} bold>a</Text><Text color={colors.muted}> always</Text>
       </Text>
     </Box>
   );

@@ -89,6 +89,67 @@ export function getDiff(cwd: string): string {
 }
 
 /**
+ * Create a checkpoint (stash + tag the current state)
+ */
+export function createCheckpoint(cwd: string, label?: string): { success: boolean; id: string; message: string } {
+  try {
+    const id = `codemaxxing-checkpoint-${Date.now()}`;
+    const desc = label || "before agent changes";
+
+    // Stash any uncommitted changes, then tag current HEAD
+    const hasChanges = execSync("git status --porcelain", { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
+    if (hasChanges) {
+      execSync(`git stash push -m "${id}: ${desc}"`, { cwd, stdio: "pipe" });
+    }
+
+    // Tag the current commit
+    const head = execSync("git rev-parse HEAD", { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
+    execSync(`git tag "${id}" "${head}"`, { cwd, stdio: "pipe" });
+
+    // Re-apply stash if we made one
+    if (hasChanges) {
+      try { execSync("git stash pop", { cwd, stdio: "pipe" }); } catch { /* conflicts are ok */ }
+    }
+
+    return { success: true, id, message: `Checkpoint created: ${id} (${desc})` };
+  } catch (e: any) {
+    return { success: false, id: "", message: `Error creating checkpoint: ${e.message}` };
+  }
+}
+
+/**
+ * Restore to a checkpoint
+ */
+export function restoreCheckpoint(cwd: string, checkpointId: string): { success: boolean; message: string } {
+  try {
+    // Verify the tag exists
+    execSync(`git rev-parse "${checkpointId}"`, { cwd, stdio: "pipe" });
+
+    // Reset to the checkpoint
+    execSync(`git checkout "${checkpointId}" -- .`, { cwd, stdio: "pipe" });
+
+    return { success: true, message: `Restored to checkpoint: ${checkpointId}` };
+  } catch (e: any) {
+    return { success: false, message: `Error restoring checkpoint: ${e.message}` };
+  }
+}
+
+/**
+ * List all codemaxxing checkpoints
+ */
+export function listCheckpoints(cwd: string): string[] {
+  try {
+    const tags = execSync("git tag -l 'codemaxxing-checkpoint-*'", {
+      cwd, stdio: "pipe", encoding: "utf-8",
+    }).trim();
+    if (!tags) return [];
+    return tags.split("\n").reverse(); // newest first
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Undo the last codemaxxing commit
  */
 export function undoLastCommit(cwd: string): { success: boolean; message: string } {

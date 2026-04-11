@@ -1,6 +1,6 @@
 import { type Dispatch, type SetStateAction } from "react";
 import type { CodingAgent } from "../agent.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, saveThemePreference } from "../config.js";
 import { THEMES, getTheme, listThemes, type Theme } from "../themes.js";
 import type { AddMsg } from "./types.js";
 
@@ -41,7 +41,8 @@ export async function tryHandleUiCommand(options: HandleUiCommandOptions): Promi
       return true;
     }
     setTheme(getTheme(themeName));
-    addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name}`);
+    saveThemePreference(themeName);
+    addMsg("info", `✅ Switched to theme: ${THEMES[themeName].name} (saved as default)`);
     return true;
   }
 
@@ -98,6 +99,34 @@ export async function tryHandleUiCommand(options: HandleUiCommandOptions): Promi
   if (trimmed === "/lint off") {
     if (agent) agent.setAutoLint(false);
     addMsg("info", "🔍 Auto-lint OFF");
+    return true;
+  }
+
+  if (trimmed === "/test") {
+    if (!agent) { addMsg("error", "Not connected."); return true; }
+    const runner = agent.getDetectedTestRunner();
+    const enabled = agent.isAutoTestEnabled();
+    if (runner) {
+      addMsg("info", `🧪 Running tests with ${runner.name}...`);
+      const result = agent.runProjectTests();
+      if (result) {
+        addMsg(result.passed ? "info" : "error", `🧪 ${result.passed ? "PASSED" : "FAILED"}\n${result.output}`);
+      }
+    } else {
+      addMsg("info", `🧪 Auto-test: ${enabled ? "ON" : "OFF"}\n  No test runner detected in this project.`);
+    }
+    return true;
+  }
+
+  if (trimmed === "/test on") {
+    if (agent) agent.setAutoTest(true);
+    addMsg("info", "🧪 Auto-test ON — tests will run after file changes");
+    return true;
+  }
+
+  if (trimmed === "/test off") {
+    if (agent) agent.setAutoTest(false);
+    addMsg("info", "🧪 Auto-test OFF");
     return true;
   }
 

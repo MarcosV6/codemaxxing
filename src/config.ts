@@ -25,6 +25,7 @@ export interface CodemaxxingConfig {
     architectModel?: string;
     autoLint?: boolean;
     stopOllamaOnExit?: boolean;
+    theme?: string;
   };
 }
 
@@ -188,6 +189,16 @@ export function applyOverrides(config: CodemaxxingConfig, args: CLIArgs): Codema
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
+}
+
+/** Persist the user's preferred theme. Failures are swallowed — losing the
+ *  preference is annoying but never fatal. */
+export function saveThemePreference(themeName: string): void {
+  try {
+    saveConfig({ defaults: { ...loadConfig().defaults, theme: themeName } });
+  } catch {
+    // ignore — config write is best-effort
+  }
 }
 
 /**

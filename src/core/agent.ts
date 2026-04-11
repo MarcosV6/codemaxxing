@@ -7,6 +7,7 @@ import type {
 } from "openai/resources/chat/completions";
 import { FILE_TOOLS, executeTool, generateDiff, getExistingContent } from "../tools/files.js";
 import { detectLinter, runLinter } from "../utils/lint.js";
+import { detectTestRunner, runTests, type TestRunnerInfo } from "../utils/test-runner.js";
 import { buildProjectContext, getSystemPrompt, loadProjectRules } from "./context.js";
 import { isGitRepo, autoCommit } from "../utils/git.js";
 import { buildSkillPrompts, getActiveSkillCount } from "../bridge/skills.js";
@@ -74,6 +75,13 @@ function createAnthropicClient(apiKey: string): Anthropic {
 
 // Tools that can modify your project — require approval
 const DANGEROUS_TOOLS = new Set(["write_file", "edit_file", "run_command"]);
+
+// Tools that are safe to run in parallel (read-only, no side effects)
+const PARALLELIZABLE_TOOLS = new Set([
+  "read_file", "list_files", "search_files", "glob", "web_fetch",
+  "web_search", "view_image", "think", "recall_memory", "remember_memory",
+  "create_task", "update_task",
+]);
 
 // Cost per 1M tokens (input/output) for common models
 // Prices as of mid-2025; update when providers change pricing.
@@ -226,6 +234,7 @@ export class CodingAgent {
   private cwd: string;
   private maxTokens: number;
   private autoApprove: boolean;
+  private approvalMode: "suggest" | "auto-edit" | "full-auto" = "suggest";
   private model: string;
   private alwaysApproved: Set<string> = new Set();
   private gitEnabled: boolean;
@@ -235,6 +244,8 @@ export class CodingAgent {
   private totalPromptTokens: number = 0;
   private totalCompletionTokens: number = 0;
   private totalCost: number = 0;
+  // Tokens-per-second of the most recent assistant completion (null until first response)
+  private lastTokensPerSecond: number | null = null;
   private systemPrompt: string = "";
   private compressionThreshold: number;
   private sessionDisabledSkills: Set<string> = new Set();
@@ -242,7 +253,18 @@ export class CodingAgent {
   private architectModel: string | null = null;
   private autoLintEnabled: boolean = true;
   private detectedLinter: { command: string; name: string } | null = null;
+  private autoTestEnabled: boolean = false;
+  private detectedTestRunner: TestRunnerInfo | null = null;
   private mcpServers: ConnectedServer[] = [];
+  private sendCount: number = 0;
+  private lastMemoryNudge: number = 0;
+  private workflowTrace: {
+    toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }>;
+    hadError: boolean;
+    errorRecovered: boolean;
+    userCorrection: boolean;
+    totalIterations: number;
+  } = { toolCalls: [], hadError: false, errorRecovered: false, userCorrection: false, totalIterations: 0 };
 
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
@@ -276,8 +298,9 @@ export class CodingAgent {
     if (rules) this.projectRulesSource = rules.source;
     this.systemPrompt = await getSystemPrompt(context, skillPrompts, rules?.content ?? "");
 
-    // Detect project linter
+    // Detect project linter and test runner
     this.detectedLinter = detectLinter(this.cwd);
+    this.detectedTestRunner = detectTestRunner(this.cwd);
 
     // Connect to MCP servers
     const mcpConfig = loadMCPConfig(this.cwd);
@@ -331,13 +354,126 @@ export class CodingAgent {
   }
 
   /**
+   * Execute a tool with pre/post hooks.
+   */
+  private async executeToolWithHooks(name: string, args: Record<string, unknown>, cwd: string): Promise<string> {
+    try {
+      const { runHooks } = await import("../utils/hooks.js");
+
+      // Pre-tool hooks
+      const preResults = await runHooks("pre-tool", cwd, { toolName: name, toolArgs: args });
+      for (const r of preResults) {
+        if (r.output && this.options.onToolResult) {
+          this.options.onToolResult("hook", r.output);
+        }
+      }
+
+      // Execute the actual tool
+      const result = await executeTool(name, args, cwd);
+
+      // Track for skill learning
+      this.workflowTrace.toolCalls.push({ name, args, result: result.slice(0, 200) });
+      this.workflowTrace.totalIterations++;
+
+      // Post-tool hooks
+      const filePath = typeof args.path === "string" ? args.path : undefined;
+      const postResults = await runHooks("post-tool", cwd, {
+        toolName: name,
+        toolArgs: args,
+        toolResult: result.slice(0, 500),
+        filePath,
+      });
+      for (const r of postResults) {
+        if (r.output && this.options.onToolResult) {
+          this.options.onToolResult("hook", r.output);
+        }
+      }
+
+      // On-edit hooks for file write/edit tools
+      if ((name === "write_file" || name === "edit_file") && filePath) {
+        await runHooks("on-edit", cwd, { toolName: name, filePath });
+      }
+
+      return result;
+    } catch (err: any) {
+      if (err.message?.startsWith("Blocking hook failed:")) {
+        return `Hook blocked this action: ${err.message}`;
+      }
+      // Hooks module not available — fall through to direct execution
+      return executeTool(name, args, cwd);
+    }
+  }
+
+  /**
    * Send a message, routing through architect model if enabled
    */
-  async send(userMessage: string): Promise<string> {
-    if (this.architectModel) {
-      return this.architectChat(userMessage);
+  async send(userMessage: string, images?: Array<{ mime: string; base64: string }>): Promise<string> {
+    this.sendCount++;
+    let result: string;
+
+    // If images are provided, inject them as multimodal content before routing
+    if (images && images.length > 0) {
+      const content: any[] = [];
+      for (const img of images) {
+        content.push({
+          type: "image_url",
+          image_url: { url: `data:${img.mime};base64,${img.base64}` },
+        });
+      }
+      content.push({ type: "text", text: userMessage || "Describe these images." });
+      const userMsg: ChatCompletionMessageParam = { role: "user", content } as any;
+      this.messages.push(userMsg);
+      saveMessage(this.sessionId, userMsg);
+      await this.maybeCompressContext();
+      // Route to the correct backend — skip chat() since message is already pushed
+      if (this.providerType === "anthropic" && this.anthropicClient) {
+        result = await this.chatAnthropic(userMessage);
+      } else if (this.providerType === "openai" && shouldUseResponsesAPI(this.model)) {
+        result = await this.chatOpenAIResponses(userMessage);
+      } else {
+        result = await this.chatOpenAICompletions();
+      }
+    } else if (this.architectModel) {
+      result = await this.architectChat(userMessage);
+    } else {
+      result = await this.chat(userMessage);
     }
-    return this.chat(userMessage);
+
+    // Memory nudge: every 10 sends, inject a nudge so the agent saves useful knowledge
+    if (this.sendCount - this.lastMemoryNudge >= 10) {
+      this.lastMemoryNudge = this.sendCount;
+      try {
+        const { getMemoryNudgePrompt } = await import("../utils/memory.js");
+        const nudge = getMemoryNudgePrompt();
+        this.messages.push({ role: "system", content: nudge });
+      } catch {
+        // Memory module not available
+      }
+    }
+
+    // Skill learning: evaluate if this workflow should be saved
+    try {
+      const { shouldLearnSkill, generateSkillFromTrace, saveLearnedSkill } = await import("../utils/skill-learner.js");
+      const fullTrace = { ...this.workflowTrace, userMessage };
+      if (shouldLearnSkill(fullTrace)) {
+        const skill = generateSkillFromTrace(fullTrace);
+        saveLearnedSkill(skill);
+        this.options.onToolResult?.("skill-learner", `Learned new skill: "${skill.name}" from this workflow`);
+      }
+    } catch {
+      // Skill learner not available
+    }
+
+    // Reset trace for next send
+    this.workflowTrace = {
+      toolCalls: [],
+      hadError: false,
+      errorRecovered: false,
+      userCorrection: false,
+      totalIterations: 0,
+    };
+
+    return result;
   }
 
   /**
@@ -363,6 +499,15 @@ export class CodingAgent {
       return this.chatOpenAIResponses(userMessage);
     }
 
+    return this.chatOpenAICompletions();
+  }
+
+  /**
+   * OpenAI Chat Completions streaming loop.
+   * Messages must already be in this.messages before calling.
+   */
+  private async chatOpenAICompletions(): Promise<string> {
+    this.resetAbort();
     let iterations = 0;
     const MAX_ITERATIONS = 20;
 
@@ -408,6 +553,7 @@ export class CodingAgent {
       const toolCalls: Map<number, AssembledToolCall> = new Map();
       let chunkPromptTokens = 0;
       let chunkCompletionTokens = 0;
+      let firstTokenMs: number | null = null;
 
       for await (const chunk of stream) {
         // Check for abort
@@ -425,6 +571,7 @@ export class CodingAgent {
 
         // Handle content tokens (the actual response text)
         if (delta.content) {
+          if (firstTokenMs === null) firstTokenMs = Date.now();
           const token = delta.content;
 
           // Detect <think> blocks from reasoning models (Qwen, DeepSeek, etc.)
@@ -488,6 +635,16 @@ export class CodingAgent {
         updateSessionCost(this.sessionId, this.totalPromptTokens, this.totalCompletionTokens, this.totalCost);
       }
 
+      // Compute throughput from first-token to end of stream — better than including
+      // network latency to the first byte. Skip if we never saw a content token
+      // (e.g., a turn that produced only tool calls).
+      if (chunkCompletionTokens > 0 && firstTokenMs !== null) {
+        const elapsedSec = (Date.now() - firstTokenMs) / 1000;
+        if (elapsedSec > 0.05) {
+          this.lastTokensPerSecond = chunkCompletionTokens / elapsedSec;
+        }
+      }
+
       // If aborted, return what we have so far
       if (this.aborted) {
         updateTokenEstimate(this.sessionId, this.estimateTokens());
@@ -503,117 +660,157 @@ export class CodingAgent {
 
       this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.size });
 
-      // Process tool calls
-      for (const toolCall of toolCalls.values()) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(toolCall.arguments);
-        } catch {
-          args = {};
+      // Check if all tool calls are parallelizable
+      const toolCallArray = Array.from(toolCalls.values());
+      const allParallelizable = toolCallArray.length > 1 && toolCallArray.every(
+        (tc) => PARALLELIZABLE_TOOLS.has(tc.name) && !parseMCPToolName(tc.name)
+      );
+
+      if (allParallelizable) {
+        // Execute all safe tools in parallel
+        const parsedCalls = toolCallArray.map((tc) => {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.arguments); } catch { args = {}; }
+          return { tc, args };
+        });
+
+        // Fire onToolCall for all before executing
+        for (const { tc, args } of parsedCalls) {
+          this.options.onToolCall?.(tc.name, args);
         }
 
-        this.options.onToolCall?.(toolCall.name, args);
+        const results = await Promise.all(parsedCalls.map(async ({ tc, args }) => {
+          if (tc.name === "think") {
+            this.options.onThinking?.(String(args.thought ?? ""));
+            return { tc, result: "(thinking complete)" };
+          }
+          const result = await this.executeToolWithHooks(tc.name, args, this.cwd);
+          return { tc, result };
+        }));
 
-        // Check approval for dangerous tools
-        if (DANGEROUS_TOOLS.has(toolCall.name) && !this.autoApprove && !this.alwaysApproved.has(toolCall.name)) {
-          if (this.options.onToolApproval) {
-            // Generate diff preview for file-modifying tools
-            let diff: string | undefined;
-            if (toolCall.name === "write_file" && args.path && args.content) {
-              const existing = getExistingContent(String(args.path), this.cwd);
-              if (existing !== null) {
-                diff = generateDiff(existing, String(args.content), String(args.path));
+        for (const { tc, result } of results) {
+          this.options.onToolResult?.(tc.name, result);
+          const toolMsg = buildToolResultMessage(tc.id, tc.name, result);
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          this.options.onLoopStatus?.("tool result appended to conversation", {
+            iteration: iterations,
+            toolName: tc.name,
+            resultLength: result.length,
+          });
+        }
+      } else {
+        // Sequential execution (original behavior)
+        for (const toolCall of toolCalls.values()) {
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(toolCall.arguments);
+          } catch {
+            args = {};
+          }
+
+          this.options.onToolCall?.(toolCall.name, args);
+
+          // Check approval for dangerous tools
+          if (this.needsApproval(toolCall.name)) {
+            if (this.options.onToolApproval) {
+              let diff: string | undefined;
+              if (toolCall.name === "write_file" && args.path && args.content) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  diff = generateDiff(existing, String(args.content), String(args.path));
+                }
+              }
+              if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  const oldText = String(args.oldText);
+                  const newText = String(args.newText);
+                  const replaceAll = Boolean(args.replaceAll);
+                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                  diff = generateDiff(existing, next, String(args.path));
+                }
+              }
+              const decision = await this.options.onToolApproval(toolCall.name, args, diff);
+              if (decision === "no") {
+                const denied = `Tool call "${toolCall.name}" was denied by the user.`;
+                this.options.onToolResult?.(toolCall.name, denied);
+                const deniedMsg: ChatCompletionMessageParam = {
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: denied,
+                };
+                this.messages.push(deniedMsg);
+                saveMessage(this.sessionId, deniedMsg);
+                continue;
+              }
+              if (decision === "always") {
+                this.alwaysApproved.add(toolCall.name);
               }
             }
-            if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
-              const existing = getExistingContent(String(args.path), this.cwd);
-              if (existing !== null) {
-                const oldText = String(args.oldText);
-                const newText = String(args.newText);
-                const replaceAll = Boolean(args.replaceAll);
-                const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
-                diff = generateDiff(existing, next, String(args.path));
-              }
+          }
+
+          // Handle special tools (think, ask_user) before routing
+          if (toolCall.name === "think") {
+            this.options.onThinking?.(String(args.thought ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            continue;
+          }
+          if (toolCall.name === "ask_user" && this.options.onAskUser) {
+            const answer = await this.options.onAskUser(String(args.question ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            continue;
+          }
+
+          // Route to MCP or built-in tool
+          const mcpParsed = parseMCPToolName(toolCall.name);
+          let result: string;
+          if (mcpParsed) {
+            result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+          } else {
+            result = await this.executeToolWithHooks(toolCall.name, args, this.cwd);
+          }
+          this.options.onToolResult?.(toolCall.name, result);
+
+          // Auto-commit after successful write_file (only if enabled)
+          if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const path = String(args.path ?? "unknown");
+            const committed = autoCommit(this.cwd, path, "write");
+            if (committed) {
+              this.options.onGitCommit?.(`write ${path}`);
             }
-            const decision = await this.options.onToolApproval(toolCall.name, args, diff);
-            if (decision === "no") {
-              const denied = `Tool call "${toolCall.name}" was denied by the user.`;
-              this.options.onToolResult?.(toolCall.name, denied);
-              const deniedMsg: ChatCompletionMessageParam = {
+          }
+
+          // Auto-lint after successful write_file
+          if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const filePath = String(args.path ?? "");
+            const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+            if (lintErrors) {
+              this.options.onLintResult?.(filePath, lintErrors);
+              const lintMsg: ChatCompletionMessageParam = {
                 role: "tool",
                 tool_call_id: toolCall.id,
-                content: denied,
+                content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
               };
-              this.messages.push(deniedMsg);
-              saveMessage(this.sessionId, deniedMsg);
+              this.messages.push(lintMsg);
+              saveMessage(this.sessionId, lintMsg);
               continue;
             }
-            if (decision === "always") {
-              this.alwaysApproved.add(toolCall.name);
-            }
           }
-        }
 
-        // Handle special tools (think, ask_user) before routing
-        if (toolCall.name === "think") {
-          this.options.onThinking?.(String(args.thought ?? ""));
-          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
           this.messages.push(toolMsg);
           saveMessage(this.sessionId, toolMsg);
-          continue;
+          this.options.onLoopStatus?.("tool result appended to conversation", {
+            iteration: iterations,
+            toolName: toolCall.name,
+            resultLength: result.length,
+          });
         }
-        if (toolCall.name === "ask_user" && this.options.onAskUser) {
-          const answer = await this.options.onAskUser(String(args.question ?? ""));
-          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
-          this.messages.push(toolMsg);
-          saveMessage(this.sessionId, toolMsg);
-          continue;
-        }
-
-        // Route to MCP or built-in tool
-        const mcpParsed = parseMCPToolName(toolCall.name);
-        let result: string;
-        if (mcpParsed) {
-          result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
-        } else {
-          result = await executeTool(toolCall.name, args, this.cwd);
-        }
-        this.options.onToolResult?.(toolCall.name, result);
-
-        // Auto-commit after successful write_file (only if enabled)
-        if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-          const path = String(args.path ?? "unknown");
-          const committed = autoCommit(this.cwd, path, "write");
-          if (committed) {
-            this.options.onGitCommit?.(`write ${path}`);
-          }
-        }
-
-        // Auto-lint after successful write_file
-        if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-          const filePath = String(args.path ?? "");
-          const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
-          if (lintErrors) {
-            this.options.onLintResult?.(filePath, lintErrors);
-            const lintMsg: ChatCompletionMessageParam = {
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
-            };
-            this.messages.push(lintMsg);
-            saveMessage(this.sessionId, lintMsg);
-            continue; // skip the normal tool message push
-          }
-        }
-
-        const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
-        this.messages.push(toolMsg);
-        saveMessage(this.sessionId, toolMsg);
-        this.options.onLoopStatus?.("tool result appended to conversation", {
-          iteration: iterations,
-          toolName: toolCall.name,
-          resultLength: result.length,
-        });
       }
 
       this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
@@ -644,7 +841,25 @@ export class CodingAgent {
     for (const msg of this.messages) {
       if (msg.role === "system") continue; // system handled separately
       if (msg.role === "user") {
-        msgs.push({ role: "user", content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) });
+        // Handle multimodal user messages (text + images)
+        if (Array.isArray(msg.content)) {
+          const anthropicContent = (msg.content as any[]).map((block: any) => {
+            if (block.type === "image_url" && block.image_url?.url?.startsWith("data:")) {
+              const match = block.image_url.url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+              if (match) {
+                return {
+                  type: "image" as const,
+                  source: { type: "base64" as const, media_type: match[1] as any, data: match[2] },
+                };
+              }
+            }
+            if (block.type === "text") return { type: "text" as const, text: block.text };
+            return { type: "text" as const, text: JSON.stringify(block) };
+          });
+          msgs.push({ role: "user", content: anthropicContent as any });
+        } else {
+          msgs.push({ role: "user", content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) });
+        }
       } else if (msg.role === "assistant") {
         const content: Anthropic.ContentBlockParam[] = [];
         if (msg.content) {
@@ -667,14 +882,33 @@ export class CodingAgent {
         }
       } else if (msg.role === "tool") {
         const toolCallId = (msg as any).tool_call_id;
-        const resultContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
         // Anthropic expects tool results as user messages with tool_result content
+        // Handle multimodal content (images from view_image)
+        let toolResultContent: any;
+        if (Array.isArray(msg.content)) {
+          // Convert OpenAI-style image_url blocks to Anthropic image blocks
+          toolResultContent = (msg.content as any[]).map((block: any) => {
+            if (block.type === "image_url" && block.image_url?.url?.startsWith("data:")) {
+              const match = block.image_url.url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+              if (match) {
+                return {
+                  type: "image",
+                  source: { type: "base64", media_type: match[1], data: match[2] },
+                };
+              }
+            }
+            if (block.type === "text") return { type: "text", text: block.text };
+            return { type: "text", text: JSON.stringify(block) };
+          });
+        } else {
+          toolResultContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+        }
         msgs.push({
           role: "user",
           content: [{
             type: "tool_result",
             tool_use_id: toolCallId,
-            content: resultContent,
+            content: toolResultContent,
           }],
         });
       }
@@ -828,110 +1062,135 @@ export class CodingAgent {
 
       this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
 
-      // Process tool calls
-      for (const toolCall of toolCalls) {
-        const args = toolCall.input;
-        this.options.onToolCall?.(toolCall.name, args);
+      // Check if all tool calls are parallelizable
+      const allParallelizable = toolCalls.length > 1 && toolCalls.every(
+        (tc) => PARALLELIZABLE_TOOLS.has(tc.name) && !parseMCPToolName(tc.name)
+      );
 
-        // Check approval for dangerous tools
-        if (DANGEROUS_TOOLS.has(toolCall.name) && !this.autoApprove && !this.alwaysApproved.has(toolCall.name)) {
-          if (this.options.onToolApproval) {
-            let diff: string | undefined;
-            if (toolCall.name === "write_file" && args.path && args.content) {
-              const existing = getExistingContent(String(args.path), this.cwd);
-              if (existing !== null) {
-                diff = generateDiff(existing, String(args.content), String(args.path));
-              }
-            }
-            if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
-              const existing = getExistingContent(String(args.path), this.cwd);
-              if (existing !== null) {
-                const oldText = String(args.oldText);
-                const newText = String(args.newText);
-                const replaceAll = Boolean(args.replaceAll);
-                const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
-                diff = generateDiff(existing, next, String(args.path));
-              }
-            }
-            const decision = await this.options.onToolApproval(toolCall.name, args, diff);
-            if (decision === "no") {
-              const denied = `Tool call "${toolCall.name}" was denied by the user.`;
-              this.options.onToolResult?.(toolCall.name, denied);
-              const deniedMsg: ChatCompletionMessageParam = {
-                role: "tool",
-                tool_call_id: toolCall.id,
-                content: denied,
-              };
-              this.messages.push(deniedMsg);
-              saveMessage(this.sessionId, deniedMsg);
-              continue;
-            }
-            if (decision === "always") {
-              this.alwaysApproved.add(toolCall.name);
-            }
+      if (allParallelizable) {
+        for (const tc of toolCalls) this.options.onToolCall?.(tc.name, tc.input);
+
+        const results = await Promise.all(toolCalls.map(async (tc) => {
+          if (tc.name === "think") {
+            this.options.onThinking?.(String(tc.input.thought ?? ""));
+            return { tc, result: "(thinking complete)" };
           }
-        }
+          const result = await this.executeToolWithHooks(tc.name, tc.input as Record<string, unknown>, this.cwd);
+          return { tc, result };
+        }));
 
-        // Handle special tools (think, ask_user) before routing
-        if (toolCall.name === "think") {
-          this.options.onThinking?.(String(args.thought ?? ""));
-          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+        for (const { tc, result } of results) {
+          this.options.onToolResult?.(tc.name, result);
+          const toolMsg = buildToolResultMessage(tc.id, tc.name, result);
           this.messages.push(toolMsg);
           saveMessage(this.sessionId, toolMsg);
-          continue;
+          this.options.onLoopStatus?.("tool result appended to conversation", {
+            iteration: iterations,
+            toolName: tc.name,
+            resultLength: result.length,
+          });
         }
-        if (toolCall.name === "ask_user" && this.options.onAskUser) {
-          const answer = await this.options.onAskUser(String(args.question ?? ""));
-          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
-          this.messages.push(toolMsg);
-          saveMessage(this.sessionId, toolMsg);
-          continue;
-        }
+      } else {
+        // Sequential execution
+        for (const toolCall of toolCalls) {
+          const args = toolCall.input;
+          this.options.onToolCall?.(toolCall.name, args);
 
-        // Route to MCP or built-in tool
-        const mcpParsed = parseMCPToolName(toolCall.name);
-        let result: string;
-        if (mcpParsed) {
-          result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
-        } else {
-          result = await executeTool(toolCall.name, args, this.cwd);
-        }
-        this.options.onToolResult?.(toolCall.name, result);
-
-        // Auto-commit after successful write_file
-        if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-          const path = String(args.path ?? "unknown");
-          const committed = autoCommit(this.cwd, path, "write");
-          if (committed) {
-            this.options.onGitCommit?.(`write ${path}`);
+          if (this.needsApproval(toolCall.name)) {
+            if (this.options.onToolApproval) {
+              let diff: string | undefined;
+              if (toolCall.name === "write_file" && args.path && args.content) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  diff = generateDiff(existing, String(args.content), String(args.path));
+                }
+              }
+              if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+                const existing = getExistingContent(String(args.path), this.cwd);
+                if (existing !== null) {
+                  const oldText = String(args.oldText);
+                  const newText = String(args.newText);
+                  const replaceAll = Boolean(args.replaceAll);
+                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                  diff = generateDiff(existing, next, String(args.path));
+                }
+              }
+              const decision = await this.options.onToolApproval(toolCall.name, args, diff);
+              if (decision === "no") {
+                const denied = `Tool call "${toolCall.name}" was denied by the user.`;
+                this.options.onToolResult?.(toolCall.name, denied);
+                const deniedMsg: ChatCompletionMessageParam = {
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: denied,
+                };
+                this.messages.push(deniedMsg);
+                saveMessage(this.sessionId, deniedMsg);
+                continue;
+              }
+              if (decision === "always") {
+                this.alwaysApproved.add(toolCall.name);
+              }
+            }
           }
-        }
 
-        // Auto-lint after successful write_file
-        if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-          const filePath = String(args.path ?? "");
-          const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
-          if (lintErrors) {
-            this.options.onLintResult?.(filePath, lintErrors);
-            const lintMsg: ChatCompletionMessageParam = {
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
-            };
-            this.messages.push(lintMsg);
-            saveMessage(this.sessionId, lintMsg);
+          if (toolCall.name === "think") {
+            this.options.onThinking?.(String(args.thought ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
             continue;
           }
-        }
+          if (toolCall.name === "ask_user" && this.options.onAskUser) {
+            const answer = await this.options.onAskUser(String(args.question ?? ""));
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            continue;
+          }
 
-        const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
-        this.messages.push(toolMsg);
-        saveMessage(this.sessionId, toolMsg);
-        this.options.onLoopStatus?.("tool result appended to conversation", {
-          iteration: iterations,
-          toolName: toolCall.name,
-          resultLength: result.length,
-        });
+          const mcpParsed = parseMCPToolName(toolCall.name);
+          let result: string;
+          if (mcpParsed) {
+            result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+          } else {
+            result = await this.executeToolWithHooks(toolCall.name, args, this.cwd);
+          }
+          this.options.onToolResult?.(toolCall.name, result);
+
+          if (this.gitEnabled && this.autoCommitEnabled && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const path = String(args.path ?? "unknown");
+            const committed = autoCommit(this.cwd, path, "write");
+            if (committed) {
+              this.options.onGitCommit?.(`write ${path}`);
+            }
+          }
+
+          if (this.autoLintEnabled && this.detectedLinter && ["write_file","edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+            const filePath = String(args.path ?? "");
+            const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+            if (lintErrors) {
+              this.options.onLintResult?.(filePath, lintErrors);
+              const lintMsg: ChatCompletionMessageParam = {
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
+              };
+              this.messages.push(lintMsg);
+              saveMessage(this.sessionId, lintMsg);
+              continue;
+            }
+          }
+
+          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
+          this.messages.push(toolMsg);
+          saveMessage(this.sessionId, toolMsg);
+          this.options.onLoopStatus?.("tool result appended to conversation", {
+            iteration: iterations,
+            toolName: toolCall.name,
+            resultLength: result.length,
+          });
+        }
       }
 
       this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
@@ -1004,109 +1263,132 @@ export class CodingAgent {
 
         this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
 
-        // Process tool calls (same as Chat Completions flow)
-        for (const toolCall of toolCalls) {
-          const args = toolCall.input;
+        // Check if all tool calls are parallelizable
+        const allParallelizable = toolCalls.length > 1 && toolCalls.every(
+          (tc) => PARALLELIZABLE_TOOLS.has(tc.name) && !parseMCPToolName(tc.name)
+        );
 
-          // Check approval
-          if (DANGEROUS_TOOLS.has(toolCall.name) && !this.autoApprove && !this.alwaysApproved.has(toolCall.name)) {
-            if (this.options.onToolApproval) {
-              let diff: string | undefined;
-              if (toolCall.name === "write_file" && args.path && args.content) {
-                const existing = getExistingContent(String(args.path), this.cwd);
-                if (existing !== null) {
-                  diff = generateDiff(existing, String(args.content), String(args.path));
-                }
-              }
-              if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
-                const existing = getExistingContent(String(args.path), this.cwd);
-                if (existing !== null) {
-                  const oldText = String(args.oldText);
-                  const newText = String(args.newText);
-                  const replaceAll = Boolean(args.replaceAll);
-                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
-                  diff = generateDiff(existing, next, String(args.path));
-                }
-              }
+        if (allParallelizable) {
+          for (const tc of toolCalls) this.options.onToolCall?.(tc.name, tc.input);
 
-              const decision = await this.options.onToolApproval(toolCall.name, args, diff);
-              if (decision === "no") {
-                const toolMsg: ChatCompletionMessageParam = {
-                  role: "tool",
-                  tool_call_id: toolCall.id,
-                  content: "Tool denied by user.",
-                };
-                this.messages.push(toolMsg);
-                saveMessage(this.sessionId, toolMsg);
-                continue;
-              }
-              if (decision === "always") {
-                this.alwaysApproved.add(toolCall.name);
-              }
+          const results = await Promise.all(toolCalls.map(async (tc) => {
+            if (tc.name === "think") {
+              this.options.onThinking?.(String(tc.input.thought ?? ""));
+              return { tc, result: "(thinking complete)" };
             }
-          }
+            const result = await this.executeToolWithHooks(tc.name, tc.input as Record<string, unknown>, this.cwd);
+            return { tc, result };
+          }));
 
-          // Handle special tools (think, ask_user) before routing
-          if (toolCall.name === "think") {
-            this.options.onThinking?.(String(args.thought ?? ""));
-            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+          for (const { tc, result } of results) {
+            this.options.onToolResult?.(tc.name, result);
+            const toolMsg = buildToolResultMessage(tc.id, tc.name, result);
             this.messages.push(toolMsg);
             saveMessage(this.sessionId, toolMsg);
-            continue;
+            this.options.onLoopStatus?.("tool result appended to conversation", {
+              iteration: iterations,
+              toolName: tc.name,
+              resultLength: result.length,
+            });
           }
-          if (toolCall.name === "ask_user" && this.options.onAskUser) {
-            const answer = await this.options.onAskUser(String(args.question ?? ""));
-            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
-            this.messages.push(toolMsg);
-            saveMessage(this.sessionId, toolMsg);
-            continue;
-          }
+        } else {
+          for (const toolCall of toolCalls) {
+            const args = toolCall.input;
 
-          // Execute tool
-          const mcpParsed = parseMCPToolName(toolCall.name);
-          let result: string;
-          if (mcpParsed) {
-            result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
-          } else {
-            result = await executeTool(toolCall.name, args, this.cwd);
-          }
-          this.options.onToolResult?.(toolCall.name, result);
+            if (this.needsApproval(toolCall.name)) {
+              if (this.options.onToolApproval) {
+                let diff: string | undefined;
+                if (toolCall.name === "write_file" && args.path && args.content) {
+                  const existing = getExistingContent(String(args.path), this.cwd);
+                  if (existing !== null) {
+                    diff = generateDiff(existing, String(args.content), String(args.path));
+                  }
+                }
+                if (toolCall.name === "edit_file" && args.path && args.oldText !== undefined && args.newText !== undefined) {
+                  const existing = getExistingContent(String(args.path), this.cwd);
+                  if (existing !== null) {
+                    const oldText = String(args.oldText);
+                    const newText = String(args.newText);
+                    const replaceAll = Boolean(args.replaceAll);
+                    const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                    diff = generateDiff(existing, next, String(args.path));
+                  }
+                }
 
-          // Auto-commit
-          if (this.gitEnabled && this.autoCommitEnabled && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-            const path = String(args.path ?? "unknown");
-            const committed = autoCommit(this.cwd, path, "write");
-            if (committed) {
-              this.options.onGitCommit?.(`write ${path}`);
+                const decision = await this.options.onToolApproval(toolCall.name, args, diff);
+                if (decision === "no") {
+                  const toolMsg: ChatCompletionMessageParam = {
+                    role: "tool",
+                    tool_call_id: toolCall.id,
+                    content: "Tool denied by user.",
+                  };
+                  this.messages.push(toolMsg);
+                  saveMessage(this.sessionId, toolMsg);
+                  continue;
+                }
+                if (decision === "always") {
+                  this.alwaysApproved.add(toolCall.name);
+                }
+              }
             }
-          }
 
-          // Auto-lint
-          if (this.autoLintEnabled && this.detectedLinter && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
-            const filePath = String(args.path ?? "");
-            const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
-            if (lintErrors) {
-              this.options.onLintResult?.(filePath, lintErrors);
-              const lintMsg: ChatCompletionMessageParam = {
-                role: "tool",
-                tool_call_id: toolCall.id,
-                content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
-              };
-              this.messages.push(lintMsg);
-              saveMessage(this.sessionId, lintMsg);
+            if (toolCall.name === "think") {
+              this.options.onThinking?.(String(args.thought ?? ""));
+              const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, "(thinking complete)");
+              this.messages.push(toolMsg);
+              saveMessage(this.sessionId, toolMsg);
               continue;
             }
-          }
+            if (toolCall.name === "ask_user" && this.options.onAskUser) {
+              const answer = await this.options.onAskUser(String(args.question ?? ""));
+              const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, answer);
+              this.messages.push(toolMsg);
+              saveMessage(this.sessionId, toolMsg);
+              continue;
+            }
 
-          // Save tool result
-          const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
-          this.messages.push(toolMsg);
-          saveMessage(this.sessionId, toolMsg);
-          this.options.onLoopStatus?.("tool result appended to conversation", {
-            iteration: iterations,
-            toolName: toolCall.name,
-            resultLength: result.length,
-          });
+            const mcpParsed = parseMCPToolName(toolCall.name);
+            let result: string;
+            if (mcpParsed) {
+              result = await callMCPTool(mcpParsed.serverName, mcpParsed.toolName, args);
+            } else {
+              result = await this.executeToolWithHooks(toolCall.name, args, this.cwd);
+            }
+            this.options.onToolResult?.(toolCall.name, result);
+
+            if (this.gitEnabled && this.autoCommitEnabled && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+              const path = String(args.path ?? "unknown");
+              const committed = autoCommit(this.cwd, path, "write");
+              if (committed) {
+                this.options.onGitCommit?.(`write ${path}`);
+              }
+            }
+
+            if (this.autoLintEnabled && this.detectedLinter && ["write_file", "edit_file"].includes(toolCall.name) && result.startsWith("✅")) {
+              const filePath = String(args.path ?? "");
+              const lintErrors = runLinter(this.detectedLinter, filePath, this.cwd);
+              if (lintErrors) {
+                this.options.onLintResult?.(filePath, lintErrors);
+                const lintMsg: ChatCompletionMessageParam = {
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: result + `\n\nLint errors detected in ${filePath}:\n${lintErrors}\nPlease fix these issues.`,
+                };
+                this.messages.push(lintMsg);
+                saveMessage(this.sessionId, lintMsg);
+                continue;
+              }
+            }
+
+            const toolMsg = buildToolResultMessage(toolCall.id, toolCall.name, result);
+            this.messages.push(toolMsg);
+            saveMessage(this.sessionId, toolMsg);
+            this.options.onLoopStatus?.("tool result appended to conversation", {
+              iteration: iterations,
+              toolName: toolCall.name,
+              resultLength: result.length,
+            });
+          }
         }
 
         this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
@@ -1273,15 +1555,29 @@ export class CodingAgent {
   }
 
   /**
+   * Force context compression regardless of threshold.
+   * Returns { oldTokens, newTokens } or null if nothing to compress.
+   */
+  async compressContext(): Promise<{ oldTokens: number; newTokens: number } | null> {
+    const oldTokens = this.estimateTokens();
+    if (this.messages.length <= 11) return null; // system + 10 recent = nothing to compress
+    await this.doCompressContext();
+    const newTokens = this.estimateTokens();
+    return { oldTokens, newTokens };
+  }
+
+  /**
    * Check if context needs compression and compress if threshold exceeded
    */
   private async maybeCompressContext(): Promise<void> {
     const currentTokens = this.estimateTokens();
     if (currentTokens < this.compressionThreshold) return;
+    await this.doCompressContext();
+  }
 
-    // Keep: system prompt (index 0) + last 10 messages
+  private async doCompressContext(): Promise<void> {
     const keepCount = 10;
-    if (this.messages.length <= keepCount + 1) return; // Not enough to compress
+    if (this.messages.length <= keepCount + 1) return;
 
     const systemMsg = this.messages[0];
     const middleMessages = this.messages.slice(1, this.messages.length - keepCount);
@@ -1289,19 +1585,15 @@ export class CodingAgent {
 
     if (middleMessages.length === 0) return;
 
-    // Build a summary of the middle messages
     const summaryParts: string[] = [];
     for (const msg of middleMessages) {
       if (msg.role === "user" && typeof msg.content === "string") {
         summaryParts.push(`User: ${msg.content.slice(0, 200)}`);
       } else if (msg.role === "assistant" && typeof msg.content === "string" && msg.content) {
         summaryParts.push(`Assistant: ${msg.content.slice(0, 200)}`);
-      } else if (msg.role === "tool") {
-        // Skip tool messages in summary to save tokens
       }
     }
 
-    // Use the active model to summarize
     const summaryPrompt = `Summarize this conversation history in 2-3 concise paragraphs. Focus on: what was discussed, what files were modified, what decisions were made, and any important context for continuing the conversation.\n\n${summaryParts.join("\n")}`;
 
     try {
@@ -1330,18 +1622,16 @@ export class CodingAgent {
         content: `[Context compressed: ${summary}]`,
       };
 
-      const oldTokens = currentTokens;
+      const oldTokens = this.estimateTokens();
       this.messages = [systemMsg, compressedMsg, ...recentMessages];
       const newTokens = this.estimateTokens();
-
       this.options.onContextCompressed?.(oldTokens, newTokens);
     } catch {
-      // If summarization fails, just truncate without summary
       const compressedMsg: ChatCompletionMessageParam = {
         role: "assistant",
         content: "[Context compressed: Earlier conversation history was removed to stay within token limits.]",
       };
-      const oldTokens = currentTokens;
+      const oldTokens = this.estimateTokens();
       this.messages = [systemMsg, compressedMsg, ...recentMessages];
       const newTokens = this.estimateTokens();
       this.options.onContextCompressed?.(oldTokens, newTokens);
@@ -1354,6 +1644,66 @@ export class CodingAgent {
       completionTokens: this.totalCompletionTokens,
       totalCost: this.totalCost,
     };
+  }
+
+  /** Throughput of the most recent assistant completion, or null if not measured yet. */
+  getLastTokensPerSecond(): number | null {
+    return this.lastTokensPerSecond;
+  }
+
+  /**
+   * True if the active provider is a local inference server (Ollama, LM Studio, llama.cpp, etc).
+   * Detected by base URL pointing at loopback / private IPs rather than a public host.
+   */
+  isLocalProvider(): boolean {
+    if (this.providerType === "anthropic") return false;
+    try {
+      const url = new URL(this.currentBaseUrl);
+      const host = url.hostname;
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0") return true;
+      if (host.endsWith(".local")) return true;
+      // Common private network ranges
+      if (/^10\./.test(host)) return true;
+      if (/^192\.168\./.test(host)) return true;
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Add a file's content as read-only context in the conversation.
+   */
+  addReadOnlyFile(filePath: string, content: string): void {
+    this.messages.push({
+      role: "user",
+      content: `[Read-only reference file: ${filePath}]\n\`\`\`\n${content}\n\`\`\`\nThis file is provided as read-only context. Do not modify it unless explicitly asked.`,
+    });
+  }
+
+  setApprovalMode(mode: "suggest" | "auto-edit" | "full-auto"): void {
+    this.approvalMode = mode;
+    if (mode === "full-auto") {
+      this.autoApprove = true;
+    } else {
+      this.autoApprove = false;
+    }
+  }
+
+  getApprovalMode(): "suggest" | "auto-edit" | "full-auto" {
+    return this.approvalMode;
+  }
+
+  /**
+   * Check if a tool call needs user approval based on current approval mode.
+   */
+  private needsApproval(toolName: string): boolean {
+    if (this.autoApprove || this.alwaysApproved.has(toolName)) return false;
+    if (!DANGEROUS_TOOLS.has(toolName)) return false;
+    if (this.approvalMode === "full-auto") return false;
+    if (this.approvalMode === "auto-edit" && (toolName === "write_file" || toolName === "edit_file")) return false;
+    return true;
   }
 
   disableSkill(name: string): void {
@@ -1402,6 +1752,23 @@ export class CodingAgent {
 
   setDetectedLinter(linter: { command: string; name: string } | null): void {
     this.detectedLinter = linter;
+  }
+
+  setAutoTest(enabled: boolean): void {
+    this.autoTestEnabled = enabled;
+  }
+
+  isAutoTestEnabled(): boolean {
+    return this.autoTestEnabled;
+  }
+
+  getDetectedTestRunner(): TestRunnerInfo | null {
+    return this.detectedTestRunner;
+  }
+
+  runProjectTests(): { passed: boolean; output: string } | null {
+    if (!this.detectedTestRunner) return null;
+    return runTests(this.detectedTestRunner, this.cwd);
   }
 
   /**

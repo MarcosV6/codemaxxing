@@ -20,6 +20,28 @@ export interface Theme {
 }
 
 export const THEMES: Record<string, Theme> = {
+  codemaxxing: {
+    name: "Codemaxxing",
+    description: "The default — calm, balanced, easy on the eyes for long sessions",
+    colors: {
+      // Soft cool palette tuned for sustained code reading: high enough contrast
+      // to scan quickly, low enough saturation that nothing screams at you.
+      primary: "#7AA2F7",      // soft blue — borders, highlights
+      secondary: "#BB9AF7",    // gentle lavender — banner, headings
+      muted: "#9AA5CE",        // dim blue-grey — secondary text, still legible on dark bg
+      text: "#C0CAF5",         // off-white blue — main text
+      userInput: "#9ECE6A",    // soft green — user input stands out without glaring
+      response: "#C0CAF5",     // same as text — assistant prose stays neutral so code is what your eye lands on
+      tool: "#7DCFFF",         // light cyan — tool calls
+      toolResult: "#9AA5CE",   // matches muted — tool output skimmable but readable
+      error: "#F7768E",        // soft coral — errors visible but not jarring
+      success: "#9ECE6A",      // soft green
+      warning: "#E0AF68",      // warm amber
+      spinner: "#7AA2F7",
+      border: "#565F89",       // slate — frames things without competing
+      suggestion: "#BB9AF7",
+    },
+  },
   "cyberpunk-neon": {
     name: "Cyberpunk Neon",
     description: "Electric cyan & magenta — Night City terminal",
@@ -324,7 +346,7 @@ export const THEMES: Record<string, Theme> = {
   },
 };
 
-export const DEFAULT_THEME = "nord";
+export const DEFAULT_THEME = "codemaxxing";
 
 export function getTheme(name: string): Theme {
   return THEMES[name] ?? THEMES[DEFAULT_THEME];

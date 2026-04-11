@@ -1,6 +1,6 @@
 import { exec as execAsync, execFile as execFileAsync } from "child_process";
 import { promisify } from "util";
-import { getDiff, undoLastCommit } from "../utils/git.js";
+import { getDiff, undoLastCommit, createCheckpoint, restoreCheckpoint, listCheckpoints } from "../utils/git.js";
 import type { AddMsg } from "./types.js";
 import { compactCommandOutput, getCommandErrorMessage } from "./output.js";
 
@@ -12,6 +12,39 @@ export function tryHandleGitCommand(
   cwd: string,
   addMsg: AddMsg,
 ): boolean {
+  if (trimmed === "/checkpoint" || trimmed.startsWith("/checkpoint ")) {
+    const label = trimmed.replace("/checkpoint", "").trim() || undefined;
+    const result = createCheckpoint(cwd, label);
+    addMsg("info", result.success ? `✅ ${result.message}` : `✗ ${result.message}`);
+    return true;
+  }
+
+  if (trimmed === "/checkpoints") {
+    const cps = listCheckpoints(cwd);
+    if (cps.length === 0) {
+      addMsg("info", "No checkpoints saved. Use /checkpoint to create one.");
+    } else {
+      addMsg("info", `Checkpoints (${cps.length}):\n${cps.map((c) => `  ${c}`).join("\n")}\n\n  Use /restore <id> to restore`);
+    }
+    return true;
+  }
+
+  if (trimmed.startsWith("/restore")) {
+    const id = trimmed.replace("/restore", "").trim();
+    if (!id) {
+      const cps = listCheckpoints(cwd);
+      if (cps.length === 0) {
+        addMsg("info", "No checkpoints. Use /checkpoint to create one first.");
+      } else {
+        addMsg("info", `Usage: /restore <checkpoint-id>\n\nAvailable:\n${cps.map((c) => `  ${c}`).join("\n")}`);
+      }
+      return true;
+    }
+    const result = restoreCheckpoint(cwd, id);
+    addMsg("info", result.success ? `✅ ${result.message}` : `✗ ${result.message}`);
+    return true;
+  }
+
   if (trimmed === "/diff") {
     const diff = getDiff(cwd);
     addMsg("info", diff);
