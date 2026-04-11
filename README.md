@@ -3,14 +3,23 @@
 > your code. your model. no excuses.
 
 <p align="center">
-  <img src="assets/screenshot.jpg" alt="codemaxxing terminal UI" width="700">
+  <img src="assets/screenshot-v1.5.jpg" alt="codemaxxing terminal UI" width="700">
 </p>
 
 [![npm version](https://img.shields.io/npm/v/codemaxxing)](https://www.npmjs.com/package/codemaxxing) [![license](https://img.shields.io/npm/l/codemaxxing)](LICENSE)
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
-**🆕 Testing build:** this branch includes improved paste interception, approval prompt key handling fixes, OpenAI OAuth auto-refresh, and smoother `/login` re-auth + auto-reconnect behavior. It has been tested a bit and is working well so far, but it still needs broader real-world testing across terminals and platforms.
+**🆕 v1.5.0:** major design overhaul with a cleaner terminal UI, theme persistence, richer status and task tracking, markdown rendering, smarter context-window detection, Windows PowerShell typing fixes, and a more polished release flow.
+
+### What's new in v1.5.0
+
+- redesigned terminal UI with stronger first-run presentation
+- theme persistence and better UI polish across sessions
+- live task progress and richer markdown-style output rendering
+- smarter model context-window detection from provider APIs
+- Windows PowerShell fast-typing fix plus security/reliability cleanup
+- new release QA plan and better packaging readiness
 
 ## Why?
 

@@ -6,15 +6,39 @@
  */
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as {
+  version: string;
+};
+
+function printHelp(): void {
+  console.log(`codemaxxing v${pkg.version}
+
+Usage:
+  codemaxxing                Start the interactive TUI
+  codemaxxing exec <prompt>  Run headless/CI mode
+  codemaxxing serve          Start the HTTP/SSE server
+  codemaxxing login          Open provider login flow
+  codemaxxing auth ...       Manage auth credentials
+
+Flags:
+  -h, --help                 Show this help message
+  -v, --version              Show version
+`);
+}
 
 const subcmd = process.argv[2];
 
-if (subcmd === "login" || subcmd === "auth") {
+if (subcmd === "-h" || subcmd === "--help" || subcmd === "help") {
+  printHelp();
+} else if (subcmd === "-v" || subcmd === "--version" || subcmd === "version") {
+  console.log(pkg.version);
+} else if (subcmd === "login" || subcmd === "auth") {
   // Route to auth CLI (spawn is fine here — no TUI/raw mode needed)
   const authScript = join(__dirname, "auth-cli.js");
   const args = subcmd === "login"
