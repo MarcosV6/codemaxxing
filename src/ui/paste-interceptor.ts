@@ -29,12 +29,15 @@ class PasteFilterStream extends Transform {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   public readonly pasteEvents = new EventEmitter();
 
-  // On Windows the partial-marker hold-back causes intermittent typing
-  // corruption — stdin chunks are bursty and the 10ms timer reorders
-  // keystrokes. Terminals send bracketed paste markers atomically, so
-  // disable hold-back entirely on Windows and accept the rare missed
-  // paste chip in exchange for rock-solid typing.
-  private static readonly HOLD_PARTIAL_PREFIXES = process.platform !== "win32";
+  // The partial-marker hold-back causes intermittent typing corruption
+  // on every platform — stdin chunks are bursty and the 10ms timer can
+  // reorder keystrokes or stall input whenever a chunk happens to end
+  // in an escape sequence prefix. Terminals send bracketed paste
+  // markers atomically, so disable hold-back entirely and accept the
+  // rare missed paste chip in exchange for rock-solid typing. The
+  // input-box sanitizer strips any marker fragments that do leak
+  // through as a second line of defense.
+  private static readonly HOLD_PARTIAL_PREFIXES = false;
 
   // Escape sequences (arrow keys etc.) arrive within ~1-2ms.
   // Bracketed paste start markers arrive within ~5ms.
