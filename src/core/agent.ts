@@ -1799,6 +1799,20 @@ export class CodingAgent {
     return this.cwd;
   }
 
+  /**
+   * Switch the agent's working directory mid-session. Tool calls resolve
+   * against the new path immediately. Re-detects linter/test runner and
+   * git state, but keeps the existing conversation and system prompt —
+   * project rules from the original directory remain loaded until the
+   * next session, which is an accepted trade-off to preserve context.
+   */
+  updateCwd(newCwd: string): void {
+    this.cwd = newCwd;
+    this.gitEnabled = isGitRepo(newCwd);
+    this.detectedLinter = detectLinter(newCwd);
+    this.detectedTestRunner = detectTestRunner(newCwd);
+  }
+
   getProjectRulesSource(): string | null {
     return this.projectRulesSource;
   }

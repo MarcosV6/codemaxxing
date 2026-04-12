@@ -3,14 +3,28 @@ import { Box, Text } from "ink";
 import type { CodingAgent } from "../agent.js";
 import { getActiveSkillCount } from "../bridge/skills.js";
 import { formatContextSize } from "../utils/model-context.js";
+import { prettyCwd } from "./banner.js";
+import { basename } from "path";
 
 interface StatusBarProps {
   agent: CodingAgent;
   modelName: string;
   sessionDisabledSkills: Set<string>;
+  cwd: string;
 }
 
-export function StatusBar({ agent, modelName, sessionDisabledSkills }: StatusBarProps) {
+// Collapse a workspace path for the status bar: show just the folder
+// name unless it's at/near the home directory, where the ~-prefixed
+// path is more informative. Truncate to keep the status bar one line.
+function formatCwdForStatus(cwd: string): string {
+  const pretty = prettyCwd(cwd);
+  // Short enough — use as-is
+  if (pretty.length <= 30) return pretty;
+  // Otherwise just show the final folder name
+  return basename(cwd);
+}
+
+export function StatusBar({ agent, modelName, sessionDisabledSkills, cwd }: StatusBarProps) {
   const tokens = agent.estimateTokens();
   const tokenStr = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
   const { totalCost } = agent.getCostInfo();
@@ -41,9 +55,13 @@ export function StatusBar({ agent, modelName, sessionDisabledSkills }: StatusBar
     ? `~${tokenStr}/${formatContextSize(detectedWindow)}`
     : `~${tokenStr} tok`;
 
+  const cwdStr = formatCwdForStatus(cwd);
+
   return (
     <Box paddingX={2} marginTop={0}>
       <Text color="#555555">{"\u2500".repeat(2)} </Text>
+      <Text color="#8BE9FD">{cwdStr}</Text>
+      <Text color="#555555">{" \u00b7 "}</Text>
       <Text color={gaugeColor}>{gauge}</Text>
       <Text color="#555555">{" "}{agent.getContextLength()} msgs</Text>
       <Text color="#555555">{" \u00b7 "}</Text>

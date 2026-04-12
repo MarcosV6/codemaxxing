@@ -70,6 +70,7 @@ const SLASH_COMMANDS = [
   { cmd: "/login", desc: "set up authentication" },
   { cmd: "/map", desc: "show repository map" },
   { cmd: "/reset", desc: "clear conversation" },
+  { cmd: "/cd", desc: "change workspace directory" },
   { cmd: "/compact", desc: "compress conversation context" },
   { cmd: "/cost", desc: "show token usage and cost" },
   { cmd: "/read-only", desc: "add file as read-only context" },
@@ -342,6 +343,7 @@ function App() {
   const activeRequestIdRef = useRef(0);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
+  const [cwdDisplay, setCwdDisplay] = useState(process.cwd());
   const [theme, setTheme] = useState<Theme>(() => {
     // Honor the persisted preference from settings.json so the user's choice
     // survives restarts. Falls back to DEFAULT_THEME if unset or invalid.
@@ -1092,6 +1094,7 @@ function App() {
         "  /session delete — delete a session",
         "  /resume    — resume a past session",
         "  /reset     — clear conversation",
+        "  /cd <path> — change workspace directory",
         "  /compact   — compress conversation context",
         "  /cost      — show token usage and estimated cost",
         "  /read-only <file> — add file as read-only context",
@@ -1277,6 +1280,38 @@ function App() {
     if (trimmed === "/reset") {
       agent!.reset();
       addMsg("info", "✅ Conversation reset.");
+      return;
+    }
+    if (trimmed === "/cd" || trimmed.startsWith("/cd ")) {
+      const raw = trimmed.replace("/cd", "").trim();
+      if (!raw) {
+        addMsg("info", `Usage: /cd <path>\n  Current workspace: ${agent?.getCwd() ?? process.cwd()}`);
+        return;
+      }
+      const fs = await import("fs");
+      const path = await import("path");
+      const os = await import("os");
+      // Expand ~ and resolve relative to current cwd
+      let target = raw;
+      if (target === "~") target = os.homedir();
+      else if (target.startsWith("~/")) target = path.join(os.homedir(), target.slice(2));
+      target = path.resolve(process.cwd(), target);
+      if (!fs.existsSync(target)) {
+        addMsg("error", `Path does not exist: ${target}`);
+        return;
+      }
+      if (!fs.statSync(target).isDirectory()) {
+        addMsg("error", `Not a directory: ${target}`);
+        return;
+      }
+      try {
+        process.chdir(target);
+        agent?.updateCwd(target);
+        setCwdDisplay(target);
+        addMsg("info", `📁 Workspace changed to ${target}\n  (Project rules from the original folder remain in context until next session.)`);
+      } catch (err: any) {
+        addMsg("error", `Failed to change directory: ${err.message}`);
+      }
       return;
     }
     if (trimmed === "/compact") {
@@ -1840,7 +1875,7 @@ function App() {
 
       {/* ═══ STATUS BAR ═══ */}
       {agent && (
-        <StatusBar agent={agent} modelName={modelName} sessionDisabledSkills={sessionDisabledSkills} />
+        <StatusBar agent={agent} modelName={modelName} sessionDisabledSkills={sessionDisabledSkills} cwd={cwdDisplay} />
       )}
     </Box>
   );

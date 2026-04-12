@@ -64,8 +64,7 @@ interface BannerProps {
   colors: Theme["colors"];
 }
 
-function prettyCwd(): string {
-  const cwd = process.cwd();
+export function prettyCwd(cwd: string = process.cwd()): string {
   const home = os.homedir();
   if (cwd === home) return "~";
   if (cwd.startsWith(home + path.sep)) return "~" + cwd.slice(home.length);
