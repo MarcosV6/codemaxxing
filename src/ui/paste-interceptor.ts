@@ -29,6 +29,13 @@ class PasteFilterStream extends Transform {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   public readonly pasteEvents = new EventEmitter();
 
+  // On Windows the partial-marker hold-back causes intermittent typing
+  // corruption — stdin chunks are bursty and the 10ms timer reorders
+  // keystrokes. Terminals send bracketed paste markers atomically, so
+  // disable hold-back entirely on Windows and accept the rare missed
+  // paste chip in exchange for rock-solid typing.
+  private static readonly HOLD_PARTIAL_PREFIXES = process.platform !== "win32";
+
   // Escape sequences (arrow keys etc.) arrive within ~1-2ms.
   // Bracketed paste start markers arrive within ~5ms.
   // If a partial marker prefix sits in the buffer longer than this,
@@ -85,12 +92,16 @@ class PasteFilterStream extends Transform {
           // (\x1b[2, \x1b[20, \x1b[200). A bare \x1b or \x1b[ are too
           // common (Escape key, arrow keys, function keys) — holding them
           // causes input corruption during fast typing, especially on Windows.
-          const markerPrefixes = ["\x1b[2", "\x1b[20", "\x1b[200"];
-          const trailingPrefix = markerPrefixes.find((p) => data.endsWith(p));
-          if (trailingPrefix) {
-            forward += data.slice(0, -trailingPrefix.length);
-            this.streamBuffer = trailingPrefix;
-            this.scheduleFlush();
+          if (PasteFilterStream.HOLD_PARTIAL_PREFIXES) {
+            const markerPrefixes = ["\x1b[2", "\x1b[20", "\x1b[200"];
+            const trailingPrefix = markerPrefixes.find((p) => data.endsWith(p));
+            if (trailingPrefix) {
+              forward += data.slice(0, -trailingPrefix.length);
+              this.streamBuffer = trailingPrefix;
+              this.scheduleFlush();
+            } else {
+              forward += data;
+            }
           } else {
             forward += data;
           }
@@ -111,13 +122,17 @@ class PasteFilterStream extends Transform {
 
         if (endIdx === -1) {
           // Check for partial end-marker prefix at end of chunk
-          const endPrefixes = ["\x1b[2", "\x1b[20", "\x1b[201"];
-          const trailingPrefix = endPrefixes.find((p) => data.endsWith(p));
-          if (trailingPrefix) {
-            this.bracketedBuffer += data.slice(0, -trailingPrefix.length);
-            this.streamBuffer = trailingPrefix;
-            // No scheduleFlush here — we're inside a paste, so we wait
-            // for the end marker. Paste content arrives fast enough.
+          if (PasteFilterStream.HOLD_PARTIAL_PREFIXES) {
+            const endPrefixes = ["\x1b[2", "\x1b[20", "\x1b[201"];
+            const trailingPrefix = endPrefixes.find((p) => data.endsWith(p));
+            if (trailingPrefix) {
+              this.bracketedBuffer += data.slice(0, -trailingPrefix.length);
+              this.streamBuffer = trailingPrefix;
+              // No scheduleFlush here — we're inside a paste, so we wait
+              // for the end marker. Paste content arrives fast enough.
+            } else {
+              this.bracketedBuffer += data;
+            }
           } else {
             this.bracketedBuffer += data;
           }
