@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { readdirSync, statSync } from "fs";
+import { join as joinPath } from "path";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
@@ -1802,15 +1804,62 @@ export class CodingAgent {
   /**
    * Switch the agent's working directory mid-session. Tool calls resolve
    * against the new path immediately. Re-detects linter/test runner and
-   * git state, but keeps the existing conversation and system prompt —
-   * project rules from the original directory remain loaded until the
-   * next session, which is an accepted trade-off to preserve context.
+   * git state, reloads project rules for the new directory, and injects
+   * a system message into the conversation so the model knows the
+   * original system-prompt context (repo map, file tree, old rules) is
+   * now stale and to use its tools to explore the new workspace.
    */
   updateCwd(newCwd: string): void {
     this.cwd = newCwd;
     this.gitEnabled = isGitRepo(newCwd);
     this.detectedLinter = detectLinter(newCwd);
     this.detectedTestRunner = detectTestRunner(newCwd);
+
+    // Reload project rules for the new folder
+    const rules = loadProjectRules(newCwd);
+    this.projectRulesSource = rules?.source ?? null;
+
+    // Peek at the top-level contents so the announcement is useful
+    // without paying for a full repo map rebuild.
+    let topLevel = "";
+    try {
+      const IGNORE = new Set(["node_modules", ".git", "dist", ".next", "__pycache__", ".DS_Store"]);
+      const entries = readdirSync(newCwd)
+        .filter((e) => !IGNORE.has(e) && !e.startsWith("."))
+        .slice(0, 40);
+      const lines: string[] = [];
+      for (const entry of entries) {
+        try {
+          const stat = statSync(joinPath(newCwd, entry));
+          lines.push(stat.isDirectory() ? `  ${entry}/` : `  ${entry}`);
+        } catch {
+          // skip
+        }
+      }
+      topLevel = lines.join("\n");
+    } catch {
+      // ignore — non-fatal
+    }
+
+    const parts: string[] = [
+      "[WORKSPACE CHANGED]",
+      `The user switched the working directory. All future tool calls (read_file, write_file, glob, grep, run_command, etc.) now resolve against this new root instead of the one in your initial system prompt.`,
+      `New workspace root: ${newCwd}`,
+      `Git: ${this.gitEnabled ? "yes" : "no"}`,
+      `Detected linter: ${this.detectedLinter?.name ?? "none"}`,
+      `Detected test runner: ${this.detectedTestRunner?.name ?? "none"}`,
+    ];
+    if (topLevel) {
+      parts.push(`\nTop-level entries:\n${topLevel}`);
+    }
+    parts.push(
+      "\nThe repo map, file tree, and project rules from your original system prompt are now STALE — ignore them. Use list_files, glob, and read_file to rebuild your mental model of this new workspace before making changes.",
+    );
+    if (rules) {
+      parts.push(`\n--- New Project Rules (${rules.source}) ---\n${rules.content}\n--- End Project Rules ---`);
+    }
+
+    this.messages.push({ role: "system", content: parts.join("\n") });
   }
 
   getProjectRulesSource(): string | null {
