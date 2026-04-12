@@ -1,4 +1,6 @@
 import type { Key } from "ink";
+import * as fsSync from "fs";
+import * as pathLib from "path";
 import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "../utils/auth.js";
 import { loginOpenAICodexOAuth } from "../utils/openai-oauth.js";
 import { loginAnthropicOAuth } from "../utils/anthropic-oauth.js";
@@ -61,6 +63,17 @@ export interface InputRouterContext extends WizardContext {
   orchestratePickerIndex: number;
   setOrchestratePickerIndex: (fn: (prev: number) => number) => void;
   setOrchestratePicker: (val: boolean) => void;
+
+  // Workspace (cwd) picker
+  cwdPicker: boolean;
+  cwdPickerPath: string;
+  cwdPickerEntries: string[];
+  cwdPickerIndex: number;
+  setCwdPicker: (val: boolean) => void;
+  setCwdPickerPath: (val: string) => void;
+  setCwdPickerEntries: (val: string[]) => void;
+  setCwdPickerIndex: (fn: (prev: number) => number) => void;
+  onCwdSelected: (newCwd: string) => void;
   sessionDisabledSkills: Set<string>;
   setSessionDisabledSkills: (fn: (prev: Set<string>) => Set<string>) => void;
 
@@ -167,6 +180,7 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleAgentPicker(inputChar, key, ctx)) return true;
   if (handleSchedulePicker(inputChar, key, ctx)) return true;
   if (handleOrchestratePicker(inputChar, key, ctx)) return true;
+  if (handleCwdPicker(inputChar, key, ctx)) return true;
   if (handleProviderPicker(inputChar, key, ctx)) return true;
   if (handleModelPicker(inputChar, key, ctx)) return true;
   if (handleOllamaDeletePicker(inputChar, key, ctx)) return true;
@@ -628,6 +642,62 @@ function handleOrchestratePicker(_inputChar: string, key: Key, ctx: InputRouterC
       ctx.setInput(`/orchestrate ${selected} `);
       ctx.setInputKey((k) => k + 1);
     }
+    return true;
+  }
+  return true;
+}
+
+function handleCwdPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.cwdPicker) return false;
+  const len = ctx.cwdPickerEntries.length;
+  if (len === 0) {
+    if (key.escape) {
+      ctx.setCwdPicker(false);
+      return true;
+    }
+    return true;
+  }
+  if (key.upArrow) {
+    ctx.setCwdPickerIndex((prev) => (prev - 1 + len) % len);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setCwdPickerIndex((prev) => (prev + 1) % len);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setCwdPicker(false);
+    ctx.setCwdPickerIndex(() => 0);
+    return true;
+  }
+  if (key.return) {
+    const selected = ctx.cwdPickerEntries[ctx.cwdPickerIndex];
+    if (selected === ".") {
+      // Select current folder
+      ctx.setCwdPicker(false);
+      ctx.setCwdPickerIndex(() => 0);
+      ctx.onCwdSelected(ctx.cwdPickerPath);
+      return true;
+    }
+    // Otherwise descend or go to parent
+    const nextPath = selected === ".."
+      ? pathLib.dirname(ctx.cwdPickerPath)
+      : pathLib.join(ctx.cwdPickerPath, selected);
+    // Refresh entries for the new directory
+    const entries: string[] = [".", ".."];
+    try {
+      const items = fsSync.readdirSync(nextPath, { withFileTypes: true });
+      const subdirs = items
+        .filter((i) => i.isDirectory() && !i.name.startsWith("."))
+        .map((i) => i.name)
+        .sort((a, b) => a.localeCompare(b));
+      entries.push(...subdirs);
+    } catch {
+      // unreadable — fall through with just ./..
+    }
+    ctx.setCwdPickerPath(nextPath);
+    ctx.setCwdPickerEntries(entries);
+    ctx.setCwdPickerIndex(() => 0);
     return true;
   }
   return true;

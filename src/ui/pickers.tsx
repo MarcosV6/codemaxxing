@@ -300,6 +300,50 @@ export function OrchestrateCommandPicker({ selectedIndex, colors }: CommandPicke
   );
 }
 
+// ── Workspace (cwd) Picker ──
+
+interface CwdPickerProps {
+  currentPath: string;
+  entries: string[];
+  selectedIndex: number;
+  colors: Theme["colors"];
+}
+
+export function CwdPicker({ currentPath, entries, selectedIndex, colors }: CwdPickerProps) {
+  const WINDOW = 12;
+  const total = entries.length;
+  let start = 0;
+  if (total > WINDOW) {
+    start = Math.max(0, Math.min(selectedIndex - Math.floor(WINDOW / 2), total - WINDOW));
+  }
+  const end = Math.min(start + WINDOW, total);
+  const visible = entries.slice(start, end);
+
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Pick workspace folder:</Text>
+      <Text color={colors.muted}>{`  ${currentPath}`}</Text>
+      {start > 0 && <Text color={colors.muted}>{`  ↑ ${start} more above`}</Text>}
+      {visible.map((entry, i) => {
+        const absoluteIndex = start + i;
+        const isSelected = absoluteIndex === selectedIndex;
+        const label =
+          entry === "." ? "· select this folder"
+          : entry === ".." ? ".. (parent)"
+          : entry + "/";
+        return (
+          <Text key={entry + absoluteIndex}>
+            {isSelected ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+            <Text color={isSelected ? colors.suggestion : colors.primary} bold>{label}</Text>
+          </Text>
+        );
+      })}
+      {total > end && <Text color={colors.muted}>{`  ↓ ${total - end} more below`}</Text>}
+      <Text dimColor>{"  ↑↓ navigate · Enter open/select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
 // ── Theme Picker ──
 
 interface ThemePickerProps {

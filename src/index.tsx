@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
+import * as fsSync from "fs";
 import { sanitizeInputArtifacts } from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
 import type { CodingAgent } from "./core/agent.js";
@@ -41,7 +42,7 @@ import { getTasks, onTaskChange, clearTasks, type AgentTask } from "./utils/task
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
-  OrchestrateCommandPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  OrchestrateCommandPicker, CwdPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
   DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
@@ -323,6 +324,24 @@ function getToolIcon(toolText: string): string {
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
+// List subdirectories of a path, sorted alphabetically. Always prepends
+// "." (select current) and ".." (go to parent) entries. Hidden folders
+// (starting with ".") are excluded. Returns empty-safe even on EPERM.
+function loadCwdEntries(dir: string): string[] {
+  const entries: string[] = [".", ".."];
+  try {
+    const items = fsSync.readdirSync(dir, { withFileTypes: true });
+    const subdirs = items
+      .filter((i) => i.isDirectory() && !i.name.startsWith("."))
+      .map((i) => i.name)
+      .sort((a, b) => a.localeCompare(b));
+    entries.push(...subdirs);
+  } catch {
+    // unreadable directory — just offer ./.. navigation
+  }
+  return entries;
+}
+
 // ── Main App ──
 function App() {
   const { exit } = useApp();
@@ -344,6 +363,10 @@ function App() {
   const [agent, setAgent] = useState<CodingAgent | null>(null);
   const [modelName, setModelName] = useState("");
   const [cwdDisplay, setCwdDisplay] = useState(process.cwd());
+  const [cwdPicker, setCwdPicker] = useState(false);
+  const [cwdPickerPath, setCwdPickerPath] = useState(process.cwd());
+  const [cwdPickerIndex, setCwdPickerIndex] = useState(0);
+  const [cwdPickerEntries, setCwdPickerEntries] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(() => {
     // Honor the persisted preference from settings.json so the user's choice
     // survives restarts. Falls back to DEFAULT_THEME if unset or invalid.
@@ -1285,7 +1308,13 @@ function App() {
     if (trimmed === "/cd" || trimmed.startsWith("/cd ")) {
       const raw = trimmed.replace("/cd", "").trim();
       if (!raw) {
-        addMsg("info", `Usage: /cd <path>\n  Current workspace: ${agent?.getCwd() ?? process.cwd()}`);
+        // Open interactive folder picker rooted at current cwd
+        const start = process.cwd();
+        const entries = loadCwdEntries(start);
+        setCwdPickerPath(start);
+        setCwdPickerEntries(entries);
+        setCwdPickerIndex(0);
+        setCwdPicker(true);
         return;
       }
       const fs = await import("fs");
@@ -1551,6 +1580,24 @@ function App() {
       orchestratePickerIndex,
       setOrchestratePickerIndex,
       setOrchestratePicker,
+      cwdPicker,
+      cwdPickerPath,
+      cwdPickerEntries,
+      cwdPickerIndex,
+      setCwdPicker,
+      setCwdPickerPath,
+      setCwdPickerEntries,
+      setCwdPickerIndex,
+      onCwdSelected: (newCwd: string) => {
+        try {
+          process.chdir(newCwd);
+          agent?.updateCwd(newCwd);
+          setCwdDisplay(newCwd);
+          addMsg("info", `📁 Workspace changed to ${newCwd}\n  (Project rules from the original folder remain in context until next session.)`);
+        } catch (err: any) {
+          addMsg("error", `Failed to change directory: ${err.message}`);
+        }
+      },
       sessionDisabledSkills,
       setSessionDisabledSkills,
       modelPickerGroups,
@@ -1760,6 +1807,16 @@ function App() {
       {/* ═══ ORCHESTRATE PICKER ═══ */}
       {orchestratePicker && (
         <OrchestrateCommandPicker selectedIndex={orchestratePickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ WORKSPACE (CWD) PICKER ═══ */}
+      {cwdPicker && (
+        <CwdPicker
+          currentPath={cwdPickerPath}
+          entries={cwdPickerEntries}
+          selectedIndex={cwdPickerIndex}
+          colors={theme.colors}
+        />
       )}
 
       {/* ═══ THEME PICKER ═══ */}
