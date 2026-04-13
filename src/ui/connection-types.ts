@@ -5,7 +5,7 @@ import type { WizardScreen } from "./wizard-types.js";
 
 export interface ChatMessage {
   id: number;
-  type: "user" | "response" | "tool" | "tool-result" | "error" | "info";
+  type: "user" | "response" | "tool" | "tool-result" | "error" | "info" | "diff";
   text: string;
 }
 
