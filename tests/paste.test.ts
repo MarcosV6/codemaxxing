@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { consumePendingPasteEndMarkerChunk, shouldSwallowPostPasteDebris, sanitizeInputArtifacts } from "../src/utils/paste.js";
+import {
+  consumePendingPasteEndMarkerChunk,
+  reconcileInputWithPendingPasteMarker,
+  shouldSwallowPostPasteDebris,
+  sanitizeInputArtifacts,
+} from "../src/utils/paste.js";
 
 const idle = { active: false, buffer: "" };
 const armed = { active: true, buffer: "" };
@@ -127,6 +132,20 @@ describe("consumePendingPasteEndMarkerChunk", () => {
   it("releases plain text directly when armed and content is not a prefix", () => {
     const result = consumePendingPasteEndMarkerChunk("hello world", armed);
     expect(result.remaining).toBe("hello world");
+    expect(result.nextState.active).toBe(false);
+  });
+});
+
+describe("reconcileInputWithPendingPasteMarker", () => {
+  it("strips a leaked end marker from appended input", () => {
+    const result = reconcileInputWithPendingPasteMarker("hello", "hello[201~", armed);
+    expect(result.value).toBe("hello");
+    expect(result.nextState.active).toBe(false);
+  });
+
+  it("preserves non-append updates and disarms instead of deleting text", () => {
+    const result = reconcileInputWithPendingPasteMarker("hello", "hlelo", armed);
+    expect(result.value).toBe("hlelo");
     expect(result.nextState.active).toBe(false);
   });
 });

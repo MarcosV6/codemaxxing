@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
-import { executeTool } from "../src/tools/files.js";
+import { executeTool, getShellFileWriteGuardReason } from "../src/tools/files.js";
 
 const TMP = join(import.meta.dirname, "__tmp_files_test__");
 
@@ -46,5 +46,25 @@ describe("write_file", () => {
     const result = await executeTool("write_file", { path: "deep/nested/dir/test.ts", content: "hello" }, TMP);
     expect(result).toContain("✅");
     expect(existsSync(join(TMP, "deep/nested/dir/test.ts"))).toBe(true);
+  });
+
+  it("expands ~ before enforcing project-root safety", async () => {
+    const result = await executeTool("write_file", { path: "~/outside-project/test.ts", content: "hello" }, TMP);
+    expect(result).toContain("Path escapes project root");
+  });
+});
+
+describe("run_command safeguards", () => {
+  it("blocks shell-based source file scaffolding", async () => {
+    const result = await executeTool("run_command", {
+      command: "cat > src/main.tsx <<'EOF'\nconsole.log('hi');\nEOF",
+    }, TMP);
+    expect(result).toContain("Blocked:");
+    expect(result).toContain("write_file");
+  });
+
+  it("allows normal build/test style commands", () => {
+    const result = getShellFileWriteGuardReason("npm run build > build.log");
+    expect(result).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { homedir } from "os";
 
 const LEARNED_SKILLS_DIR = join(homedir(), ".codemaxxing", "learned-skills");
@@ -29,20 +29,176 @@ export interface WorkflowTrace {
   totalIterations: number;
 }
 
+const WRITE_TOOLS = new Set(["write_file", "edit_file"]);
+const COMMAND_TOOLS = new Set(["run_command", "run_background_command"]);
+const READ_TOOLS = new Set(["read_file", "list_files", "search_files", "grep_search", "glob_search"]);
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function joinWithAnd(parts: string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
+}
+
+function trimCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ").slice(0, 80);
+}
+
+function sanitizePathLabel(path: string): string {
+  return path.replace(/^.*[\\/]/, "");
+}
+
+function detectEcosystem(paths: string[], commands: string[]): string {
+  const corpus = [...paths, ...commands].join(" ").toLowerCase();
+
+  if (
+    corpus.includes("package.json") ||
+    /\b(?:npm|pnpm|yarn|bun|vite|node)\b/.test(corpus)
+  ) {
+    return "node";
+  }
+  if (corpus.includes("cargo.toml") || /\bcargo\b|\brustc\b/.test(corpus)) {
+    return "rust";
+  }
+  if (
+    corpus.includes("pyproject.toml") ||
+    corpus.includes("requirements.txt") ||
+    /\b(?:python|pip|pytest)\b/.test(corpus)
+  ) {
+    return "python";
+  }
+  if (corpus.includes("go.mod") || /\bgo\s+(?:build|run|test|get)\b/.test(corpus)) {
+    return "go";
+  }
+
+  return "project";
+}
+
+function detectCommandGoal(commands: string[]): "run" | "build" | "test" | "install" | "command" {
+  const joined = commands.join(" ; ").toLowerCase();
+
+  if (
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+dev|run\s+start|dev|start)\b/.test(joined) ||
+    /\b(?:vite|next dev|serve|preview)\b/.test(joined)
+  ) {
+    return "run";
+  }
+  if (
+    /\b(?:npm|pnpm|yarn|bun)\s+run\s+build\b/.test(joined) ||
+    /\b(?:vite build|tsc|cargo build|go build)\b/.test(joined)
+  ) {
+    return "build";
+  }
+  if (
+    /\b(?:npm|pnpm|yarn|bun)\s+run\s+test\b/.test(joined) ||
+    /\b(?:vitest|jest|pytest|cargo test|go test)\b/.test(joined)
+  ) {
+    return "test";
+  }
+  if (
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:install|add)\b/.test(joined) ||
+    /\b(?:pip install|cargo add|go get)\b/.test(joined)
+  ) {
+    return "install";
+  }
+
+  return "command";
+}
+
+function detectFocus(paths: string[]): string | null {
+  const lower = paths.map((path) => path.toLowerCase());
+
+  if (lower.some((path) => /(?:^|\/)(tests?|__tests__)\//.test(path) || /\.(test|spec)\./.test(path))) {
+    return "tests";
+  }
+  if (
+    lower.some(
+      (path) =>
+        path.includes("/src/") ||
+        /\.(?:ts|tsx|js|jsx|css|scss|html)$/.test(path),
+    )
+  ) {
+    return "app";
+  }
+  if (
+    lower.some((path) =>
+      /(?:package\.json|tsconfig|vite\.config|webpack|eslint|prettier|tailwind|dockerfile)/.test(path),
+    )
+  ) {
+    return "config";
+  }
+
+  const first = lower[0];
+  if (!first) return null;
+
+  const label = basename(first).replace(/\.[a-z0-9]+$/i, "");
+  if (!label || ["index", "main", "app"].includes(label)) return null;
+  return label.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || null;
+}
+
+function detectWorkflowAction(fileWrites: string[], commands: string[]): string {
+  const hasWrites = fileWrites.length > 0;
+  const goal = detectCommandGoal(commands);
+
+  if (hasWrites && goal === "run") return "scaffold-run";
+  if (hasWrites && goal === "build") return "edit-build";
+  if (hasWrites && goal === "test") return "edit-test";
+  if (hasWrites && goal === "install") return "scaffold-install";
+  if (hasWrites && commands.length > 0) return "edit-verify";
+  if (hasWrites) return "edit";
+  if (goal !== "command") return goal;
+  if (commands.length > 0) return "run";
+  return "inspect";
+}
+
+function buildTrigger(ecosystem: string, focus: string | null, commands: string[], fileWrites: string[]): string {
+  const parts: string[] = [];
+  const goal = detectCommandGoal(commands);
+
+  if (fileWrites.length > 0) parts.push("editing project files");
+  if (focus === "app") parts.push("working in app source files");
+  if (focus === "config") parts.push("updating project configuration");
+  if (focus === "tests") parts.push("changing tests");
+  if (goal === "run") parts.push("starting a local app");
+  if (goal === "build") parts.push("building the project");
+  if (goal === "test") parts.push("running verification");
+  if (goal === "install") parts.push("installing dependencies");
+
+  const summary = joinWithAnd(unique(parts)) || "repeatable project changes";
+  return `Use for ${ecosystem} tasks involving ${summary}.`;
+}
+
 // ── Triggers: when should we try to learn? ──
 
 /**
  * Evaluate whether a completed workflow should be saved as a learned skill.
  */
 export function shouldLearnSkill(trace: WorkflowTrace): boolean {
-  // At least 5 tool calls — non-trivial workflow
-  if (trace.totalIterations >= 5) return true;
+  const writeCount = trace.toolCalls.filter((tc) => WRITE_TOOLS.has(tc.name)).length;
+  const commandCalls = trace.toolCalls.filter((tc) => COMMAND_TOOLS.has(tc.name));
+  const commandCount = commandCalls.length;
+  const readCount = trace.toolCalls.filter((tc) => READ_TOOLS.has(tc.name)).length;
+  const uniqueTools = new Set(trace.toolCalls.map((tc) => tc.name));
+  const commandGoal = detectCommandGoal(
+    commandCalls.map((tc) => String(tc.args.command || "")),
+  );
 
-  // Error + recovery pattern — valuable to remember
+  if (trace.toolCalls.length < 4) return false;
+  if (uniqueTools.size < 2) return false;
+  if (writeCount === 0 || commandCount === 0) return false;
+  if (commandGoal === "command" || commandGoal === "install") return false;
+  if (writeCount + commandCount + readCount < 4) return false;
+
+  if (trace.totalIterations >= 6 || trace.toolCalls.length >= 6) return true;
   if (trace.hadError && trace.errorRecovered) return true;
-
-  // User corrected the agent then it succeeded
-  if (trace.userCorrection) return true;
 
   return false;
 }
@@ -54,44 +210,52 @@ export function shouldLearnSkill(trace: WorkflowTrace): boolean {
  * This creates a prompt.md that the agent can use next time.
  */
 export function generateSkillFromTrace(trace: WorkflowTrace): LearnedSkill {
-  const tools = [...new Set(trace.toolCalls.map(tc => tc.name))];
+  const tools = unique(trace.toolCalls.map((tc) => tc.name));
 
   // Extract the pattern: what files were read/written, what commands were run
   const fileReads = trace.toolCalls
-    .filter(tc => tc.name === "read_file")
-    .map(tc => String(tc.args.path || ""))
+    .filter((tc) => READ_TOOLS.has(tc.name))
+    .map((tc) => String(tc.args.path || ""))
     .filter(Boolean);
 
   const fileWrites = trace.toolCalls
-    .filter(tc => tc.name === "write_file" || tc.name === "edit_file")
-    .map(tc => String(tc.args.path || ""))
+    .filter((tc) => WRITE_TOOLS.has(tc.name))
+    .map((tc) => String(tc.args.path || ""))
     .filter(Boolean);
 
   const commands = trace.toolCalls
-    .filter(tc => tc.name === "run_command")
-    .map(tc => String(tc.args.command || ""))
+    .filter((tc) => COMMAND_TOOLS.has(tc.name))
+    .map((tc) => String(tc.args.command || ""))
     .filter(Boolean);
+
+  const ecosystem = detectEcosystem([...fileReads, ...fileWrites], commands);
+  const focus = detectFocus(fileWrites.length > 0 ? fileWrites : fileReads);
+  const action = detectWorkflowAction(fileWrites, commands);
 
   // Build step descriptions
   const steps: string[] = [];
-  if (fileReads.length > 0) steps.push(`Read: ${fileReads.slice(0, 5).join(", ")}`);
-  if (fileWrites.length > 0) steps.push(`Modified: ${fileWrites.slice(0, 5).join(", ")}`);
-  if (commands.length > 0) steps.push(`Ran: ${commands.slice(0, 5).join("; ")}`);
+  if (fileReads.length > 0) steps.push(`Read: ${unique(fileReads).slice(0, 5).map(sanitizePathLabel).join(", ")}`);
+  if (fileWrites.length > 0) steps.push(`Modified: ${unique(fileWrites).slice(0, 5).map(sanitizePathLabel).join(", ")}`);
+  if (commands.length > 0) steps.push(`Ran: ${unique(commands).slice(0, 5).map(trimCommand).join("; ")}`);
   if (trace.hadError && trace.errorRecovered) steps.push("Recovered from error during execution");
 
-  // Generate a name from the user message
-  const name = trace.userMessage
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, "")
-    .trim()
-    .split(/\s+/)
-    .slice(0, 4)
-    .join("-") || `workflow-${Date.now()}`;
+  const nameParts = [ecosystem, action, focus].filter(Boolean);
+  const name =
+    nameParts
+      .join("-")
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "") || `workflow-${Date.now()}`;
+
+  const descriptionBits: string[] = [];
+  if (fileWrites.length > 0) descriptionBits.push(`updated ${formatCount(unique(fileWrites).length, "file")}`);
+  if (commands.length > 0) descriptionBits.push(`ran ${formatCount(unique(commands).length, "command")}`);
+  if (trace.hadError && trace.errorRecovered) descriptionBits.push("recovered from an execution error");
 
   return {
     name,
-    description: `Learned from: "${trace.userMessage.slice(0, 100)}"`,
-    trigger: trace.userMessage.slice(0, 200),
+    description: `Repeatable ${ecosystem} workflow that ${joinWithAnd(descriptionBits) || "made project changes"}.`,
+    trigger: buildTrigger(ecosystem, focus, commands, fileWrites),
     steps,
     tools_used: tools,
     created_at: new Date().toISOString(),

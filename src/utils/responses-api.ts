@@ -16,14 +16,53 @@ export interface ResponsesAPIOptions {
   systemPrompt: string;
   messages: any[];
   tools: any[];
+  reasoningEffort?: "low" | "medium" | "high";
   onToken?: (token: string) => void;
-  onToolCall?: (name: string, args: Record<string, unknown>) => void;
 }
 
 interface ToolCall {
   id: string;
   name: string;
   input: Record<string, unknown>;
+}
+
+interface PartialToolCall {
+  key: string;
+  id: string;
+  name: string;
+  argumentsBuffer: string;
+}
+
+function getToolCallKey(event: any, item?: any, fallback?: string | null): string | null {
+  if (typeof item?.id === "string" && item.id) return item.id;
+  if (typeof event?.item_id === "string" && event.item_id) return event.item_id;
+  if (typeof item?.call_id === "string" && item.call_id) return item.call_id;
+  if (typeof event?.call_id === "string" && event.call_id) return event.call_id;
+  if (typeof event?.output_index === "number") return `output_${event.output_index}`;
+  return fallback ?? null;
+}
+
+function ensurePartialToolCall(
+  partials: Map<string, PartialToolCall>,
+  key: string,
+  item?: any,
+): PartialToolCall {
+  const existing = partials.get(key);
+  if (existing) {
+    if (item?.id) existing.id = item.id;
+    if (item?.call_id && !existing.id) existing.id = item.call_id;
+    if (item?.name) existing.name = item.name;
+    return existing;
+  }
+
+  const created: PartialToolCall = {
+    key,
+    id: item?.id || item?.call_id || key,
+    name: item?.name || "",
+    argumentsBuffer: "",
+  };
+  partials.set(key, created);
+  return created;
 }
 
 /**
@@ -44,8 +83,8 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     systemPrompt,
     messages,
     tools,
+    reasoningEffort,
     onToken,
-    onToolCall,
   } = options;
 
   // Build input items from message history
@@ -134,6 +173,10 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     body.tools = responseTools;
   }
 
+  if (reasoningEffort) {
+    body.reasoning = { effort: reasoningEffort };
+  }
+
   // Make the streaming request
   const response = await fetch(endpoint, {
     method: "POST",
@@ -155,9 +198,9 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
   let promptTokens = 0;
   let completionTokens = 0;
   const toolCalls: ToolCall[] = [];
-  let currentToolCallId = "";
-  let currentToolCallName = "";
-  let toolArgumentsBuffer = "";
+  const partialToolCalls = new Map<string, PartialToolCall>();
+  const finalizedToolCallIds = new Set<string>();
+  let lastToolCallKey: string | null = null;
 
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
@@ -211,9 +254,11 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
       if (eventType === "response.output_item.added") {
         const item = event.item;
         if (item?.type === "function_call") {
-          currentToolCallId = item.id || item.call_id || `tool_${Date.now()}`;
-          currentToolCallName = item.name || "";
-          toolArgumentsBuffer = "";
+          const key = getToolCallKey(event, item, `tool_${toolCalls.length + partialToolCalls.size}`);
+          if (key) {
+            ensurePartialToolCall(partialToolCalls, key, item);
+            lastToolCallKey = key;
+          }
         }
       }
 
@@ -221,55 +266,64 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
       if (eventType === "response.function_call_arguments.delta") {
         const delta = event.delta;
         if (delta) {
-          toolArgumentsBuffer += delta;
+          const key = getToolCallKey(event, undefined, lastToolCallKey);
+          if (key) {
+            const partial = ensurePartialToolCall(partialToolCalls, key);
+            partial.argumentsBuffer += delta;
+            lastToolCallKey = key;
+          }
         }
       }
 
       // Function call arguments done
       if (eventType === "response.function_call_arguments.done") {
-        try {
-          const args = JSON.parse(event.arguments || toolArgumentsBuffer);
-          toolCalls.push({
-            id: currentToolCallId,
-            name: currentToolCallName,
-            input: args,
-          });
-          onToolCall?.(currentToolCallName, args);
-        } catch {
-          // Try buffer if event.arguments isn't set
+        const key = getToolCallKey(event, undefined, lastToolCallKey);
+        if (key) {
+          const partial = ensurePartialToolCall(partialToolCalls, key);
+          const rawArgs = typeof event.arguments === "string" && event.arguments
+            ? event.arguments
+            : partial.argumentsBuffer;
+
           try {
-            const args = JSON.parse(toolArgumentsBuffer);
-            toolCalls.push({
-              id: currentToolCallId,
-              name: currentToolCallName,
-              input: args,
-            });
-            onToolCall?.(currentToolCallName, args);
+            const args = JSON.parse(rawArgs || "{}");
+            if (!finalizedToolCallIds.has(partial.id)) {
+              toolCalls.push({
+                id: partial.id,
+                name: partial.name,
+                input: args,
+              });
+              finalizedToolCallIds.add(partial.id);
+            }
           } catch {
             // Skip malformed tool call
+          } finally {
+            partial.argumentsBuffer = "";
+            lastToolCallKey = key;
           }
         }
-        toolArgumentsBuffer = "";
       }
 
       // Output item done (alternative tool call completion)
       if (eventType === "response.output_item.done") {
         const item = event.item;
         if (item?.type === "function_call" && item.arguments) {
-          // Check if we already captured this from arguments.done
-          const alreadyCaptured = toolCalls.some(tc => tc.id === (item.id || item.call_id));
-          if (!alreadyCaptured) {
+          const key = getToolCallKey(event, item, lastToolCallKey);
+          if (key) {
+            const partial = ensurePartialToolCall(partialToolCalls, key, item);
             try {
               const args = JSON.parse(item.arguments);
-              toolCalls.push({
-                id: item.id || item.call_id || currentToolCallId,
-                name: item.name || currentToolCallName,
-                input: args,
-              });
-              onToolCall?.(item.name || currentToolCallName, args);
+              if (!finalizedToolCallIds.has(partial.id)) {
+                toolCalls.push({
+                  id: partial.id,
+                  name: partial.name,
+                  input: args,
+                });
+                finalizedToolCallIds.add(partial.id);
+              }
             } catch {
               // Skip
             }
+            lastToolCallKey = key;
           }
         }
       }

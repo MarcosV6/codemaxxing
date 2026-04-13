@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, globSync as fsGlobSync } from "fs";
+import { homedir } from "os";
 import { join, relative, dirname, resolve, extname } from "path";
 import { loadIgnorePatterns } from "../utils/ignore.js";
 
@@ -6,8 +7,15 @@ import { loadIgnorePatterns } from "../utils/ignore.js";
  * Resolve a user-provided path against cwd and ensure it doesn't escape the project root.
  * Returns the resolved absolute path, or null if the path escapes cwd.
  */
-function safePath(cwd: string, userPath: string): string | null {
-  const resolved = resolve(cwd, userPath);
+function safePath(cwd: string, userPath: string | undefined | null): string | null {
+  if (!userPath || typeof userPath !== "string") return null;
+  const expandedPath =
+    userPath === "~"
+      ? homedir()
+      : userPath.startsWith("~/") || userPath.startsWith("~\\")
+        ? join(homedir(), userPath.slice(2))
+        : userPath;
+  const resolved = resolve(cwd, expandedPath);
   const root = resolve(cwd);
   if (!resolved.startsWith(root + "/") && resolved !== root) {
     // Windows: also check backslash separator
@@ -37,6 +45,71 @@ function normalizeWindowsCommand(command: string): { command: string; notes: str
   }
 
   return { command: normalized, notes };
+}
+
+const SHELL_FILE_WRITE_EXTENSIONS = new Set([
+  ".c", ".cc", ".cpp", ".css", ".go", ".h", ".hpp", ".html", ".ini", ".java",
+  ".js", ".json", ".jsx", ".md", ".mjs", ".php", ".py", ".rb", ".rs", ".sass",
+  ".scss", ".sh", ".sql", ".svelte", ".toml", ".ts", ".tsx", ".txt", ".vue",
+  ".yaml", ".yml", ".zsh",
+]);
+
+const SHELL_FILE_WRITE_BASENAMES = new Set([
+  "dockerfile",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "tsconfig.json",
+  "vite.config.ts",
+  "vite.config.js",
+  "index.html",
+  "readme.md",
+]);
+
+function normalizeShellTarget(raw: string): string {
+  return raw.trim().replace(/^['"]|['"]$/g, "");
+}
+
+function looksLikeProjectSourceTarget(target: string): boolean {
+  const normalized = normalizeShellTarget(target).toLowerCase();
+  if (!normalized) return false;
+  const base = normalized.split(/[\\/]/).pop() || normalized;
+  if (SHELL_FILE_WRITE_BASENAMES.has(base)) return true;
+  const extension = extname(base);
+  if (extension && SHELL_FILE_WRITE_EXTENSIONS.has(extension)) return true;
+  return normalized.includes("/src/") || normalized.includes("\\src\\");
+}
+
+function extractShellWriteTargets(command: string): string[] {
+  const targets: string[] = [];
+  const redirectRe = /(?:^|[^0-9])(?:>>?|1>>?|1>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+  const teeRe = /\btee\s+(?:-a\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+
+  for (const regex of [redirectRe, teeRe]) {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(command)) !== null) {
+      const target = normalizeShellTarget(match[1] || match[2] || match[3] || "");
+      if (target) targets.push(target);
+    }
+  }
+
+  return targets;
+}
+
+export function getShellFileWriteGuardReason(command: string): string | null {
+  const targets = extractShellWriteTargets(command).filter(looksLikeProjectSourceTarget);
+  if (targets.length === 0) return null;
+
+  const usesInlineShellFileWriting =
+    /\b(?:cat|echo|printf|tee)\b/i.test(command) ||
+    /<<['"]?[A-Za-z0-9_-]+['"]?/i.test(command) ||
+    />/.test(command);
+
+  if (!usesInlineShellFileWriting) return null;
+
+  const sample = targets.slice(0, 3).join(", ");
+  return `Blocked: run_command should not be used to write project files (${sample}). Use write_file or edit_file for source/config files, then use run_command only for installs, builds, tests, or launching the app.`;
 }
 
 
@@ -161,7 +234,7 @@ export const FILE_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "run_command",
       description:
-        "Execute a shell command and return the output. Use for running tests, builds, linters, etc. Commands should match the current OS shell (Windows vs Unix). Has a 30s timeout — use run_background_command for long-running processes like dev servers.",
+        "Execute a shell command and return the output. Use for running installs, builds, tests, linters, and one-shot verification commands. Do NOT use this to create or edit project files with shell redirection, heredocs, echo, cat, or tee — use write_file/edit_file for source files. Package manager commands (npm install, yarn, pip install, cargo build, etc.) get a 5-minute timeout; other commands have a 30s timeout. Use run_background_command for long-running processes like dev servers.",
       parameters: {
         type: "object",
         properties: {
@@ -428,9 +501,11 @@ export async function executeTool(
 ): Promise<string> {
   switch (name) {
     case "read_file": {
-      const filePath = safePath(cwd, args.path as string);
-      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
-      if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
+      const rawPath = (args.path ?? args.file_path ?? args.filepath ?? args.filename) as string | undefined;
+      if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
+      const filePath = safePath(cwd, rawPath);
+      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
+      if (!existsSync(filePath)) return `Error: File not found: ${rawPath}`;
       try {
         // Handle Jupyter notebooks
         if (extname(filePath).toLowerCase() === ".ipynb") {
@@ -477,21 +552,39 @@ export async function executeTool(
     }
 
     case "write_file": {
-      const filePath = safePath(cwd, args.path as string);
-      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
+      // LLMs sometimes use alternative arg names — normalize
+      const rawPath = (args.path ?? args.file_path ?? args.filepath ?? args.filename) as string | undefined;
+      const rawContent = (args.content ?? args.text ?? args.data) as string | undefined;
+      if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
+      if (rawContent === undefined) return `Error: Missing required 'content' argument.`;
+      const filePath = safePath(cwd, rawPath);
+      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
       try {
+        const existed = existsSync(filePath);
+        const oldContent = existed ? readFileSync(filePath, "utf-8") : "";
         mkdirSync(dirname(filePath), { recursive: true });
-        writeFileSync(filePath, args.content as string, "utf-8");
-        return `✅ Wrote ${(args.content as string).length} bytes to ${args.path}`;
+        writeFileSync(filePath, rawContent, "utf-8");
+
+        const newLines = rawContent.split("\n");
+        const added = existed
+          ? newLines.filter(l => !oldContent.includes(l)).length
+          : newLines.length;
+        const removed = existed
+          ? oldContent.split("\n").filter(l => !rawContent.includes(l)).length
+          : 0;
+        const diffStr = generateDiff(oldContent, rawContent, rawPath);
+        return `✅ Wrote ${rawContent.length} bytes to ${rawPath}\n<<<DIFF>>>${rawPath}\n+${added} -${removed}\n${diffStr}<<<END_DIFF>>>`;
       } catch (e: any) {
         return `Error writing file: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
 
     case "edit_file": {
-      const filePath = safePath(cwd, args.path as string);
-      if (!filePath) return `Error: Path escapes project root: ${args.path}`;
-      if (!existsSync(filePath)) return `Error: File not found: ${args.path}`;
+      const rawPath = (args.path ?? args.file_path ?? args.filepath ?? args.filename) as string | undefined;
+      if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
+      const filePath = safePath(cwd, rawPath);
+      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
+      if (!existsSync(filePath)) return `Error: File not found: ${rawPath}`;
       try {
         const oldText = String(args.oldText ?? "");
         const newText = String(args.newText ?? "");
@@ -499,7 +592,7 @@ export async function executeTool(
         const content = readFileSync(filePath, "utf-8");
         if (!oldText) return "Error: oldText cannot be empty.";
         if (!content.includes(oldText)) {
-          return `Error: Could not find exact text in ${args.path}`;
+          return `Error: Could not find exact text in ${rawPath}`;
         }
 
         const matchCount = content.split(oldText).length - 1;
@@ -508,7 +601,11 @@ export async function executeTool(
           : content.replace(oldText, newText);
 
         writeFileSync(filePath, nextContent, "utf-8");
-        return `✅ Edited ${args.path} (${replaceAll ? matchCount : 1} replacement${replaceAll ? (matchCount === 1 ? "" : "s") : ""})`;
+        const diffStr = generateDiff(content, nextContent, rawPath);
+        const addedLines = newText.split("\n").length;
+        const removedLines = oldText.split("\n").length;
+        const summary = `✅ Edited ${rawPath} (${replaceAll ? matchCount : 1} replacement${replaceAll ? (matchCount === 1 ? "" : "s") : ""})`;
+        return `${summary}\n<<<DIFF>>>${rawPath}\n+${addedLines} -${removedLines}\n${diffStr}<<<END_DIFF>>>`;
       } catch (e: any) {
         return `Error editing file: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -540,14 +637,21 @@ export async function executeTool(
       try {
         const { execSync } = await import("child_process");
         const original = String(args.command ?? "");
+        const blockedReason = getShellFileWriteGuardReason(original);
+        if (blockedReason) return blockedReason;
         let command = original;
         let notes: string[] = [];
+
+        // Package-manager installs and builds can take much longer than 30s
+        const isLongRunning = /\b(npm\s+(install|i|ci|run\s+build|run\s+dev)|yarn(\s+install|\s+add)?|pnpm\s+(install|i|add)|bun\s+(install|i|add)|pip\s+install|cargo\s+build|go\s+build|mvn|gradle)\b/i.test(original);
+        const timeout = isLongRunning ? 300000 : 30000; // 5min for installs, 30s otherwise
+        const maxBuffer = isLongRunning ? 10 * 1024 * 1024 : 1024 * 1024; // 10MB vs 1MB
 
         const options: any = {
           cwd,
           encoding: "utf-8",
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
+          timeout,
+          maxBuffer,
         };
 
         if (process.platform === "win32") {
@@ -561,8 +665,14 @@ export async function executeTool(
         const prefix = notes.length > 0 ? `[note: ${notes.join(", ")}]\n` : "";
         return prefix + (output || "(no output)");
       } catch (e: any) {
-        const stderr = e.stderr || e.message || String(e);
         const original = String(args.command ?? "");
+        // Distinguish timeout kills from regular failures
+        if (e.killed) {
+          const isLongRunning = /\b(npm\s+(install|i|ci|run\s+build|run\s+dev)|yarn(\s+install|\s+add)?|pnpm\s+(install|i|add)|bun\s+(install|i|add)|pip\s+install|cargo\s+build|go\s+build|mvn|gradle)\b/i.test(original);
+          const limitSecs = isLongRunning ? 300 : 30;
+          return `Command timed out after ${limitSecs}s: ${original}\nHint: Use run_background_command for long-running processes, or break the command into smaller steps.`;
+        }
+        const stderr = e.stderr || e.message || String(e);
         if (process.platform === "win32" && /mkdir\s+-p/i.test(original)) {
           return `Command failed: ${stderr}\nHint: Unix-style \`mkdir -p\` was used on Windows. Use plain \`mkdir path\` commands or let Codemaxxing retry with a Windows-safe command.`;
         }
@@ -585,27 +695,43 @@ export async function executeTool(
           stdio: ["ignore", "pipe", "pipe"],
         });
 
+        // Track early exit so we can report failures instead of false success
+        let exitCode: number | null = null;
+        child.on("exit", (code) => { exitCode = code; });
+
         // Collect first few lines of output to confirm it started
         let earlyOutput = "";
-        const collectEarly = (chunk: Buffer) => {
+        let earlyStderr = "";
+        const collectStdout = (chunk: Buffer) => {
           earlyOutput += chunk.toString("utf-8");
           if (earlyOutput.length > 2000) {
-            child.stdout?.removeListener("data", collectEarly);
-            child.stderr?.removeListener("data", collectEarly);
+            child.stdout?.removeListener("data", collectStdout);
           }
         };
-        child.stdout?.on("data", collectEarly);
-        child.stderr?.on("data", collectEarly);
+        const collectStderr = (chunk: Buffer) => {
+          earlyStderr += chunk.toString("utf-8");
+          if (earlyStderr.length > 2000) {
+            child.stderr?.removeListener("data", collectStderr);
+          }
+        };
+        child.stdout?.on("data", collectStdout);
+        child.stderr?.on("data", collectStderr);
 
         // Give it a moment to start and produce output
         await new Promise(r => setTimeout(r, 1500));
 
-        child.stdout?.removeListener("data", collectEarly);
-        child.stderr?.removeListener("data", collectEarly);
+        child.stdout?.removeListener("data", collectStdout);
+        child.stderr?.removeListener("data", collectStderr);
         child.unref();
 
+        // If the process already exited with an error, report failure
+        if (exitCode !== null && exitCode !== 0) {
+          const errOutput = (earlyStderr || earlyOutput).trim().slice(0, 1000);
+          return `Command failed immediately (exit code ${exitCode})${errOutput ? `:\n${errOutput}` : ""}`;
+        }
+
         const pid = child.pid ?? "unknown";
-        const preview = earlyOutput.trim().slice(0, 500);
+        const preview = (earlyOutput || earlyStderr).trim().slice(0, 500);
         return `✅ Started in background (PID ${pid})${preview ? `\n\nEarly output:\n${preview}` : ""}`;
       } catch (e: any) {
         return `Failed to start background command: ${e instanceof Error ? e.message : String(e)}`;

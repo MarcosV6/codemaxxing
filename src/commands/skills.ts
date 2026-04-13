@@ -8,6 +8,15 @@ import {
   createSkillScaffold,
   getActiveSkills,
 } from "../utils/skills.js";
+import {
+  deleteLearnedSkill,
+  listLearnedSkills,
+} from "../utils/skill-learner.js";
+import {
+  isAutoLearnSkillsEnabled,
+  loadConfig,
+  saveConfig,
+} from "../config.js";
 import type { AddMsg } from "./types.js";
 
 type SkillsPickerMode = "menu" | "browse" | "installed" | "remove" | null;
@@ -42,6 +51,73 @@ export function tryHandleSkillsCommand(options: HandleSkillsCommandOptions): boo
   if (trimmed === "/skills") {
     setSkillsPicker("menu");
     setSkillsPickerIndex(0);
+    return true;
+  }
+
+  if (trimmed === "/skills learned") {
+    const config = loadConfig();
+    const enabled = isAutoLearnSkillsEnabled(config);
+    const skills = listLearnedSkills();
+
+    if (skills.length === 0) {
+      addMsg(
+        "info",
+        `🧠 Learned skills: ${enabled ? "ON" : "OFF"}\n` +
+        `  No learned workflows saved.\n` +
+        `  Toggle: /skills learned on | /skills learned off`,
+      );
+      return true;
+    }
+
+    const lines = skills.map((skill) =>
+      `  • ${skill.name} (used ${skill.times_applied}x)\n` +
+      `    ${skill.description}\n` +
+      `    Trigger: ${skill.trigger}\n` +
+      `    Tools: ${skill.tools_used.join(", ")}`
+    );
+    addMsg(
+      "info",
+      `🧠 Learned skills: ${enabled ? "ON" : "OFF"}\n` +
+      `  Prompt injection updates apply on the next reconnect/new session.\n` +
+      `${lines.join("\n")}`,
+    );
+    return true;
+  }
+
+  if (trimmed === "/skills learned on" || trimmed === "/skills learned off") {
+    const enabled = trimmed.endsWith(" on");
+    saveConfig({ defaults: { autoLearnSkills: enabled } });
+    addMsg(
+      "info",
+      enabled
+        ? "🧠 Learned skills ON. Future qualifying workflows can be saved. Prompt injection updates apply on the next reconnect/new session."
+        : "🧠 Learned skills OFF. Future workflows will not be auto-saved or injected. Prompt injection updates apply on the next reconnect/new session.",
+    );
+    return true;
+  }
+
+  if (trimmed === "/skills learned clear") {
+    const skills = listLearnedSkills();
+    if (skills.length === 0) {
+      addMsg("info", "🧠 No learned skills to clear.");
+      return true;
+    }
+    let removed = 0;
+    for (const skill of skills) {
+      if (deleteLearnedSkill(skill.name)) removed++;
+    }
+    addMsg("info", `🧠 Removed ${removed} learned skill${removed === 1 ? "" : "s"}.`);
+    return true;
+  }
+
+  if (trimmed.startsWith("/skills learned delete ")) {
+    const name = trimmed.replace("/skills learned delete ", "").trim();
+    if (!name) {
+      addMsg("info", "Usage: /skills learned delete <name>");
+      return true;
+    }
+    const removed = deleteLearnedSkill(name);
+    addMsg(removed ? "info" : "error", removed ? `🧠 Removed learned skill: ${name}` : `Learned skill "${name}" not found.`);
     return true;
   }
 

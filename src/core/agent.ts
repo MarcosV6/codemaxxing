@@ -20,7 +20,7 @@ import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
 import { getCredential, saveCredential } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
 import { detectModelContextWindow, getStaticContextWindow } from "../utils/model-context.js";
-import type { ProviderConfig } from "../config.js";
+import { isAutoLearnSkillsEnabled, loadConfig, type ProviderConfig } from "../config.js";
 
 // ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
 function sanitizeSurrogates(text: string): string {
@@ -80,10 +80,11 @@ function createAnthropicClient(apiKey: string): Anthropic {
 const DANGEROUS_TOOLS = new Set(["write_file", "edit_file", "run_command"]);
 
 // Tools that are safe to run in parallel (read-only, no side effects)
+// Note: create_task/update_task are NOT parallelizable — update_task depends on
+// create_task having run first, and running them via Promise.all causes race conditions.
 const PARALLELIZABLE_TOOLS = new Set([
   "read_file", "list_files", "search_files", "glob", "web_fetch",
   "web_search", "view_image", "think", "recall_memory", "remember_memory",
-  "create_task", "update_task",
 ]);
 
 // Cost per 1M tokens (input/output) for common models
@@ -199,6 +200,115 @@ export function getModelCost(model: string): { input: number; output: number } {
   return { input: 0, output: 0 };
 }
 
+export interface WorkflowToolTraceEntry {
+  name: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
+export interface AppRunIntentStatus {
+  requested: boolean;
+  installedDependencies: boolean;
+  startedApp: boolean;
+}
+
+const APP_RUN_REQUEST_PATTERNS = [
+  /\brun (?:it|this|the app|the site|the website|the project|the server)\b/i,
+  /\bstart (?:it|the app|the site|the website|the project|the server|the dev server)\b/i,
+  /\blaunch (?:it|the app|the site|the website|the project)\b/i,
+  /\bserve (?:it|the app|the site|the website|the project)\b/i,
+  /\bpreview(?: the app| the site| the website| the project| it)?\b/i,
+  /\bspin (?:it|the app|the site|the website|the project) up\b/i,
+  /\bbring (?:it|the app|the site|the website|the project) up\b/i,
+  /\binstall (?:the )?(?:dependencies|deps) and (?:run|start|launch|serve)\b/i,
+  /\bmake sure (?:it|the app|the site|the website) runs\b/i,
+];
+
+const INSTALL_COMMAND_RE = /\b(?:npm\s+(?:install|i|ci)|pnpm\s+(?:install|i|add)|yarn(?:\s+install|\s+add)?|bun\s+(?:install|add)|pip\s+install|poetry\s+install|cargo\s+build|go\s+mod\s+download)\b/i;
+const START_COMMAND_RE = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|preview|serve)\b|\b(?:npx\s+vite|vite|next\s+dev|astro\s+dev|nuxt(?:\s+dev)?|python\s+-m\s+http\.server|php\s+-S|rails\s+s|cargo\s+run|go\s+run)\b/i;
+const RUN_BLOCKER_RE = /\b(?:error|failed|timed out|denied|blocked|could not|cannot|can't)\b/i;
+
+function toolResultSucceeded(result: string): boolean {
+  if (!result) return false;
+  return !RUN_BLOCKER_RE.test(result);
+}
+
+export function userRequestedAppRun(message: string): boolean {
+  return APP_RUN_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+export function analyzeAppRunIntent(message: string, toolHistory: WorkflowToolTraceEntry[]): AppRunIntentStatus {
+  const requested = userRequestedAppRun(message);
+  if (!requested) {
+    return { requested: false, installedDependencies: false, startedApp: false };
+  }
+
+  let installedDependencies = false;
+  let startedApp = false;
+
+  for (const toolCall of toolHistory) {
+    if (!toolResultSucceeded(toolCall.result)) continue;
+    const command = String(toolCall.args.command ?? "");
+
+    if (toolCall.name === "run_command") {
+      if (INSTALL_COMMAND_RE.test(command)) installedDependencies = true;
+      if (START_COMMAND_RE.test(command)) startedApp = true;
+    }
+
+    if (toolCall.name === "run_background_command" && START_COMMAND_RE.test(command)) {
+      startedApp = true;
+    }
+  }
+
+  return { requested, installedDependencies, startedApp };
+}
+
+function buildRunPostconditionReminder(message: string, toolHistory: WorkflowToolTraceEntry[]): string | null {
+  const status = analyzeAppRunIntent(message, toolHistory);
+  if (!status.requested || status.startedApp) return null;
+
+  const installHint = status.installedDependencies
+    ? ""
+    : " Install dependencies first if the project needs them.";
+
+  return `The user asked you to run or verify the app, but you have not actually started it yet.${installHint} Use run_background_command for dev servers or run_command for short-lived verification commands, then report the real outcome (PID, URL/port, or concrete error). Do not claim success until a command confirms it.`;
+}
+
+function responseAlreadyAdmitsRunGap(text: string): boolean {
+  if (!text) return false;
+  return /\b(?:have not actually|haven't actually|did not|didn't|could not|couldn't|cannot|can't|failed to|unable to)\b/i.test(text);
+}
+
+function buildRunRecoveryPrompt(message: string, toolHistory: WorkflowToolTraceEntry[], attempt: number): string | null {
+  const status = analyzeAppRunIntent(message, toolHistory);
+  if (!status.requested || status.startedApp) return null;
+
+  const writeCount = toolHistory.filter((tc) => tc.name === "write_file").length;
+  const editCount = toolHistory.filter((tc) => tc.name === "edit_file").length;
+  const installState = status.installedDependencies ? "installed" : "not installed";
+  const tone = attempt === 0
+    ? "Continue autonomously until the app is actually running."
+    : "You still have not satisfied the run request. Do not stop with a summary or apology.";
+
+  return `${tone}
+
+The user explicitly asked you to run, preview, serve, or verify the app locally. No successful start command has happened yet.
+
+Current state:
+- Files created: ${writeCount}
+- Files edited: ${editCount}
+- Dependencies: ${installState}
+- App start command: not yet successful
+
+Required next-step policy:
+1. If the project is only partially scaffolded, finish the minimum runnable files first using write_file/edit_file.
+2. Install dependencies with run_command if needed.
+3. Start the app with run_background_command for a dev server, or run_command for a short-lived verification command.
+4. Report the real PID, URL/port, or the exact command failure.
+
+Do not claim the app is running until command output proves it. Do not stop after only creating package.json or other partial files. Your next response should take the next concrete tool step now.`;
+}
+
 export interface AgentOptions {
   provider: ProviderConfig;
   cwd: string;
@@ -236,6 +346,10 @@ export class CodingAgent {
   private tools: ChatCompletionTool[] = FILE_TOOLS;
   private cwd: string;
   private maxTokens: number;
+  private thinkingLevel: "low" | "medium" | "high" | "max" | null = null;
+  // Ephemeral override set from keyword triggers ("think", "ultrathink", etc.)
+  // in the user's message. Applies for one turn only.
+  private turnThinkingLevel: "low" | "medium" | "high" | "max" | null = null;
   private autoApprove: boolean;
   private approvalMode: "suggest" | "auto-edit" | "full-auto" = "suggest";
   private model: string;
@@ -268,8 +382,11 @@ export class CodingAgent {
   private mcpServers: ConnectedServer[] = [];
   private sendCount: number = 0;
   private lastMemoryNudge: number = 0;
+  private currentTurnUserRequest: string = "";
+  private runPostconditionReminderIssued: boolean = false;
+  private runRecoveryAttempts: number = 0;
   private workflowTrace: {
-    toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }>;
+    toolCalls: WorkflowToolTraceEntry[];
     hadError: boolean;
     errorRecovered: boolean;
     userCorrection: boolean;
@@ -452,6 +569,9 @@ export class CodingAgent {
    */
   async send(userMessage: string, images?: Array<{ mime: string; base64: string }>): Promise<string> {
     this.sendCount++;
+    this.currentTurnUserRequest = userMessage;
+    this.runPostconditionReminderIssued = false;
+    this.runRecoveryAttempts = 0;
     let result: string;
 
     // If images are provided, inject them as multimodal content before routing
@@ -496,12 +616,14 @@ export class CodingAgent {
 
     // Skill learning: evaluate if this workflow should be saved
     try {
-      const { shouldLearnSkill, generateSkillFromTrace, saveLearnedSkill } = await import("../utils/skill-learner.js");
-      const fullTrace = { ...this.workflowTrace, userMessage };
-      if (shouldLearnSkill(fullTrace)) {
-        const skill = generateSkillFromTrace(fullTrace);
-        saveLearnedSkill(skill);
-        this.options.onToolResult?.("skill-learner", `Learned new skill: "${skill.name}" from this workflow`);
+      if (isAutoLearnSkillsEnabled(loadConfig())) {
+        const { shouldLearnSkill, generateSkillFromTrace, saveLearnedSkill } = await import("../utils/skill-learner.js");
+        const fullTrace = { ...this.workflowTrace, userMessage };
+        if (shouldLearnSkill(fullTrace)) {
+          const skill = generateSkillFromTrace(fullTrace);
+          saveLearnedSkill(skill);
+          this.options.onToolResult?.("skill-learner", `Learned new skill: "${skill.name}" from this workflow`);
+        }
       }
     } catch {
       // Skill learner not available
@@ -515,6 +637,9 @@ export class CodingAgent {
       userCorrection: false,
       totalIterations: 0,
     };
+    this.currentTurnUserRequest = "";
+    this.runPostconditionReminderIssued = false;
+    this.runRecoveryAttempts = 0;
 
     return result;
   }
@@ -526,6 +651,7 @@ export class CodingAgent {
    */
   async chat(userMessage: string): Promise<string> {
     this.resetAbort();
+    this.detectThinkingKeywords(userMessage);
     const userMsg: ChatCompletionMessageParam = { role: "user", content: userMessage };
     this.messages.push(userMsg);
     saveMessage(this.sessionId, userMsg);
@@ -546,6 +672,68 @@ export class CodingAgent {
   }
 
   /**
+   * Generate a fallback summary when the model ends without text after doing tool work.
+   */
+  private generateToolSummary(): string | null {
+    const toolHistory = this.workflowTrace.toolCalls || [];
+    if (toolHistory.length === 0) return null;
+    const runReminder = buildRunPostconditionReminder(this.currentTurnUserRequest, toolHistory);
+    if (runReminder) {
+      return `I created or updated the project, but I have not actually started or verified the app yet. I still need to run it and report the real result.`;
+    }
+    const writes = toolHistory.filter(tc => tc.name === "write_file").map(tc => tc.args?.path || tc.args?.file_path).filter(Boolean);
+    const edits = toolHistory.filter(tc => tc.name === "edit_file").map(tc => tc.args?.path || tc.args?.file_path).filter(Boolean);
+    const commands = toolHistory.filter(tc => tc.name === "run_command").map(tc => String(tc.args?.command || "").slice(0, 60)).filter(Boolean);
+    const parts: string[] = [];
+    if (writes.length > 0) parts.push(`**Created ${writes.length} file${writes.length > 1 ? "s" : ""}:** ${writes.join(", ")}`);
+    if (edits.length > 0) parts.push(`**Edited ${edits.length} file${edits.length > 1 ? "s" : ""}:** ${edits.join(", ")}`);
+    if (commands.length > 0) parts.push(`**Ran:** ${commands.map(c => `\`${c}\``).join(", ")}`);
+    return parts.length > 0
+      ? "Done! Here's what I did:\n\n" + parts.join("\n") + "\n"
+      : "Done!";
+  }
+
+  private maybeInjectRunPostconditionReminder(): boolean {
+    const reminder = buildRunRecoveryPrompt(
+      this.currentTurnUserRequest,
+      this.workflowTrace.toolCalls,
+      this.runRecoveryAttempts,
+    );
+    if (!reminder || this.runRecoveryAttempts >= 2) return false;
+
+    this.runPostconditionReminderIssued = true;
+    this.runRecoveryAttempts++;
+    const reminderMsg: ChatCompletionMessageParam = { role: "system", content: reminder };
+    this.messages.push(reminderMsg);
+    saveMessage(this.sessionId, reminderMsg);
+    return true;
+  }
+
+  private finalizeTurnText(contentText: string, iterations: number): string {
+    let finalText = contentText;
+
+    if (!finalText && iterations > 1) {
+      const summary = this.generateToolSummary() || "Done!";
+      finalText = summary;
+      this.options.onToken?.(summary);
+    }
+
+    const runReminder = buildRunPostconditionReminder(this.currentTurnUserRequest, this.workflowTrace.toolCalls);
+    if (runReminder && !responseAlreadyAdmitsRunGap(finalText)) {
+      const status = analyzeAppRunIntent(this.currentTurnUserRequest, this.workflowTrace.toolCalls);
+      const suffix = finalText
+        ? `\n\nI have not actually started or verified the app yet. ${status.installedDependencies ? "Dependencies may be installed, but no successful start command has happened." : "I still need to finish setup and run the real install/start commands."}`
+        : status.installedDependencies
+          ? "I have not actually started or verified the app yet. Dependencies may be installed, but no successful start command has happened."
+          : "I have not actually started or verified the app yet. I still need to finish setup and run the real install/start commands.";
+      finalText += suffix;
+      this.options.onToken?.(suffix);
+    }
+
+    return finalText || "(empty response)";
+  }
+
+  /**
    * OpenAI Chat Completions streaming loop.
    * Messages must already be in this.messages before calling.
    */
@@ -560,14 +748,17 @@ export class CodingAgent {
 
       let stream;
       try {
-        stream = await this.client.chat.completions.create({
+        const streamParams: any = {
           model: this.model,
           messages: this.messages,
           tools: this.tools,
           max_tokens: this.maxTokens,
           stream: true,
           stream_options: { include_usage: true },
-        });
+        };
+        const { openaiEffort } = this.getThinkingConfig();
+        if (openaiEffort) streamParams.reasoning_effort = openaiEffort;
+        stream = await this.client.chat.completions.create(streamParams) as any;
       } catch (err: any) {
         // Better error for OpenAI Codex OAuth scope limitations
         if (err.status === 401 && err.message?.includes("Missing scopes")) {
@@ -714,9 +905,14 @@ export class CodingAgent {
 
       // If no tool calls, we're done — return the text
       if (toolCalls.size === 0) {
+        if (this.maybeInjectRunPostconditionReminder()) {
+          this.options.onLoopStatus?.("runtime postcondition required", { iteration: iterations });
+          this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
+          continue;
+        }
         this.options.onLoopStatus?.("response completed", { iteration: iterations });
         updateTokenEstimate(this.sessionId, this.estimateTokens());
-        return contentText || "(empty response)";
+        return this.finalizeTurnText(contentText, iterations);
       }
 
       this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.size });
@@ -1039,13 +1235,21 @@ export class CodingAgent {
       const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
 
       try {
-        stream = this.anthropicClient!.messages.stream({
+        const { anthropicBudget } = this.getThinkingConfig();
+        const anthropicParams: any = {
           model: this.model,
-          max_tokens: this.maxTokens,
+          // Anthropic requires max_tokens > budget_tokens when thinking is on.
+          max_tokens: anthropicBudget
+            ? Math.max(this.maxTokens, anthropicBudget + 2048)
+            : this.maxTokens,
           system: systemPrompt,
           messages: anthropicMessages,
           tools: anthropicTools,
-        });
+        };
+        if (anthropicBudget) {
+          anthropicParams.thinking = { type: "enabled", budget_tokens: anthropicBudget };
+        }
+        stream = this.anthropicClient!.messages.stream(anthropicParams);
 
         stream.on("text", (text: string) => {
           if (this.aborted) {
@@ -1116,9 +1320,14 @@ export class CodingAgent {
 
       // If no tool calls, we're done
       if (toolCalls.length === 0) {
+        if (this.maybeInjectRunPostconditionReminder()) {
+          this.options.onLoopStatus?.("runtime postcondition required", { iteration: iterations });
+          this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
+          continue;
+        }
         this.options.onLoopStatus?.("response completed", { iteration: iterations });
         updateTokenEstimate(this.sessionId, this.estimateTokens());
-        return contentText || "(empty response)";
+        return this.finalizeTurnText(contentText, iterations);
       }
 
       this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
@@ -1275,6 +1484,7 @@ export class CodingAgent {
       try {
         const currentKey = this.currentApiKey || this.options.provider.apiKey;
         
+        const { openaiEffort } = this.getThinkingConfig();
         const result = await chatWithResponsesAPI({
           baseUrl: this.currentBaseUrl,
           apiKey: currentKey,
@@ -1283,8 +1493,8 @@ export class CodingAgent {
           systemPrompt: this.systemPrompt,
           messages: this.messages,
           tools: this.tools,
+          reasoningEffort: openaiEffort ?? undefined,
           onToken: (token) => this.options.onToken?.(token),
-          onToolCall: (name, args) => this.options.onToolCall?.(name, args),
         });
 
         const { contentText, toolCalls, promptTokens, completionTokens } = result;
@@ -1317,9 +1527,14 @@ export class CodingAgent {
 
         // If no tool calls, we're done
         if (toolCalls.length === 0) {
+          if (this.maybeInjectRunPostconditionReminder()) {
+            this.options.onLoopStatus?.("runtime postcondition required", { iteration: iterations });
+            this.options.onLoopStatus?.("opening next model stream", { iteration: iterations + 1 });
+            continue;
+          }
           this.options.onLoopStatus?.("response completed", { iteration: iterations });
           updateTokenEstimate(this.sessionId, this.estimateTokens());
-          return contentText || "(empty response)";
+          return this.finalizeTurnText(contentText, iterations);
         }
 
         this.options.onLoopStatus?.("processing tool calls", { iteration: iterations, toolCount: toolCalls.length });
@@ -1355,6 +1570,7 @@ export class CodingAgent {
         } else {
           for (const toolCall of toolCalls) {
             const args = toolCall.input;
+            this.options.onToolCall?.(toolCall.name, args);
 
             if (this.needsApproval(toolCall.name)) {
               if (this.options.onToolApproval) {
@@ -1502,6 +1718,71 @@ export class CodingAgent {
     this.aborted = false;
   }
 
+  setReasoningEffort(level: "low" | "medium" | "high" | "max" | null): void {
+    this.thinkingLevel = level;
+  }
+
+  getReasoningEffort(): "low" | "medium" | "high" | "max" | null {
+    return this.thinkingLevel;
+  }
+
+  /**
+   * Active thinking level for the current turn — ephemeral keyword override
+   * ("think hard", "ultrathink") takes precedence over the persistent setting.
+   */
+  private getActiveThinkingLevel(): "low" | "medium" | "high" | "max" | null {
+    return this.turnThinkingLevel ?? this.thinkingLevel;
+  }
+
+  /**
+   * Map the active thinking level to provider-specific knobs.
+   * - OpenAI reasoning models take `reasoning_effort: "low"|"medium"|"high"`
+   * - Anthropic extended thinking takes a token budget
+   * - "max" upgrades the Anthropic budget while staying at "high" for OpenAI
+   */
+  private getThinkingConfig(): {
+    openaiEffort: "low" | "medium" | "high" | null;
+    anthropicBudget: number | null;
+  } {
+    const level = this.getActiveThinkingLevel();
+    if (!level) return { openaiEffort: null, anthropicBudget: null };
+    const budgets: Record<string, number> = {
+      low: 4000,
+      medium: 10000,
+      high: 16000,
+      max: 31999,
+    };
+    const efforts: Record<string, "low" | "medium" | "high"> = {
+      low: "low",
+      medium: "medium",
+      high: "high",
+      max: "high",
+    };
+    return { openaiEffort: efforts[level], anthropicBudget: budgets[level] };
+  }
+
+  /**
+   * Scan a user message for Claude Code-style thinking trigger keywords.
+   * Keywords set `turnThinkingLevel` for a single turn and are NOT stripped
+   * from the message (the model sees them too, which is consistent with
+   * how Claude Code handles these triggers).
+   */
+  private detectThinkingKeywords(text: string): void {
+    const lower = text.toLowerCase();
+    // Order matters — most specific first.
+    if (/\bultrathink\b|\bthink\s+harder\b|\bthink\s+really\s+hard\b|\bthink\s+very\s+hard\b/.test(lower)) {
+      this.turnThinkingLevel = "max";
+    } else if (/\bmegathink\b|\bthink\s+hard\b|\bthink\s+deeply\b/.test(lower)) {
+      this.turnThinkingLevel = "high";
+    } else if (/\bthink\s+more\b|\bthink\s+carefully\b/.test(lower)) {
+      this.turnThinkingLevel = "medium";
+    } else if (/\bthink\b/.test(lower)) {
+      this.turnThinkingLevel = "low";
+    } else {
+      this.turnThinkingLevel = null;
+    }
+  }
+
   switchModel(model: string, baseUrl?: string, apiKey?: string, providerType?: "openai" | "anthropic"): void {
     this.model = model;
     if (apiKey) this.currentApiKey = apiKey;
@@ -1582,6 +1863,14 @@ export class CodingAgent {
 
   getModel(): string {
     return this.model;
+  }
+
+  getBaseUrl(): string {
+    return this.currentBaseUrl;
+  }
+
+  getProviderType(): "openai" | "anthropic" {
+    return this.providerType;
   }
 
   setAutoCommit(enabled: boolean): void {

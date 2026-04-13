@@ -95,3 +95,31 @@ export function consumePendingPasteEndMarkerChunk(
     swallowed,
   };
 }
+
+export function reconcileInputWithPendingPasteMarker(
+  previousValue: string,
+  nextValue: string,
+  state: PendingPasteEndState,
+): { value: string; nextState: PendingPasteEndState } {
+  if (!state.active) {
+    return { value: nextValue, nextState: state };
+  }
+
+  // Only treat the change as possible leaked paste-marker debris when the new
+  // value is a straight append to the previous value. Fast typing and some Ink
+  // state transitions can briefly deliver non-append shapes; trying to consume
+  // marker fragments from the whole value in that case can delete real text.
+  if (!nextValue.startsWith(previousValue)) {
+    return {
+      value: nextValue,
+      nextState: { active: false, buffer: "" },
+    };
+  }
+
+  const appended = nextValue.slice(previousValue.length);
+  const consumed = consumePendingPasteEndMarkerChunk(appended, state);
+  return {
+    value: previousValue + consumed.remaining,
+    nextState: consumed.nextState,
+  };
+}

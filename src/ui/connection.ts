@@ -3,6 +3,7 @@ import { loadConfig, parseCLIArgs, applyOverrides, detectLocalProvider, detectLo
 import { isOllamaRunning } from "../utils/ollama.js";
 import { isGitRepo, getBranch, getStatus } from "../utils/git.js";
 import { getCredential } from "../utils/auth.js";
+import { assessModelReliability, formatModelReliabilityLine } from "../utils/provider-health.js";
 import type { ConnectionContext } from "./connection-types.js";
 
 const OPENING_STREAM_MESSAGES = [
@@ -55,6 +56,7 @@ async function buildAvailabilityLines(activeBaseUrl: string, activeModel: string
 
   return [
     `Active: ${describeActiveConnection(activeBaseUrl, activeModel)}`,
+    formatModelReliabilityLine(activeModel, activeBaseUrl),
     `Local Ready: ${localReady.length > 0 ? localReady.join(", ") : "none"}`,
     `Cloud Ready: ${cloudReady.length > 0 ? cloudReady.join(", ") : "none"}`,
   ];
@@ -235,6 +237,19 @@ export async function connectToProvider(
       ctx.setLastActivityAt(Date.now());
       ctx.setAgentStage("waiting after tool result");
       ctx.setLastToolName(name);
+
+      // Check for inline diff blocks from write_file / edit_file
+      const diffMatch = result.match(/<<<DIFF>>>([\s\S]*?)<<<END_DIFF>>>/);
+      if (diffMatch) {
+        const diffContent = diffMatch[1];
+        const cleanResult = result.replace(/\n?<<<DIFF>>>[\s\S]*?<<<END_DIFF>>>/, "").trim();
+        // Show the summary line (e.g. "Wrote 200 bytes to src/main.tsx")
+        ctx.addMsg("tool-result", `└ ${cleanResult}`);
+        // Show the diff block
+        ctx.addMsg("diff", diffContent);
+        return;
+      }
+
       const numLines = result.split("\n").length;
       const size = result.length > 1024 ? `${(result.length / 1024).toFixed(1)}KB` : `${result.length}B`;
       const preview = result
@@ -327,6 +342,10 @@ export async function connectToProvider(
   ctx.setModelName(provider.model);
   ctx.providerRef.current = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
   ctx.setReady(true);
+  const reliability = assessModelReliability(provider.model, provider.baseUrl);
+  if (reliability.level === "risky") {
+    ctx.addMsg("info", `⚠ Model warning: ${provider.model} may struggle with longer coding/tool workflows. Consider a stronger model if it stops early or misses steps.`);
+  }
   if (isRetry) {
     ctx.addMsg("info", `✅ Connected to ${provider.model}`);
   } else {

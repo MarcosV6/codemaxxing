@@ -4,7 +4,11 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import * as fsSync from "fs";
-import { sanitizeInputArtifacts } from "./utils/paste.js";
+import {
+  reconcileInputWithPendingPasteMarker,
+  sanitizeInputArtifacts,
+  type PendingPasteEndState,
+} from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
 import type { CodingAgent } from "./core/agent.js";
 import { loadConfig, saveConfig, listModels } from "./config.js";
@@ -26,6 +30,7 @@ import { isOllamaRunning, stopOllama, listInstalledModelsDetailed, type PullProg
 import { routeKeyPress, type InputRouterContext } from "./ui/input-router.js";
 import { loadHistory, addToHistory, resetHistoryCursor } from "./utils/input-history.js";
 import { checkForUpdate } from "./utils/update-check.js";
+import { assessModelReliability, formatModelReliabilityLine } from "./utils/provider-health.js";
 import type { GroupedModels, ModelEntry, ProviderPickerEntry } from "./ui/pickers.js";
 import { getCredential } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
@@ -42,7 +47,7 @@ import { getTasks, onTaskChange, clearTasks, type AgentTask } from "./utils/task
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
-  OrchestrateCommandPicker, CwdPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  OrchestrateCommandPicker, CwdPicker, ThinkPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
   DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
@@ -89,11 +94,13 @@ const SLASH_COMMANDS = [
   { cmd: "/orchestrate", desc: "multi-agent collaboration orchestration" },
   { cmd: "/models", desc: "switch model" },
   { cmd: "/theme", desc: "switch color theme" },
+  { cmd: "/provider", desc: "manage saved provider profiles" },
   { cmd: "/sessions", desc: "list past sessions" },
   { cmd: "/session delete", desc: "delete a session" },
   { cmd: "/resume", desc: "resume a past session" },
   { cmd: "/skills", desc: "manage skill packs" },
   { cmd: "/architect", desc: "toggle architect mode" },
+  { cmd: "/think", desc: "set reasoning effort (off/low/medium/high/max)" },
   { cmd: "/test", desc: "run project tests" },
   { cmd: "/test on", desc: "enable auto-test after changes" },
   { cmd: "/test off", desc: "disable auto-test" },
@@ -118,8 +125,10 @@ const SLASH_COMMANDS = [
   { cmd: "/image", desc: "send an image for analysis" },
   { cmd: "/doctor", desc: "run diagnostics" },
   { cmd: "/copy", desc: "copy last response to clipboard" },
-  { cmd: "/voice", desc: "toggle voice input (hold to record)" },
   { cmd: "/skills learned", desc: "show auto-learned skills" },
+  { cmd: "/skills learned on", desc: "enable learned workflow capture" },
+  { cmd: "/skills learned off", desc: "disable learned workflow capture" },
+  { cmd: "/skills learned clear", desc: "remove all learned workflows" },
   { cmd: "/hooks", desc: "show configured hooks" },
   { cmd: "/memory", desc: "view persistent memories" },
   { cmd: "/memory search", desc: "search memories" },
@@ -181,6 +190,7 @@ const SPINNER_BAR_DOT = "●";
 function NeonSpinner({ message, colors }: { message: string; colors: Theme['colors'] }) {
   const [tick, setTick] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [displayMsg, setDisplayMsg] = useState(message);
 
   useEffect(() => {
     const start = Date.now();
@@ -190,6 +200,15 @@ function NeonSpinner({ message, colors }: { message: string; colors: Theme['colo
     }, 60);
     return () => clearInterval(interval);
   }, []);
+
+  // Rotate through spinner messages every ~3s
+  useEffect(() => {
+    setDisplayMsg(message);
+    const interval = setInterval(() => {
+      setDisplayMsg(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [message]);
 
   const c1 = colors.primary.startsWith("#") ? colors.primary : "#00FFFF";
   const c2 = colors.secondary.startsWith("#") ? colors.secondary : "#FF00FF";
@@ -209,39 +228,18 @@ function NeonSpinner({ message, colors }: { message: string; colors: Theme['colo
     <Box marginLeft={2} marginTop={0}>
       <Text>{bar}</Text>
       <Text>{" "}</Text>
-      <Text bold color={c2}>{message}</Text>
+      <Text bold color={c2}>{displayMsg}</Text>
       <Text color={colors.muted}>{" "}{elapsed}s</Text>
     </Box>
   );
 }
 
 // ── Streaming Indicator: pulsing dots with gradient ──
-const STREAM_MESSAGES = [
-  "Streaming...",
-  "Yapping live...",
-  "Typing with intent...",
-  "Cooking response...",
-  "Locked in...",
-  "Spitting tokens...",
-  "Channeling the machine spirit...",
-  "Vibing through the output...",
-  "Absolutely flowing...",
-  "Free styling the answer...",
-  "Transmitting sauce...",
-  "Pushing pixels and prayers...",
-  "Deep in the bag right now...",
-  "Farming intelligence...",
-  "Manifesting the response...",
-  "Printing heat...",
-  "In my typing arc...",
-  "Going word for word...",
-  "Generating cinema...",
-  "No cap streaming...",
-];
+// Uses the same SPINNER_MESSAGES so users see the fun messages while streaming too
 
 function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
   const [tick, setTick] = useState(0);
-  const [message, setMessage] = useState(() => STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
+  const [message, setMessage] = useState(() => SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
 
   useEffect(() => {
     const interval = setInterval(() => setTick((t) => t + 1), 150);
@@ -250,8 +248,8 @@ function StreamingIndicator({ colors }: { colors: Theme['colors'] }) {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setMessage(STREAM_MESSAGES[Math.floor(Math.random() * STREAM_MESSAGES.length)]);
-    }, 2200);
+      setMessage(SPINNER_MESSAGES[Math.floor(Math.random() * SPINNER_MESSAGES.length)]);
+    }, 2500);
     return () => clearInterval(interval);
   }, []);
 
@@ -367,6 +365,9 @@ function App() {
   const [cwdPickerPath, setCwdPickerPath] = useState(process.cwd());
   const [cwdPickerIndex, setCwdPickerIndex] = useState(0);
   const [cwdPickerEntries, setCwdPickerEntries] = useState<string[]>([]);
+  const [thinkPicker, setThinkPicker] = useState(false);
+  const [thinkPickerIndex, setThinkPickerIndex] = useState(0);
+  const [thinkLevel, setThinkLevel] = useState<"low" | "medium" | "high" | "max" | null>(null);
   const [theme, setTheme] = useState<Theme>(() => {
     // Honor the persisted preference from settings.json so the user's choice
     // survives restarts. Falls back to DEFAULT_THEME if unset or invalid.
@@ -477,6 +478,7 @@ function App() {
   // attachment blocks (never inline) to avoid the ink-text-input reconciliation race.
   useEffect(() => {
     const handler = ({ content, lines }: { content: string; lines: number }) => {
+      pendingPasteEndMarkerRef.current = { active: true, buffer: "" };
       setPasteCount((c) => {
         const newId = c + 1;
         setPastedChunks((prev) => {
@@ -560,6 +562,7 @@ function App() {
   pastedChunksRef.current = pastedChunks;
   const inputRef = React.useRef(input);
   inputRef.current = input;
+  const pendingPasteEndMarkerRef = React.useRef<PendingPasteEndState>({ active: false, buffer: "" });
 
   const openModelPicker = useCallback(async () => {
     addMsg("info", "Fetching available models...");
@@ -723,6 +726,7 @@ function App() {
       const dedupedInput = dedupeLeakedPasteInput(trimmedValue, pasteText).trim();
       submittedValue = dedupedInput ? `${dedupedInput}\n\n${pasteText}` : pasteText;
     }
+    pendingPasteEndMarkerRef.current = { active: false, buffer: "" };
     setInput("");
     setPastedChunks([]);
     setPasteCount(0);
@@ -806,6 +810,7 @@ function App() {
         else if (msg.type === "response") lines.push(`## Assistant\n${msg.text}\n`);
         else if (msg.type === "tool") lines.push(`> Tool: ${msg.text}\n`);
         else if (msg.type === "tool-result") lines.push(`> ${msg.text}\n`);
+        else if (msg.type === "diff") lines.push(`\`\`\`diff\n${msg.text}\n\`\`\`\n`);
         else if (msg.type === "error") lines.push(`**Error:** ${msg.text}\n`);
         else if (msg.type === "info") lines.push(`*${msg.text}*\n`);
       }
@@ -889,70 +894,6 @@ function App() {
       }
       return;
     }
-    if (trimmed === "/voice") {
-      const { detectVoiceCapabilities, isRecording, startRecording, stopRecording, transcribeAudio, cleanupVoiceFiles } = await import("./utils/voice.js");
-
-      if (isRecording()) {
-        // Stop recording and transcribe
-        const result = stopRecording();
-        if (!result) {
-          addMsg("error", "No active recording.");
-          return;
-        }
-        addMsg("info", `\u{1F3A4} Recording stopped (${result.duration}s). Transcribing...`);
-        setLoading(true);
-        setSpinnerMsg("Transcribing audio...");
-        const { text, error } = await transcribeAudio(result.filePath);
-        setLoading(false);
-        if (error) {
-          addMsg("error", `Transcription failed: ${error}`);
-          return;
-        }
-        if (!text.trim()) {
-          addMsg("info", "No speech detected.");
-          return;
-        }
-        addMsg("info", `\u{1F3A4} Transcribed: "${text}"`);
-        // Feed the transcribed text to the agent
-        setInput(text);
-        setInputKey((k) => k + 1);
-        cleanupVoiceFiles();
-        return;
-      }
-
-      // Check capabilities first
-      const caps = detectVoiceCapabilities();
-      if (!caps.canRecord) {
-        addMsg("error", `\u{1F3A4} Voice input not available.\nMissing: ${caps.missing.join("\n  ")}`);
-        return;
-      }
-      if (!caps.canTranscribe) {
-        addMsg("error", `\u{1F3A4} Transcription not available.\nMissing: ${caps.missing.join("\n  ")}`);
-        return;
-      }
-
-      // Start recording
-      const { success, error } = startRecording();
-      if (!success) {
-        addMsg("error", `Recording failed: ${error}`);
-        return;
-      }
-      addMsg("info", "\u{1F3A4} Recording... Type /voice again to stop and transcribe.");
-      return;
-    }
-    if (trimmed === "/skills learned") {
-      const { listLearnedSkills, deleteLearnedSkill } = await import("./utils/skill-learner.js");
-      const skills = listLearnedSkills();
-      if (skills.length === 0) {
-        addMsg("info", "\u{1F9E0} No learned skills yet. The agent will auto-learn from successful multi-step workflows.");
-        return;
-      }
-      const lines = skills.map(s =>
-        `  \u2022 ${s.name} (used ${s.times_applied}x)\n    ${s.description}\n    Tools: ${s.tools_used.join(", ")}`
-      );
-      addMsg("info", `\u{1F9E0} ${skills.length} learned skills:\n${lines.join("\n")}`);
-      return;
-    }
     if (trimmed === "/hooks") {
       const { getHooksSummary } = await import("./utils/hooks.js");
       addMsg("info", `\u{1FA9D} Hooks:\n${getHooksSummary(process.cwd())}`);
@@ -1015,6 +956,13 @@ function App() {
       // Connection
       if (agent) {
         lines.push(`  Model: ${modelName}`);
+        lines.push(`  Base URL: ${agent.getBaseUrl()}`);
+        lines.push(`  Transport: ${agent.getProviderType()}`);
+        lines.push(`  ${formatModelReliabilityLine(agent.getModel(), agent.getBaseUrl())}`);
+        const reliability = assessModelReliability(agent.getModel(), agent.getBaseUrl());
+        if (reliability.reasons.length > 0) {
+          lines.push(`  Reliability notes: ${reliability.reasons.join("; ")}`);
+        }
         const cost = agent.getCostInfo();
         lines.push(`  Session tokens: ${cost.promptTokens + cost.completionTokens}`);
         const linter = agent.getDetectedLinter();
@@ -1112,6 +1060,7 @@ function App() {
         "  /connect   — retry LLM connection",
         "  /login     — authentication setup (run codemaxxing login in terminal)",
         "  /models    — switch model",
+        "  /provider  — manage saved provider profiles",
         "  /map       — show repository map",
         "  /sessions  — list past sessions",
         "  /session delete — delete a session",
@@ -1138,6 +1087,8 @@ function App() {
         "  /orchestrate  — multi-agent collaboration orchestration",
         "  /skills       — manage skill packs",
         "  /architect — toggle architect mode (plan then execute)",
+        "  /think     — set reasoning effort (off/low/medium/high/max)",
+        "              — or inline: 'think', 'think hard', 'ultrathink'",
         "  /lint      — show auto-lint status & detected linter",
         "  /lint on   — enable auto-lint",
         "  /lint off  — disable auto-lint",
@@ -1158,7 +1109,6 @@ function App() {
         "  /image <path> [question] — send image for analysis",
         "  /doctor    — run diagnostics",
         "  /copy      — copy last response to clipboard",
-        "  /voice     — toggle voice input (record & transcribe)",
         "  /hooks     — show configured lifecycle hooks",
         "  /memory    — view persistent memories",
         "  /memory search <query> — search memories",
@@ -1221,6 +1171,7 @@ function App() {
         setTheme,
         setThemePicker,
         setThemePickerIndex,
+        connectToProvider,
       }),
     ], { trimmed })) {
       return;
@@ -1341,6 +1292,28 @@ function App() {
       } catch (err: any) {
         addMsg("error", `Failed to change directory: ${err.message}`);
       }
+      return;
+    }
+    if (trimmed === "/think" || trimmed.startsWith("/think ")) {
+      const arg = trimmed.replace("/think", "").trim().toLowerCase();
+      if (!arg) {
+        setThinkPickerIndex(0);
+        setThinkPicker(true);
+        return;
+      }
+      if (arg === "off" || arg === "none") {
+        agent!.setReasoningEffort(null);
+        setThinkLevel(null);
+        addMsg("info", "🧠 Thinking effort: off");
+        return;
+      }
+      if (arg === "low" || arg === "medium" || arg === "high" || arg === "max") {
+        agent!.setReasoningEffort(arg);
+        setThinkLevel(arg);
+        addMsg("info", `🧠 Thinking effort: ${arg}`);
+        return;
+      }
+      addMsg("info", "Usage: /think [off|low|medium|high|max]\n  Or use keywords in your message: 'think', 'think hard', 'ultrathink'");
       return;
     }
     if (trimmed === "/compact") {
@@ -1588,6 +1561,15 @@ function App() {
       setCwdPickerPath,
       setCwdPickerEntries,
       setCwdPickerIndex,
+      thinkPicker,
+      thinkPickerIndex,
+      setThinkPicker,
+      setThinkPickerIndex,
+      onThinkSelected: (level: "low" | "medium" | "high" | "max" | null) => {
+        agent?.setReasoningEffort(level);
+        setThinkLevel(level);
+        addMsg("info", `🧠 Thinking effort: ${level ?? "off"}`);
+      },
       onCwdSelected: (newCwd: string) => {
         try {
           process.chdir(newCwd);
@@ -1696,7 +1678,7 @@ function App() {
           case "user":
             return (
               <Box key={msg.id} flexDirection="column" marginTop={needsSep ? 1 : 0}>
-                {needsSep && <Text color={theme.colors.muted}>{"  "}{"\u2500".repeat(Math.min(termWidth - 6, 50))}</Text>}
+                {needsSep && <Text color={theme.colors.muted}>{"  "}{"\u2500".repeat(Math.max(0, Math.min(termWidth - 6, 50)))}</Text>}
                 <Box marginTop={0}>
                   <Text color={theme.colors.userInput} bold>{"  \u276f "}</Text>
                   <Box flexDirection="column" flexShrink={1}>
@@ -1735,6 +1717,53 @@ function App() {
             return (
               <Box key={msg.id} marginLeft={2}>
                 <Text color={theme.colors.toolResult}>{"    \u2514\u2500 "}{display}</Text>
+              </Box>
+            );
+          }
+          case "diff": {
+            // Parse diff content: first line is file path, second is +N -N stats, rest is unified diff
+            const diffLines = msg.text.split("\n");
+            const filePath = diffLines[0] || "";
+            const stats = diffLines[1] || "";
+            const addCount = stats.match(/\+(\d+)/)?.[1] || "0";
+            const removeCount = stats.match(/-(\d+)/)?.[1] || "0";
+            // Skip the --- a/ and +++ b/ header lines from unified diff
+            const codeLines = diffLines.slice(2).filter(l => !l.startsWith("---") && !l.startsWith("+++"));
+            const maxLines = 30;
+            const isNew = removeCount === "0";
+            return (
+              <Box key={msg.id} flexDirection="column" marginLeft={4}>
+                <Box>
+                  <Text color={theme.colors.primary} bold>{isNew ? "+" : "\u2666"} {isNew ? "Write" : "Update"}({filePath})</Text>
+                  <Text color={theme.colors.muted}>{" "}</Text>
+                  <Text color="#4ADE80" bold>+{addCount}</Text>
+                  <Text color={theme.colors.muted}>{" "}</Text>
+                  <Text color="#F87171" bold>-{removeCount}</Text>
+                </Box>
+                {codeLines.slice(0, maxLines).map((line, i) => {
+                  if (line.startsWith("@@")) {
+                    return (
+                      <Box key={i}>
+                        <Text color={theme.colors.muted}>{" \u2500\u2500 "}{line}</Text>
+                      </Box>
+                    );
+                  }
+                  const isAdd = line.startsWith("+");
+                  const isRemove = line.startsWith("-");
+                  const lineContent = (isAdd || isRemove) ? line.slice(1) : line.startsWith(" ") ? line.slice(1) : line;
+                  const lineColor = isAdd ? "#4ADE80" : isRemove ? "#F87171" : theme.colors.muted;
+                  const marker = isAdd ? "+" : isRemove ? "-" : " ";
+                  return (
+                    <Box key={i}>
+                      <Text color={lineColor}>{" "}{marker} {lineContent}</Text>
+                    </Box>
+                  );
+                })}
+                {codeLines.length > maxLines && (
+                  <Box>
+                    <Text color={theme.colors.muted}>{"   ... "}{codeLines.length - maxLines} more lines</Text>
+                  </Box>
+                )}
               </Box>
             );
           }
@@ -1807,6 +1836,11 @@ function App() {
       {/* ═══ ORCHESTRATE PICKER ═══ */}
       {orchestratePicker && (
         <OrchestrateCommandPicker selectedIndex={orchestratePickerIndex} colors={theme.colors} />
+      )}
+
+      {/* ═══ THINK PICKER ═══ */}
+      {thinkPicker && (
+        <ThinkPicker selectedIndex={thinkPickerIndex} currentLevel={thinkLevel} colors={theme.colors} />
       )}
 
       {/* ═══ WORKSPACE (CWD) PICKER ═══ */}
@@ -1918,7 +1952,17 @@ function App() {
                 key={inputKey}
                 value={input}
                 onChange={(v) => {
-                  setInput(sanitizeInputArtifacts(v));
+                  let nextValue = sanitizeInputArtifacts(v);
+                  const prevValue = inputRef.current;
+                  const pending = pendingPasteEndMarkerRef.current;
+
+                  if (pending.active) {
+                    const reconciled = reconcileInputWithPendingPasteMarker(prevValue, nextValue, pending);
+                    pendingPasteEndMarkerRef.current = reconciled.nextState;
+                    nextValue = reconciled.value;
+                  }
+
+                  setInput(nextValue);
                   setCmdIndex(0);
                 }}
                 onSubmit={handleSubmit}
@@ -1938,15 +1982,10 @@ function App() {
   );
 }
 
-// Clear screen before render
+// Clear the terminal once on startup before Ink takes over.
 process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
 
 // Set up paste interception (bracketed paste, burst buffering, debris swallowing)
 const pasteEvents = setupPasteInterceptor();
-
-// Handle terminal resize — clear ghost artifacts
-process.stdout.on("resize", () => {
-  process.stdout.write("\x1B[2J\x1B[H");
-});
 
 render(<App />, { exitOnCtrlC: false });

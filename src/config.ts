@@ -14,6 +14,12 @@ export interface ProviderProfile extends ProviderConfig {
   name: string;
 }
 
+export interface ProviderProfileSummary {
+  key: string;
+  profile: ProviderProfile;
+  active: boolean;
+}
+
 export interface CodemaxxingConfig {
   provider: ProviderConfig;
   providers?: Record<string, ProviderProfile>;
@@ -21,6 +27,7 @@ export interface CodemaxxingConfig {
     autoApprove: boolean;
     contextFiles: number;
     maxTokens: number;
+    autoLearnSkills?: boolean;
     contextCompressionThreshold?: number;
     architectModel?: string;
     autoLint?: boolean;
@@ -35,6 +42,10 @@ export interface CLIArgs {
   apiKey?: string;
   baseUrl?: string;
 }
+
+type ConfigUpdates = Partial<Omit<CodemaxxingConfig, "defaults">> & {
+  defaults?: Partial<CodemaxxingConfig["defaults"]>;
+};
 
 const CONFIG_DIR = join(homedir(), ".codemaxxing");
 const CONFIG_FILE = join(CONFIG_DIR, "settings.json");
@@ -57,6 +68,7 @@ const DEFAULT_CONFIG: CodemaxxingConfig = {
     autoApprove: false,
     contextFiles: 20,
     maxTokens: 8192,
+    autoLearnSkills: false,
   },
 };
 
@@ -141,7 +153,7 @@ export function loadConfig(): CodemaxxingConfig {
 }
 
 /** Save config to disk (merges with existing) */
-export function saveConfig(updates: Partial<CodemaxxingConfig>): void {
+export function saveConfig(updates: ConfigUpdates): void {
   const current = loadConfig();
   const merged = {
     ...current,
@@ -152,6 +164,30 @@ export function saveConfig(updates: Partial<CodemaxxingConfig>): void {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
   writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
+}
+
+export function getActiveProviderProfileKey(config: CodemaxxingConfig): string | null {
+  const entries = Object.entries(config.providers ?? {});
+  for (const [key, profile] of entries) {
+    if (
+      profile.baseUrl === config.provider.baseUrl &&
+      profile.model === config.provider.model &&
+      (profile.type ?? detectProviderType(key, profile.baseUrl)) ===
+        (config.provider.type ?? detectProviderType(key, config.provider.baseUrl))
+    ) {
+      return key;
+    }
+  }
+  return null;
+}
+
+export function listProviderProfiles(config: CodemaxxingConfig): ProviderProfileSummary[] {
+  const activeKey = getActiveProviderProfileKey(config);
+  return Object.entries(config.providers ?? {}).map(([key, profile]) => ({
+    key,
+    profile,
+    active: key === activeKey,
+  }));
 }
 
 /**
@@ -189,6 +225,10 @@ export function applyOverrides(config: CodemaxxingConfig, args: CLIArgs): Codema
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
+}
+
+export function isAutoLearnSkillsEnabled(config: CodemaxxingConfig): boolean {
+  return config.defaults.autoLearnSkills === true;
 }
 
 /** Persist the user's preferred theme. Failures are swallowed — losing the

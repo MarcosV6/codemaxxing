@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, extname } from "path";
 import { buildRepoMap } from "../utils/repomap.js";
 import { loadIgnorePatterns } from "../utils/ignore.js";
+import { isAutoLearnSkillsEnabled, loadConfig } from "../config.js";
 
 /**
  * Load project rules from CODEMAXXING.md, .codemaxxing/CODEMAXXING.md, or .cursorrules
@@ -122,10 +123,15 @@ You help developers understand, write, debug, and refactor code. You have access
 - Be concise but thorough
 - If you're unsure, ask — don't guess
 - Use the run_command tool for building, testing, and linters
+- Use write_file/edit_file for project files; do not scaffold source files with shell heredocs, echo redirection, or tee
+- If the user asks you to run, preview, serve, launch, or verify an app, you must actually do it with tools and report the real result
+- For long-running dev servers, use run_background_command and report the PID plus any detected URL/port or startup output
+- Never claim something is running, installed, or working unless command output confirmed it
 - Never delete files without explicit confirmation
 
 ## Task Progress
 When working on multi-step tasks, use create_task and update_task to show the user a live progress checklist. Create tasks at the start, mark them in_progress as you work, and completed when done. This helps the user see what you're doing. Only use for multi-step work (3+ steps), not simple questions.
+Tasks are only progress indicators, not proof that work is complete.
 
 ## Editing Strategy
 - Prefer edit_file for small or localized changes — use it when you only need to change part of a file.
@@ -168,10 +174,12 @@ ${projectContext}
 
   // Inject learned skills from past workflows
   try {
-    const { buildLearnedSkillPrompts } = await import("../utils/skill-learner.js");
-    const learnedCtx = buildLearnedSkillPrompts();
-    if (learnedCtx) {
-      prompt += learnedCtx;
+    if (isAutoLearnSkillsEnabled(loadConfig())) {
+      const { buildLearnedSkillPrompts } = await import("../utils/skill-learner.js");
+      const learnedCtx = buildLearnedSkillPrompts();
+      if (learnedCtx) {
+        prompt += learnedCtx;
+      }
     }
   } catch {
     // Skill learner not available — skip

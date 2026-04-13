@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModelCost } from "../src/agent.js";
+import { analyzeAppRunIntent, getModelCost, userRequestedAppRun } from "../src/agent.js";
 
 describe("getModelCost", () => {
   it("returns correct cost for known OpenAI models", () => {
@@ -35,5 +35,45 @@ describe("getModelCost", () => {
     // e.g. "claude-sonnet-4-20250514-beta" should still match "claude-sonnet-4-20250514"
     const cost = getModelCost("claude-sonnet-4-20250514-some-suffix");
     expect(cost.input).toBeGreaterThan(0);
+  });
+});
+
+describe("app run intent detection", () => {
+  it("recognizes when the user explicitly asks to run the app", () => {
+    expect(userRequestedAppRun("build me a site and run it for me")).toBe(true);
+    expect(userRequestedAppRun("start the dev server after you finish")).toBe(true);
+    expect(userRequestedAppRun("run the tests")).toBe(false);
+  });
+
+  it("requires an actual start command, not just scaffolding", () => {
+    const status = analyzeAppRunIntent("build it and run it", [
+      {
+        name: "write_file",
+        args: { path: "package.json" },
+        result: "✅ Wrote 100 bytes to package.json",
+      },
+      {
+        name: "run_command",
+        args: { command: "npm install" },
+        result: "added 42 packages",
+      },
+    ]);
+
+    expect(status.requested).toBe(true);
+    expect(status.installedDependencies).toBe(true);
+    expect(status.startedApp).toBe(false);
+  });
+
+  it("treats a successful background dev server as satisfying run intent", () => {
+    const status = analyzeAppRunIntent("please run the app", [
+      {
+        name: "run_background_command",
+        args: { command: "npm run dev" },
+        result: "✅ Started in background (PID 1234)\n\nEarly output:\nLocal: http://localhost:5173",
+      },
+    ]);
+
+    expect(status.requested).toBe(true);
+    expect(status.startedApp).toBe(true);
   });
 });

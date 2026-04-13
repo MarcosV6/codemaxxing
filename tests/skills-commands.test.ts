@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { tryHandleSkillsCommand } from "../src/commands/skills.js";
+import * as configModule from "../src/config.js";
+import * as skillLearnerModule from "../src/utils/skill-learner.js";
 
 function makeAddMsg() {
   const calls: Array<{ type: string; text: string }> = [];
@@ -8,6 +10,10 @@ function makeAddMsg() {
     calls,
   };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("tryHandleSkillsCommand", () => {
   it("opens the skills menu for bare /skills", () => {
@@ -76,5 +82,63 @@ describe("tryHandleSkillsCommand", () => {
     expect(input).toBe("/skills create ");
     expect(inputKey).toBe(1);
     expect(calls.length).toBe(0);
+  });
+
+  it("shows learned-skill status and saved workflows", () => {
+    vi.spyOn(configModule, "loadConfig").mockReturnValue({
+      provider: { baseUrl: "http://localhost:1234/v1", apiKey: "not-needed", model: "auto" },
+      defaults: { autoApprove: false, contextFiles: 20, maxTokens: 8192, autoLearnSkills: false },
+    } as any);
+    vi.spyOn(skillLearnerModule, "listLearnedSkills").mockReturnValue([
+      {
+        name: "node-edit-build-app",
+        description: "Repeatable node workflow that updated 2 files and ran 1 command.",
+        trigger: "Use for node tasks involving editing project files and building the project.",
+        steps: [],
+        tools_used: ["write_file", "run_command"],
+        created_at: "2026-01-01T00:00:00.000Z",
+        times_applied: 0,
+      },
+    ]);
+
+    const { addMsg, calls } = makeAddMsg();
+    const handled = tryHandleSkillsCommand({
+      trimmed: "/skills learned",
+      cwd: process.cwd(),
+      addMsg,
+      agent: null,
+      sessionDisabledSkills: new Set(),
+      setSkillsPicker: vi.fn(),
+      setSkillsPickerIndex: vi.fn(),
+      setSessionDisabledSkills: vi.fn(),
+      setInput: vi.fn(),
+      setInputKey: vi.fn(),
+    });
+
+    expect(handled).toBe(true);
+    expect(calls.at(-1)?.text).toContain("Learned skills: OFF");
+    expect(calls.at(-1)?.text).toContain("node-edit-build-app");
+  });
+
+  it("toggles learned-skill capture on", () => {
+    const saveConfig = vi.spyOn(configModule, "saveConfig").mockImplementation(() => {});
+    const { addMsg, calls } = makeAddMsg();
+
+    const handled = tryHandleSkillsCommand({
+      trimmed: "/skills learned on",
+      cwd: process.cwd(),
+      addMsg,
+      agent: null,
+      sessionDisabledSkills: new Set(),
+      setSkillsPicker: vi.fn(),
+      setSkillsPickerIndex: vi.fn(),
+      setSessionDisabledSkills: vi.fn(),
+      setInput: vi.fn(),
+      setInputKey: vi.fn(),
+    });
+
+    expect(handled).toBe(true);
+    expect(saveConfig).toHaveBeenCalledWith({ defaults: { autoLearnSkills: true } });
+    expect(calls.at(-1)?.text).toContain("Learned skills ON");
   });
 });
