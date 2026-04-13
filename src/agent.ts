@@ -1,1 +1,7 @@
-export { CodingAgent, getModelCost, type AgentOptions } from "./core/agent.js";
+export {
+  CodingAgent,
+  getModelCost,
+  userRequestedAppRun,
+  analyzeAppRunIntent,
+  type AgentOptions,
+} from "./core/agent.js";

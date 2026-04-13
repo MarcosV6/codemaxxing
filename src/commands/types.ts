@@ -1,4 +1,4 @@
-export type AddMsg = (type: "user" | "response" | "tool" | "tool-result" | "error" | "info", text: string) => void;
+export type AddMsg = (type: "user" | "response" | "tool" | "tool-result" | "error" | "info" | "diff", text: string) => void;
 
 export interface CommandRegistryContext {
   trimmed: string;

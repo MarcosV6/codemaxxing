@@ -47,7 +47,7 @@ import { getTasks, onTaskChange, clearTasks, type AgentTask } from "./utils/task
 import {
   CommandSuggestions, LoginPicker, LoginMethodPickerUI, SkillsMenu, SkillsBrowse,
   SkillsInstalled, SkillsRemove, AgentCommandPicker, ScheduleCommandPicker,
-  OrchestrateCommandPicker, CwdPicker, ThinkPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
+  OrchestrateCommandPicker, CwdPicker, ThemePickerUI, SessionPicker, DeleteSessionPicker,
   DeleteSessionConfirm, ProviderPicker, ModelPicker, OllamaDeletePicker, OllamaPullPicker,
   OllamaDeleteConfirm, OllamaPullProgress, OllamaExitPrompt, ApprovalPrompt,
   WizardConnection, WizardModels, WizardInstallOllama, WizardPulling,
@@ -365,8 +365,6 @@ function App() {
   const [cwdPickerPath, setCwdPickerPath] = useState(process.cwd());
   const [cwdPickerIndex, setCwdPickerIndex] = useState(0);
   const [cwdPickerEntries, setCwdPickerEntries] = useState<string[]>([]);
-  const [thinkPicker, setThinkPicker] = useState(false);
-  const [thinkPickerIndex, setThinkPickerIndex] = useState(0);
   const [thinkLevel, setThinkLevel] = useState<"low" | "medium" | "high" | "max" | null>(null);
   const [theme, setTheme] = useState<Theme>(() => {
     // Honor the persisted preference from settings.json so the user's choice
@@ -1297,8 +1295,7 @@ function App() {
     if (trimmed === "/think" || trimmed.startsWith("/think ")) {
       const arg = trimmed.replace("/think", "").trim().toLowerCase();
       if (!arg) {
-        setThinkPickerIndex(0);
-        setThinkPicker(true);
+        addMsg("info", "🧠 Usage: /think off|low|medium|high|max");
         return;
       }
       if (arg === "off" || arg === "none") {
@@ -1561,15 +1558,6 @@ function App() {
       setCwdPickerPath,
       setCwdPickerEntries,
       setCwdPickerIndex,
-      thinkPicker,
-      thinkPickerIndex,
-      setThinkPicker,
-      setThinkPickerIndex,
-      onThinkSelected: (level: "low" | "medium" | "high" | "max" | null) => {
-        agent?.setReasoningEffort(level);
-        setThinkLevel(level);
-        addMsg("info", `🧠 Thinking effort: ${level ?? "off"}`);
-      },
       onCwdSelected: (newCwd: string) => {
         try {
           process.chdir(newCwd);
@@ -1836,11 +1824,6 @@ function App() {
       {/* ═══ ORCHESTRATE PICKER ═══ */}
       {orchestratePicker && (
         <OrchestrateCommandPicker selectedIndex={orchestratePickerIndex} colors={theme.colors} />
-      )}
-
-      {/* ═══ THINK PICKER ═══ */}
-      {thinkPicker && (
-        <ThinkPicker selectedIndex={thinkPickerIndex} currentLevel={thinkLevel} colors={theme.colors} />
       )}
 
       {/* ═══ WORKSPACE (CWD) PICKER ═══ */}
