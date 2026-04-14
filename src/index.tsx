@@ -11,7 +11,7 @@ import {
 } from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
 import type { CodingAgent } from "./core/agent.js";
-import { loadConfig, saveConfig, listModels } from "./config.js";
+import { loadConfig, saveConfig, listModels, getCopilotHeaders } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
@@ -669,7 +669,12 @@ function App() {
 
     const copilotCred = getCredential("copilot");
     if (copilotCred) {
-      groups["GitHub Copilot"] = ["gpt-4o", "claude-3.5-sonnet"].map(m => ({
+      const copilotModels = await listModels(
+        copilotCred.baseUrl || "https://api.githubcopilot.com",
+        copilotCred.apiKey,
+        getCopilotHeaders(),
+      );
+      groups["GitHub Copilot"] = copilotModels.map(m => ({
         name: m,
         baseUrl: copilotCred.baseUrl || "https://api.githubcopilot.com",
         apiKey: copilotCred.apiKey,

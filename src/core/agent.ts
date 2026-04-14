@@ -7,6 +7,7 @@ import type {
   ChatCompletionTool,
   ChatCompletionChunk,
 } from "openai/resources/chat/completions";
+import { getCopilotHeaders } from "../config.js";
 import { FILE_TOOLS, executeTool, generateDiff, getExistingContent } from "../tools/files.js";
 import { detectLinter, runLinter } from "../utils/lint.js";
 import { detectTestRunner, runTests, type TestRunnerInfo } from "../utils/test-runner.js";
@@ -396,9 +397,13 @@ export class CodingAgent {
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
     this.currentBaseUrl = options.provider.baseUrl || "https://api.openai.com/v1";
+    const defaultHeaders = this.currentBaseUrl.includes("api.githubcopilot.com")
+      ? getCopilotHeaders()
+      : undefined;
     this.client = new OpenAI({
       baseURL: this.currentBaseUrl,
       apiKey: options.provider.apiKey,
+      defaultHeaders,
     });
     if (this.providerType === "anthropic") {
       this.anthropicClient = createAnthropicClient(options.provider.apiKey);
@@ -1800,9 +1805,13 @@ export class CodingAgent {
       }
     }
     if (baseUrl || apiKey) {
+      const nextBaseUrl = baseUrl ?? this.currentBaseUrl;
       this.client = new OpenAI({
-        baseURL: baseUrl ?? this.currentBaseUrl,
+        baseURL: nextBaseUrl,
         apiKey: apiKey ?? this.options.provider.apiKey,
+        defaultHeaders: nextBaseUrl.includes("api.githubcopilot.com")
+          ? getCopilotHeaders()
+          : undefined,
       });
     }
     // Re-seed and re-detect for the new model. Static guess updates synchronously
@@ -1854,6 +1863,9 @@ export class CodingAgent {
       this.client = new OpenAI({
         baseURL: this.currentBaseUrl,
         apiKey: refreshed.access,
+        defaultHeaders: this.currentBaseUrl.includes("api.githubcopilot.com")
+          ? getCopilotHeaders()
+          : undefined,
       });
       return true;
     } catch {

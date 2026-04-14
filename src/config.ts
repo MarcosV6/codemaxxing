@@ -3,6 +3,15 @@ import { homedir } from "os";
 import { join } from "path";
 import { getCredential } from "./utils/auth.js";
 
+export function getCopilotHeaders(): Record<string, string> {
+  return {
+    "Editor-Version": "vscode/1.99.3",
+    "Editor-Plugin-Version": "copilot-chat/0.26.7",
+    "Copilot-Integration-Id": "vscode-chat",
+    "User-Agent": "GitHubCopilotChat/0.26.7",
+  };
+}
+
 export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
@@ -336,11 +345,15 @@ export async function detectLocalProvider(): Promise<ProviderConfig | null> {
 /**
  * List available models from a provider endpoint
  */
-export async function listModels(baseUrl: string, apiKey: string): Promise<string[]> {
+export async function listModels(
+  baseUrl: string,
+  apiKey: string,
+  extraHeaders?: Record<string, string>,
+): Promise<string[]> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...(extraHeaders || {}) };
     if (apiKey && apiKey !== "not-needed") {
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
