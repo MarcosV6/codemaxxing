@@ -64,6 +64,13 @@ export interface InputRouterContext extends WizardContext {
   setOrchestratePickerIndex: (fn: (prev: number) => number) => void;
   setOrchestratePicker: (val: boolean) => void;
 
+  // Think (reasoning effort) picker
+  thinkPicker: boolean;
+  thinkPickerIndex: number;
+  setThinkPicker: (val: boolean) => void;
+  setThinkPickerIndex: (fn: (prev: number) => number) => void;
+  onThinkSelected: (level: "low" | "medium" | "high" | "max" | null) => void;
+
   // Workspace (cwd) picker
   cwdPicker: boolean;
   cwdPickerPath: string;
@@ -181,6 +188,7 @@ export function routeKeyPress(inputChar: string, key: Key, ctx: InputRouterConte
   if (handleSchedulePicker(inputChar, key, ctx)) return true;
   if (handleOrchestratePicker(inputChar, key, ctx)) return true;
   if (handleCwdPicker(inputChar, key, ctx)) return true;
+  if (handleThinkPicker(inputChar, key, ctx)) return true;
   if (handleProviderPicker(inputChar, key, ctx)) return true;
   if (handleModelPicker(inputChar, key, ctx)) return true;
   if (handleOllamaDeletePicker(inputChar, key, ctx)) return true;
@@ -319,7 +327,7 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
         ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
         void reconnectAfterAuth();
       } else {
-        ctx.addMsg("info", "No Qwen CLI token found.\n  Install Qwen CLI, run `qwen login`, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>");
+        ctx.addMsg("info", "No Qwen CLI token found.\n  Set DASHSCOPE_API_KEY env var, or create ~/.dashscope/api_key, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>\n  Get key at: https://dashscope.console.aliyun.com/apiKey");
       }
     } else if (method === "device-flow") {
       ctx.addMsg("info", "Starting GitHub Copilot device flow...");
@@ -379,6 +387,25 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
           .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!`); ctx.setLoading(false); ctx.connectToProvider?.(true); })
           .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
+      } else if (methods[0] === "cached-token") {
+        ctx.setLoginMethodPicker(null);
+        if (selected.id === "qwen") {
+          const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
+          if (imported) {
+            ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
+            ctx.connectToProvider?.(true);
+          } else {
+            ctx.addMsg("info", "No Qwen CLI token found.\n  Install DashScope CLI, run setup, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>");
+          }
+        } else {
+          const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
+          if (imported) {
+            ctx.addMsg("info", `✅ Imported credentials! (${imported.label})`);
+            ctx.connectToProvider?.(true);
+          } else {
+            ctx.addMsg("info", "No cached credentials found. Use API key instead.");
+          }
+        }
       } else if (methods[0] === "api-key") {
         ctx.setLoginMethodPicker(null);
         ctx.addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${selected.id} <your-key>\n  Get key at: ${selected.consoleUrl ?? "your provider's dashboard"}`);
@@ -642,6 +669,32 @@ function handleOrchestratePicker(_inputChar: string, key: Key, ctx: InputRouterC
       ctx.setInput(`/orchestrate ${selected} `);
       ctx.setInputKey((k) => k + 1);
     }
+    return true;
+  }
+  return true;
+}
+
+function handleThinkPicker(_inputChar: string, key: Key, ctx: InputRouterContext): boolean {
+  if (!ctx.thinkPicker) return false;
+  const options: Array<"off" | "low" | "medium" | "high" | "max"> = ["off", "low", "medium", "high", "max"];
+  if (key.upArrow) {
+    ctx.setThinkPickerIndex((prev) => (prev - 1 + options.length) % options.length);
+    return true;
+  }
+  if (key.downArrow) {
+    ctx.setThinkPickerIndex((prev) => (prev + 1) % options.length);
+    return true;
+  }
+  if (key.escape) {
+    ctx.setThinkPicker(false);
+    ctx.setThinkPickerIndex(() => 0);
+    return true;
+  }
+  if (key.return) {
+    const selected = options[ctx.thinkPickerIndex];
+    ctx.setThinkPicker(false);
+    ctx.setThinkPickerIndex(() => 0);
+    ctx.onThinkSelected(selected === "off" ? null : selected);
     return true;
   }
   return true;

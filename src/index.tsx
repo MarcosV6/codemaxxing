@@ -366,6 +366,8 @@ function App() {
   const [cwdPickerIndex, setCwdPickerIndex] = useState(0);
   const [cwdPickerEntries, setCwdPickerEntries] = useState<string[]>([]);
   const [thinkLevel, setThinkLevel] = useState<"low" | "medium" | "high" | "max" | null>(null);
+  const [thinkPicker, setThinkPicker] = useState(false);
+  const [thinkPickerIndex, setThinkPickerIndex] = useState(0);
   const [theme, setTheme] = useState<Theme>(() => {
     // Honor the persisted preference from settings.json so the user's choice
     // survives restarts. Falls back to DEFAULT_THEME if unset or invalid.
@@ -1555,6 +1557,15 @@ function App() {
       orchestratePickerIndex,
       setOrchestratePickerIndex,
       setOrchestratePicker,
+      thinkPicker,
+      thinkPickerIndex,
+      setThinkPicker,
+      setThinkPickerIndex,
+      onThinkSelected: (level: "low" | "medium" | "high" | "max" | null) => {
+        setThinkLevel(level);
+        try { agent?.setReasoningEffort(level); } catch {}
+        addMsg("info", level ? `🧠 Thinking level: ${level}` : "🧠 Thinking: off");
+      },
       cwdPicker,
       cwdPickerPath,
       cwdPickerEntries,

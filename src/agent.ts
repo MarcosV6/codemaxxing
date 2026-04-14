@@ -1,7 +1,9 @@
 export {
   CodingAgent,
   getModelCost,
-  userRequestedAppRun,
   analyzeAppRunIntent,
+  userRequestedAppRun,
   type AgentOptions,
+  type AppRunIntentStatus,
+  type WorkflowToolTraceEntry,
 } from "./core/agent.js";

@@ -68,11 +68,15 @@ export function runTests(runner: TestRunnerInfo, cwd: string): { passed: boolean
     const output = execSync(runner.command, {
       cwd,
       encoding: "utf-8",
-      timeout: 60000,
+      timeout: 120000,
+      maxBuffer: 5 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
     });
     return { passed: true, output: output.trim() || "All tests passed." };
   } catch (e: any) {
+    if (e.killed) {
+      return { passed: false, output: "Tests timed out after 120s. Consider running a subset of tests." };
+    }
     const output = ((e.stdout || "") + (e.stderr || "")).trim();
     const lines = output.split("\n");
     const limited = lines.length > 50 ? lines.slice(0, 50).join("\n") + `\n... (${lines.length - 50} more lines)` : output;

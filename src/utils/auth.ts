@@ -195,6 +195,7 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
 
   return new Promise((resolve, reject) => {
     let handled = false; // Guard against duplicate callbacks
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     // Start local callback server
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -207,6 +208,7 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
         if (!code) {
           res.writeHead(400, { "Content-Type": "text/html" });
           res.end("<h1>Error: No code received</h1><p>Please try again.</p>");
+          if (timeoutId) clearTimeout(timeoutId);
           server.close();
           reject(new Error("No authorization code received"));
           return;
@@ -248,6 +250,7 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
             </html>
           `);
 
+          if (timeoutId) clearTimeout(timeoutId);
           server.close();
 
           const cred: AuthCredential = {
@@ -264,10 +267,17 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "text/html" });
           res.end(`<h1>Error</h1><p>${err.message}</p>`);
+          if (timeoutId) clearTimeout(timeoutId);
           server.close();
           reject(err);
         }
       }
+    });
+
+    // Handle server errors (port conflict, etc.) instead of crashing
+    server.on("error", (err) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(new Error(`OAuth callback server failed: ${err.message}`));
     });
 
     // Listen on random port
@@ -280,7 +290,7 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
 
       const port = addr.port;
       const callbackUrl = `http://localhost:${port}/callback`;
-      const authUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=${challenge}&code_challenge_method=S256`;
+      const authUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256`;
 
       onStatus?.(`Opening browser for OpenRouter login...`);
 
@@ -302,9 +312,11 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
       onStatus?.("Waiting for authorization...");
 
       // Timeout after 5 minutes
-      setTimeout(() => {
-        server.close();
-        reject(new Error("OAuth timed out after 5 minutes"));
+      timeoutId = setTimeout(() => {
+        if (!handled) {
+          server.close();
+          reject(new Error("OAuth timed out after 5 minutes"));
+        }
       }, 5 * 60 * 1000);
     });
   });
@@ -448,6 +460,39 @@ export function importCodexToken(onStatus?: (msg: string) => void): AuthCredenti
 // ── Qwen CLI Cached Credentials ──
 
 export function detectQwenToken(): string | null {
+  // Environment variable takes priority
+  if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY;
+
+  // DashScope CLI stores the API key as plain text
+  const dashscopeKey = join(homedir(), ".dashscope", "api_key");
+  if (existsSync(dashscopeKey)) {
+    try {
+      const key = readFileSync(dashscopeKey, "utf-8").trim();
+      if (key) return key;
+    } catch { /* ignore */ }
+  }
+
+  // DashScope credentials file (INI-style: api_key=sk-...)
+  const dashscopeCreds = join(homedir(), ".dashscope", "credentials");
+  if (existsSync(dashscopeCreds)) {
+    try {
+      const content = readFileSync(dashscopeCreds, "utf-8");
+      const match = content.match(/api_key\s*=\s*(.+)/);
+      if (match?.[1]?.trim()) return match[1].trim();
+    } catch { /* ignore */ }
+  }
+
+  // Newer Qwen CLI config
+  const qwenConfig = join(homedir(), ".qwen", "config.json");
+  if (existsSync(qwenConfig)) {
+    try {
+      const data = JSON.parse(readFileSync(qwenConfig, "utf-8"));
+      if (data.api_key) return data.api_key;
+      if (data.access_token) return data.access_token;
+    } catch { /* ignore */ }
+  }
+
+  // Legacy path
   const qwenAuth = join(homedir(), ".qwen", "oauth_creds.json");
   if (existsSync(qwenAuth)) {
     try {
@@ -455,10 +500,9 @@ export function detectQwenToken(): string | null {
       if (data.access_token) return data.access_token;
       if (data.token) return data.token;
       if (data.api_key) return data.api_key;
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
+
   return null;
 }
 
@@ -483,6 +527,49 @@ export function importQwenToken(onStatus?: (msg: string) => void): AuthCredentia
 
 // ── GitHub Copilot Device Flow ──
 
+/**
+ * Exchange a GitHub OAuth token for a short-lived Copilot API token.
+ * The Copilot API (api.githubcopilot.com) does NOT accept raw GitHub
+ * OAuth tokens — you must exchange them via GitHub's internal endpoint.
+ * The returned token expires in ~30 minutes.
+ */
+export async function exchangeCopilotToken(githubToken: string): Promise<{
+  token: string;
+  expiresAt: number;
+}> {
+  const res = await fetch("https://api.github.com/copilot_internal/v2/token", {
+    headers: {
+      "Authorization": `token ${githubToken}`,
+      "Accept": "application/json",
+      "User-Agent": "codemaxxing/1.0",
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    if (res.status === 401) {
+      throw new Error("GitHub token is invalid or expired. Run /login to re-authenticate.");
+    }
+    if (res.status === 403) {
+      throw new Error(
+        "Your GitHub account does not have an active Copilot subscription.\n" +
+        "Check: https://github.com/settings/copilot"
+      );
+    }
+    throw new Error(`Copilot token exchange failed (${res.status}): ${errText}`);
+  }
+
+  const data = (await res.json()) as {
+    token: string;
+    expires_at: number; // Unix timestamp
+  };
+
+  return {
+    token: data.token,
+    expiresAt: data.expires_at * 1000, // Convert to ms
+  };
+}
+
 export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promise<AuthCredential> {
   // Step 1: Request device code
   onStatus?.("Starting GitHub Copilot device flow...");
@@ -495,7 +582,6 @@ export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promi
     },
     body: JSON.stringify({
       client_id: "Iv1.b507a08c87ecfe98", // GitHub Copilot's public client_id
-      scope: "copilot",
     }),
   });
 
@@ -527,14 +613,14 @@ export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promi
     execFile(opener, openerArgs, () => {});
   } catch { /* ignore */ }
 
-  // Step 2: Poll for token
-  const interval = (deviceData.interval || 5) * 1000;
+  // Step 2: Poll for GitHub OAuth token
+  let pollInterval = (deviceData.interval || 5) * 1000;
   const expiresAt = Date.now() + deviceData.expires_in * 1000;
 
   onStatus?.("Waiting for authorization...");
 
   while (Date.now() < expiresAt) {
-    await new Promise((r) => setTimeout(r, interval));
+    await new Promise((r) => setTimeout(r, pollInterval));
 
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -555,12 +641,20 @@ export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promi
     };
 
     if (tokenData.access_token) {
+      // Step 3: Exchange GitHub OAuth token for short-lived Copilot API token
+      onStatus?.("Exchanging GitHub token for Copilot API access...");
+      const copilotToken = await exchangeCopilotToken(tokenData.access_token);
+
       const cred: AuthCredential = {
         provider: "copilot",
         method: "oauth",
-        apiKey: tokenData.access_token,
+        apiKey: copilotToken.token, // Short-lived Copilot API token
         baseUrl: "https://api.githubcopilot.com",
         label: "GitHub Copilot",
+        // Store the GitHub OAuth token as refreshToken so we can
+        // re-exchange it when the Copilot token expires (~30 min).
+        refreshToken: tokenData.access_token,
+        oauthExpires: copilotToken.expiresAt,
         createdAt: new Date().toISOString(),
       };
 
@@ -573,7 +667,8 @@ export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promi
     }
 
     if (tokenData.error === "slow_down") {
-      await new Promise((r) => setTimeout(r, 5000));
+      // RFC 8628 §3.5: MUST increase interval by 5s for all subsequent polls
+      pollInterval += 5000;
       continue;
     }
 

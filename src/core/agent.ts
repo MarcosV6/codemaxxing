@@ -18,7 +18,7 @@ import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loa
 import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "../bridge/mcp.js";
 import { refreshAnthropicOAuthToken } from "../utils/anthropic-oauth.js";
 import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
-import { getCredential, saveCredential } from "../utils/auth.js";
+import { getCredential, saveCredential, exchangeCopilotToken } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
 import { detectModelContextWindow, getStaticContextWindow } from "../utils/model-context.js";
 import { isAutoLearnSkillsEnabled, loadConfig, type ProviderConfig } from "../config.js";
@@ -775,6 +775,15 @@ export class CodingAgent {
         }
         // Try refreshing expired OAuth token
         if (err.status === 401) {
+          // Copilot tokens expire every ~30 min — try re-exchanging first
+          if (this.currentBaseUrl.includes("githubcopilot.com")) {
+            const refreshed = await this.tryRefreshCopilotToken();
+            if (refreshed) {
+              iterations--;
+              continue;
+            }
+            throw new Error("Copilot token expired and could not be refreshed. Run /login to re-authenticate.");
+          }
           const refreshed = await this.tryRefreshOpenAIToken();
           if (refreshed) {
             iterations--;
@@ -1680,6 +1689,14 @@ export class CodingAgent {
           (err.message && (err.message.includes("401") || err.message.includes("token_expired") || err.message.includes("token is expired")));
 
         if (is401) {
+          if (this.currentBaseUrl.includes("githubcopilot.com")) {
+            const refreshed = await this.tryRefreshCopilotToken();
+            if (refreshed) {
+              iterations--;
+              continue;
+            }
+            throw new Error("Copilot token expired and could not be refreshed. Run /login to re-authenticate.");
+          }
           const refreshed = await this.tryRefreshOpenAIToken();
           if (refreshed) {
             // Token refreshed — retry this iteration
@@ -1839,6 +1856,32 @@ export class CodingAgent {
       // Rebuild client with new token
       this.currentApiKey = refreshed.access;
       this.anthropicClient = createAnthropicClient(refreshed.access);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Attempt to refresh an expired Copilot API token.
+   * The short-lived Copilot token (~30 min) is re-exchanged from the
+   * stored GitHub OAuth token (refreshToken).
+   */
+  private async tryRefreshCopilotToken(): Promise<boolean> {
+    const cred = getCredential("copilot");
+    if (!cred?.refreshToken) return false;
+
+    try {
+      const copilotToken = await exchangeCopilotToken(cred.refreshToken);
+      cred.apiKey = copilotToken.token;
+      cred.oauthExpires = copilotToken.expiresAt;
+      saveCredential(cred);
+      this.currentApiKey = copilotToken.token;
+      this.client = new OpenAI({
+        baseURL: this.currentBaseUrl,
+        apiKey: copilotToken.token,
+        defaultHeaders: getCopilotHeaders(),
+      });
       return true;
     } catch {
       return false;

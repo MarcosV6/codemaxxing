@@ -300,6 +300,42 @@ export function OrchestrateCommandPicker({ selectedIndex, colors }: CommandPicke
   );
 }
 
+// ── Think (reasoning effort) Picker ──
+
+interface ThinkPickerProps {
+  selectedIndex: number;
+  currentLevel: "low" | "medium" | "high" | "max" | null;
+  colors: Theme["colors"];
+}
+
+export const THINK_PICKER_OPTIONS = ["off", "low", "medium", "high", "max"] as const;
+
+export function ThinkPicker({ selectedIndex, currentLevel, colors }: ThinkPickerProps) {
+  const options = [
+    { key: "off", label: "off", desc: "disable extended reasoning" },
+    { key: "low", label: "low", desc: "brief reasoning (think / ~4k tokens)" },
+    { key: "medium", label: "medium", desc: "balanced depth (think more / ~10k)" },
+    { key: "high", label: "high", desc: "deep reasoning (think hard / ~16k)" },
+    { key: "max", label: "max", desc: "maximum effort (ultrathink / ~32k)" },
+  ];
+  const active = currentLevel ?? "off";
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={colors.border} paddingX={1} marginBottom={0}>
+      <Text bold color={colors.secondary}>Thinking effort:</Text>
+      <Text color={colors.muted}>{`  current: ${active}`}</Text>
+      {options.map((option, i) => (
+        <Text key={option.key}>
+          {i === selectedIndex ? <Text color={colors.suggestion} bold>{"▸ "}</Text> : <Text>{"  "}</Text>}
+          <Text color={i === selectedIndex ? colors.suggestion : colors.primary} bold>{option.label}</Text>
+          {option.key === active ? <Text color={colors.muted}>{" (active)"}</Text> : null}
+          <Text color={colors.muted}>{" — "}{option.desc}</Text>
+        </Text>
+      ))}
+      <Text dimColor>{"  ↑↓ navigate · Enter select · Esc cancel"}</Text>
+    </Box>
+  );
+}
+
 // ── Workspace (cwd) Picker ──
 
 interface CwdPickerProps {

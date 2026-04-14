@@ -98,7 +98,8 @@ export function runLinter(linter: LinterInfo, filePath: string, cwd: string): st
     execSync(command, {
       cwd,
       encoding: "utf-8",
-      timeout: 15000,
+      timeout: 30000,
+      maxBuffer: 2 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
     });
     return null; // No errors
