@@ -18,6 +18,7 @@ export interface ResponsesAPIOptions {
   tools: any[];
   reasoningEffort?: "low" | "medium" | "high";
   onToken?: (token: string) => void;
+  signal?: AbortSignal;
 }
 
 interface ToolCall {
@@ -85,6 +86,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
     tools,
     reasoningEffort,
     onToken,
+    signal,
   } = options;
 
   // Build input items from message history
@@ -186,6 +188,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
       "User-Agent": "codemaxxing/1.0",
     },
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!response.ok) {

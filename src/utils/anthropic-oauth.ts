@@ -94,6 +94,8 @@ export async function loginAnthropicOAuth(
   const { verifier, challenge } = generatePKCE();
 
   return new Promise((resolve, reject) => {
+    let timeoutId: NodeJS.Timeout | null = null;
+    const cleanup = () => { if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; } };
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -111,6 +113,7 @@ export async function loginAnthropicOAuth(
         res.end(
           "<h1>Error: No authorization code received</h1><p>Please try again.</p>",
         );
+        cleanup();
         server.close();
         reject(new Error("No authorization code received"));
         return;
@@ -120,6 +123,7 @@ export async function loginAnthropicOAuth(
       if (returnedState !== verifier) {
         res.writeHead(400, { "Content-Type": "text/html" });
         res.end("<h1>Error: State mismatch</h1><p>Please try again.</p>");
+        cleanup();
         server.close();
         reject(new Error("OAuth state mismatch"));
         return;
@@ -175,10 +179,12 @@ export async function loginAnthropicOAuth(
         };
 
         saveCredential(cred);
+        cleanup();
         resolve(cred);
       } catch (err: any) {
         res.writeHead(500, { "Content-Type": "text/html" });
         res.end(`<h1>Error</h1><p>${err.message}</p>`);
+        cleanup();
         server.close();
         reject(err);
       }
@@ -209,13 +215,15 @@ export async function loginAnthropicOAuth(
       onStatus?.("Waiting for authorization...");
 
       // Timeout after 120 seconds
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
         server.close();
         reject(new Error("OAuth timed out after 120 seconds"));
       }, 120 * 1000);
     });
 
     server.on("error", (err: any) => {
+      cleanup();
       if (err.code === "EADDRINUSE") {
         reject(
           new Error(

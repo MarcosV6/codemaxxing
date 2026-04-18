@@ -192,10 +192,13 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
 export function getModelCost(model: string): { input: number; output: number } {
   // Direct match
   if (MODEL_COSTS[model]) return MODEL_COSTS[model];
-  // Partial match (model name contains a known key)
+  // Partial match: model name contains a known key. Drop the reverse check —
+  // it caused short names like "o3" to alias onto "o3-mini" pricing.
+  // Iterate longest-key-first so "gpt-5-mini" wins over "gpt-5".
   const lower = model.toLowerCase();
-  for (const [key, cost] of Object.entries(MODEL_COSTS)) {
-    if (lower.includes(key) || key.includes(lower)) return cost;
+  const sortedEntries = Object.entries(MODEL_COSTS).sort((a, b) => b[0].length - a[0].length);
+  for (const [key, cost] of sortedEntries) {
+    if (lower.includes(key)) return cost;
   }
   // Default: $0 (local/unknown models)
   return { input: 0, output: 0 };
@@ -343,6 +346,7 @@ export class CodingAgent {
   private currentApiKey: string | null = null;
   private currentBaseUrl: string = "";
   private aborted: boolean = false;
+  private abortController: AbortController | null = null;
   private messages: ChatCompletionMessageParam[] = [];
   private tools: ChatCompletionTool[] = FILE_TOOLS;
   private cwd: string;
@@ -434,12 +438,16 @@ export class CodingAgent {
    * Safe to call repeatedly; failures are silent.
    */
   private async refreshContextWindow(): Promise<void> {
+    const targetModel = this.model;
+    const targetBaseUrl = this.currentBaseUrl;
     try {
       const detected = await detectModelContextWindow({
-        model: this.model,
-        baseUrl: this.currentBaseUrl,
+        model: targetModel,
+        baseUrl: targetBaseUrl,
         providerType: this.providerType,
       });
+      // Bail if the user switched models while detection was in flight.
+      if (this.model !== targetModel || this.currentBaseUrl !== targetBaseUrl) return;
       if (detected > 0) {
         this.contextWindow = detected;
         if (!this.compressionThresholdLocked) {
@@ -522,9 +530,15 @@ export class CodingAgent {
    * Execute a tool with pre/post hooks.
    */
   private async executeToolWithHooks(name: string, args: Record<string, unknown>, cwd: string): Promise<string> {
+    let runHooks: typeof import("../utils/hooks.js").runHooks;
     try {
-      const { runHooks } = await import("../utils/hooks.js");
+      ({ runHooks } = await import("../utils/hooks.js"));
+    } catch {
+      // Hooks module not available — execute directly
+      return executeTool(name, args, cwd);
+    }
 
+    try {
       // Pre-tool hooks
       const preResults = await runHooks("pre-tool", cwd, { toolName: name, toolArgs: args });
       for (const r of preResults) {
@@ -532,16 +546,23 @@ export class CodingAgent {
           this.options.onToolResult("hook", r.output);
         }
       }
+    } catch (err: any) {
+      if (err.message?.startsWith("Blocking hook failed:")) {
+        return `Hook blocked this action: ${err.message}`;
+      }
+      // Non-blocking pre-hook failure — log and continue
+      this.options.onToolResult?.("hook", `Pre-tool hook error: ${err.message}`);
+    }
 
-      // Execute the actual tool
-      const result = await executeTool(name, args, cwd);
+    // Execute the actual tool exactly once
+    const result = await executeTool(name, args, cwd);
 
-      // Track for skill learning
-      this.workflowTrace.toolCalls.push({ name, args, result: result.slice(0, 200) });
-      this.workflowTrace.totalIterations++;
+    this.workflowTrace.toolCalls.push({ name, args, result: result.slice(0, 200) });
+    this.workflowTrace.totalIterations++;
 
-      // Post-tool hooks
-      const filePath = typeof args.path === "string" ? args.path : undefined;
+    // Post-tool hooks (errors here are non-fatal — tool already ran)
+    const filePath = typeof args.path === "string" ? args.path : undefined;
+    try {
       const postResults = await runHooks("post-tool", cwd, {
         toolName: name,
         toolArgs: args,
@@ -554,19 +575,14 @@ export class CodingAgent {
         }
       }
 
-      // On-edit hooks for file write/edit tools
       if ((name === "write_file" || name === "edit_file") && filePath) {
         await runHooks("on-edit", cwd, { toolName: name, filePath });
       }
-
-      return result;
     } catch (err: any) {
-      if (err.message?.startsWith("Blocking hook failed:")) {
-        return `Hook blocked this action: ${err.message}`;
-      }
-      // Hooks module not available — fall through to direct execution
-      return executeTool(name, args, cwd);
+      this.options.onToolResult?.("hook", `Post-tool hook error: ${err.message}`);
     }
+
+    return result;
   }
 
   /**
@@ -941,8 +957,17 @@ export class CodingAgent {
         // Execute all safe tools in parallel
         const parsedCalls = toolCallArray.map((tc) => {
           let args: Record<string, unknown> = {};
-          try { args = JSON.parse(tc.arguments); } catch { args = {}; }
-          return { tc, args };
+          let parseError: string | null = null;
+          try { args = JSON.parse(tc.arguments); } catch {
+            // Try to repair common local-model JSON issues (trailing comma, missing brace)
+            try {
+              const repaired = tc.arguments.replace(/,\s*([}\]])/g, "$1").replace(/([^}\]])$/, "$1}");
+              args = JSON.parse(repaired);
+            } catch {
+              parseError = `Malformed tool arguments — could not parse JSON: ${tc.arguments.slice(0, 200)}`;
+            }
+          }
+          return { tc, args, parseError };
         });
 
         // Fire onToolCall for all before executing
@@ -950,7 +975,10 @@ export class CodingAgent {
           this.options.onToolCall?.(tc.name, args);
         }
 
-        const results = await Promise.all(parsedCalls.map(async ({ tc, args }) => {
+        const results = await Promise.all(parsedCalls.map(async ({ tc, args, parseError }) => {
+          if (parseError) {
+            return { tc, result: parseError };
+          }
           if (tc.name === "think") {
             this.options.onThinking?.(String(args.thought ?? ""));
             return { tc, result: "(thinking complete)" };
@@ -974,10 +1002,24 @@ export class CodingAgent {
         // Sequential execution (original behavior)
         for (const toolCall of toolCalls.values()) {
           let args: Record<string, unknown> = {};
+          let parseError: string | null = null;
           try {
             args = JSON.parse(toolCall.arguments);
           } catch {
-            args = {};
+            try {
+              const repaired = toolCall.arguments.replace(/,\s*([}\]])/g, "$1").replace(/([^}\]])$/, "$1}");
+              args = JSON.parse(repaired);
+            } catch {
+              parseError = `Malformed tool arguments — could not parse JSON: ${toolCall.arguments.slice(0, 200)}`;
+            }
+          }
+
+          if (parseError) {
+            this.options.onToolResult?.(toolCall.name, parseError);
+            const errMsg = buildToolResultMessage(toolCall.id, toolCall.name, parseError);
+            this.messages.push(errMsg);
+            saveMessage(this.sessionId, errMsg);
+            continue;
           }
 
           this.options.onToolCall?.(toolCall.name, args);
@@ -1184,28 +1226,44 @@ export class CodingAgent {
         });
       }
     }
-    // Sanitize: remove tool_result messages that don't have a matching tool_use
+    // Sanitize: drop tool_result blocks without matching tool_use, and
+    // drop tool_use blocks without matching tool_result (an interrupted turn
+    // would otherwise cause Anthropic to 400 on the next call).
     const validToolUseIds = new Set<string>();
+    const validToolResultIds = new Set<string>();
     for (const m of msgs) {
       if (m.role === "assistant" && Array.isArray(m.content)) {
         for (const block of m.content) {
-          if ((block as any).type === "tool_use") {
-            validToolUseIds.add((block as any).id);
-          }
+          if ((block as any).type === "tool_use") validToolUseIds.add((block as any).id);
+        }
+      }
+      if (m.role === "user" && Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if ((block as any).type === "tool_result") validToolResultIds.add((block as any).tool_use_id);
         }
       }
     }
-    
-    return msgs.filter((m) => {
+
+    const cleaned: Anthropic.MessageParam[] = [];
+    for (const m of msgs) {
+      if (m.role === "assistant" && Array.isArray(m.content)) {
+        const filtered = (m.content as any[]).filter((b) => {
+          if (b.type === "tool_use") return validToolResultIds.has(b.id);
+          return true;
+        });
+        if (filtered.length === 0) continue;
+        cleaned.push({ ...m, content: filtered });
+        continue;
+      }
       if (m.role === "user" && Array.isArray(m.content)) {
         const toolResults = (m.content as any[]).filter((b) => b.type === "tool_result");
-        if (toolResults.length > 0) {
-          // Only keep if ALL tool_results have matching tool_use
-          return toolResults.every((tr) => validToolUseIds.has(tr.tool_use_id));
+        if (toolResults.length > 0 && !toolResults.every((tr) => validToolUseIds.has(tr.tool_use_id))) {
+          continue;
         }
       }
-      return true;
-    });
+      cleaned.push(m);
+    }
+    return cleaned;
   }
 
   /**
@@ -1509,6 +1567,7 @@ export class CodingAgent {
           tools: this.tools,
           reasoningEffort: openaiEffort ?? undefined,
           onToken: (token) => this.options.onToken?.(token),
+          signal: this.abortController?.signal,
         });
 
         const { contentText, toolCalls, promptTokens, completionTokens } = result;
@@ -1727,6 +1786,9 @@ export class CodingAgent {
    */
   abort(): void {
     this.aborted = true;
+    if (this.abortController) {
+      try { this.abortController.abort(); } catch {}
+    }
   }
 
   /**
@@ -1738,6 +1800,7 @@ export class CodingAgent {
 
   private resetAbort(): void {
     this.aborted = false;
+    this.abortController = new AbortController();
   }
 
   setReasoningEffort(level: "low" | "medium" | "high" | "max" | null): void {

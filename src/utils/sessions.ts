@@ -172,7 +172,11 @@ export function loadMessages(sessionId: string): ChatCompletionMessageParam[] {
   }>;
 
   return rows.map((row) => {
-    const msg: any = { role: row.role, content: row.content };
+    let content: any = row.content;
+    if (typeof content === "string" && (content.startsWith("[") || content.startsWith("{"))) {
+      try { content = JSON.parse(content); } catch { /* keep as string */ }
+    }
+    const msg: any = { role: row.role, content };
 
     if (row.tool_calls) {
       try {

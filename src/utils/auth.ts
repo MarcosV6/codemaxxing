@@ -432,8 +432,11 @@ export function detectCodexToken(): string | null {
     }
   }
 
-  // Final fallback: environment variable
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  // Final fallback: env var, but ONLY if it looks like a Codex JWT.
+  // A regular sk-* key would otherwise get imported with the chatgpt.com base URL
+  // and fail every request.
+  const envKey = process.env.OPENAI_API_KEY;
+  if (envKey && envKey.startsWith("eyJ")) return envKey;
 
   return null;
 }
