@@ -26,6 +26,16 @@ function safePath(cwd: string, userPath: string | undefined | null): string | nu
   }
   return resolved;
 }
+
+function pathError(rawPath: unknown): string {
+  if (rawPath === undefined || rawPath === null || rawPath === "") {
+    return "Error: Empty or missing path argument";
+  }
+  if (typeof rawPath !== "string") {
+    return `Error: Path argument must be a string, got ${typeof rawPath}`;
+  }
+  return `Error: Path escapes project root: ${rawPath}`;
+}
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 function normalizeWindowsCommand(command: string): { command: string; notes: string[] } {
@@ -504,7 +514,7 @@ export async function executeTool(
       const rawPath = (args.path ?? args.file_path ?? args.filepath ?? args.filename) as string | undefined;
       if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
       const filePath = safePath(cwd, rawPath);
-      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
+      if (!filePath) return pathError(rawPath);
       if (!existsSync(filePath)) return `Error: File not found: ${rawPath}`;
       try {
         // Handle Jupyter notebooks
@@ -558,7 +568,7 @@ export async function executeTool(
       if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
       if (rawContent === undefined) return `Error: Missing required 'content' argument.`;
       const filePath = safePath(cwd, rawPath);
-      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
+      if (!filePath) return pathError(rawPath);
       try {
         const existed = existsSync(filePath);
         const oldContent = existed ? readFileSync(filePath, "utf-8") : "";
@@ -583,7 +593,7 @@ export async function executeTool(
       const rawPath = (args.path ?? args.file_path ?? args.filepath ?? args.filename) as string | undefined;
       if (!rawPath) return `Error: Missing required 'path' argument. Received args: ${Object.keys(args).join(", ")}`;
       const filePath = safePath(cwd, rawPath);
-      if (!filePath) return `Error: Path escapes project root: ${rawPath}`;
+      if (!filePath) return pathError(rawPath);
       if (!existsSync(filePath)) return `Error: File not found: ${rawPath}`;
       try {
         const oldText = String(args.oldText ?? "");
@@ -613,7 +623,7 @@ export async function executeTool(
 
     case "list_files": {
       const dirPath = safePath(cwd, (args.path as string) || ".");
-      if (!dirPath) return `Error: Path escapes project root: ${args.path}`;
+      if (!dirPath) return pathError(args.path);
       if (!existsSync(dirPath)) return `Error: Directory not found: ${args.path}`;
       try {
         const entries = listDir(dirPath, cwd, args.recursive as boolean);
@@ -625,7 +635,7 @@ export async function executeTool(
 
     case "search_files": {
       const searchPath = safePath(cwd, (args.path as string) || ".");
-      if (!searchPath) return `Error: Path escapes project root: ${args.path}`;
+      if (!searchPath) return pathError(args.path);
       try {
         return searchInFiles(searchPath, args.pattern as string, cwd);
       } catch (e: any) {
@@ -745,7 +755,7 @@ export async function executeTool(
         const filePath = userPath.startsWith("/")
           ? userPath
           : safePath(cwd, userPath);
-        if (!filePath) return `Error: Path escapes project root: ${userPath}`;
+        if (!filePath) return pathError(userPath);
         if (!existsSync(filePath)) return `Error: Image not found: ${userPath}`;
 
         const ext = extname(filePath).toLowerCase();
@@ -1102,7 +1112,18 @@ function searchInFiles(
 ): string {
   const results: string[] = [];
   const IGNORE = ["node_modules", ".git", "dist", ".next", "__pycache__"];
-  const regex = new RegExp(pattern, "gi");
+  if (typeof pattern !== "string" || pattern.length === 0) {
+    return "Error: search pattern must be a non-empty string";
+  }
+  if (pattern.length > 500) {
+    return "Error: search pattern too long (max 500 chars)";
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern, "gi");
+  } catch (e: any) {
+    return `Error: invalid regex pattern: ${e.message}`;
+  }
   const isIgnored = loadIgnorePatterns(cwd);
 
   function search(dir: string) {

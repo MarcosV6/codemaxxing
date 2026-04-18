@@ -767,6 +767,8 @@ export class CodingAgent {
       iterations++;
       this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
+      await this.maybeRefreshTokenProactively();
+
       let stream;
       try {
         const streamParams: any = {
@@ -1278,6 +1280,8 @@ export class CodingAgent {
       iterations++;
       this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
+      await this.maybeRefreshTokenProactively();
+
       const anthropicMessages = this.getAnthropicMessages();
       const anthropicTools = this.getAnthropicTools();
 
@@ -1553,9 +1557,11 @@ export class CodingAgent {
       iterations++;
       this.options.onLoopStatus?.("opening model stream", { iteration: iterations });
 
+      await this.maybeRefreshTokenProactively();
+
       try {
         const currentKey = this.currentApiKey || this.options.provider.apiKey;
-        
+
         const { openaiEffort } = this.getThinkingConfig();
         const result = await chatWithResponsesAPI({
           baseUrl: this.currentBaseUrl,
@@ -1899,6 +1905,35 @@ export class CodingAgent {
     // refines it once it returns.
     this.contextWindow = getStaticContextWindow(this.model);
     void this.refreshContextWindow();
+  }
+
+  /**
+   * Refresh OAuth tokens that are within 30s of expiry — saves the cold-start 401.
+   * Routed by current baseUrl so each provider only checks its own credential.
+   */
+  private async maybeRefreshTokenProactively(): Promise<void> {
+    const SKEW_MS = 30_000;
+    const now = Date.now();
+    try {
+      if (this.currentBaseUrl.includes("githubcopilot.com")) {
+        const cred = getCredential("copilot");
+        if (cred?.oauthExpires && cred.oauthExpires - now < SKEW_MS) {
+          await this.tryRefreshCopilotToken();
+        }
+      } else if (this.providerType === "anthropic") {
+        const cred = getCredential("anthropic");
+        if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+          await this.tryRefreshAnthropicToken();
+        }
+      } else {
+        const cred = getCredential("openai");
+        if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+          await this.tryRefreshOpenAIToken();
+        }
+      }
+    } catch {
+      // Reactive refresh on 401 still kicks in if this fails.
+    }
   }
 
   /**

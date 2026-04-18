@@ -414,7 +414,9 @@ export function detectCodexToken(): string | null {
     }
   }
 
-  // Codex CLI v0.18+ stores tokens in macOS Keychain
+  // Codex CLI v0.18+ stores tokens in macOS Keychain. Queries run sequentially
+  // because `security` may prompt — but with a tight 1s timeout each so a
+  // misconfigured keychain doesn't block startup for 12s.
   if (process.platform === "darwin") {
     const keychainQueries = [
       ["security", "find-generic-password", "-s", "codex", "-w"],
@@ -424,7 +426,7 @@ export function detectCodexToken(): string | null {
     ];
     for (const args of keychainQueries) {
       try {
-        const token = execSync(args.join(" "), { stdio: "pipe", timeout: 3000 }).toString().trim();
+        const token = execSync(args.join(" "), { stdio: "pipe", timeout: 1000 }).toString().trim();
         if (token) return token;
       } catch {
         continue;
