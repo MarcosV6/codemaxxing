@@ -235,6 +235,17 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
 
       const eventType = event.type;
 
+      // Surface mid-stream errors instead of silently completing with empty content
+      if (
+        eventType === "error" ||
+        eventType === "response.failed" ||
+        eventType === "response.error" ||
+        eventType === "response.incomplete"
+      ) {
+        const detail = event.error?.message ?? event.message ?? event.response?.error?.message ?? JSON.stringify(event);
+        throw new Error(`Responses API stream error: ${detail}`);
+      }
+
       // Text content delta
       if (eventType === "response.output_text.delta") {
         const delta = event.delta;

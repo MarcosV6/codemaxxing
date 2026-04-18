@@ -84,6 +84,38 @@ export function loadHooks(cwd: string): HookDefinition[] {
   return allHooks;
 }
 
+/**
+ * Minimal glob matcher: supports `**` (any path segments incl. /), `*` (no /),
+ * `?` (one char), and literal segments. Brace expansion not supported.
+ */
+function matchesGlob(glob: string, filePath: string): boolean {
+  const escapeRe = (s: string) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  let re = "";
+  let i = 0;
+  while (i < glob.length) {
+    const ch = glob[i];
+    if (ch === "*") {
+      if (glob[i + 1] === "*") {
+        // ** matches anything including /
+        re += ".*";
+        i += 2;
+        if (glob[i] === "/") i++;
+      } else {
+        // * matches any char except /
+        re += "[^/]*";
+        i++;
+      }
+    } else if (ch === "?") {
+      re += "[^/]";
+      i++;
+    } else {
+      re += escapeRe(ch);
+      i++;
+    }
+  }
+  return new RegExp(`^${re}$`).test(filePath);
+}
+
 // ── Execution ──
 
 /**
@@ -112,9 +144,7 @@ export async function runHooks(
     }
     // Filter by glob if specified
     if (h.glob && context.filePath) {
-      // Simple glob check — just checks if the path contains the pattern
-      const pattern = h.glob.replace(/\*/g, "");
-      if (!context.filePath.includes(pattern)) return false;
+      if (!matchesGlob(h.glob, context.filePath)) return false;
     }
     return true;
   });

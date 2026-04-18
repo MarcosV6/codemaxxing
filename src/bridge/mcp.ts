@@ -127,11 +127,10 @@ export async function connectToServers(
 
 export async function disconnectAll(): Promise<void> {
   for (const server of connectedServers) {
-    try {
-      await server.client.close();
-    } catch {
-      // Ignore cleanup errors
-    }
+    try { await server.client.close(); } catch { /* ignore */ }
+    // Explicitly close the transport too — some SDK versions don't kill the
+    // child process from client.close() alone, leaving stdio subprocesses behind.
+    try { await server.transport.close(); } catch { /* ignore */ }
   }
   connectedServers.length = 0;
 }

@@ -204,6 +204,24 @@ export function getModelCost(model: string): { input: number; output: number } {
   return { input: 0, output: 0 };
 }
 
+/**
+ * Best-effort repair of malformed tool-call JSON from local models.
+ * Strips trailing commas and adds a closing brace ONLY when the trimmed
+ * string opens with `{` or `[` and is missing its terminator.
+ */
+function repairToolArgs(raw: string): string {
+  const stripped = raw.replace(/,(\s*[}\]])/g, "$1");
+  const trimmed = stripped.trimEnd();
+  if (!trimmed) return trimmed;
+  const opensObj = trimmed.startsWith("{");
+  const opensArr = trimmed.startsWith("[");
+  if (!opensObj && !opensArr) return trimmed;
+  const lastChar = trimmed[trimmed.length - 1];
+  const needsClose = opensObj ? lastChar !== "}" : lastChar !== "]";
+  if (!needsClose) return trimmed;
+  return trimmed + (opensObj ? "}" : "]");
+}
+
 export interface WorkflowToolTraceEntry {
   name: string;
   args: Record<string, unknown>;
@@ -560,7 +578,9 @@ export class CodingAgent {
     this.workflowTrace.toolCalls.push({ name, args, result: result.slice(0, 200) });
     this.workflowTrace.totalIterations++;
 
-    // Post-tool hooks (errors here are non-fatal — tool already ran)
+    // Post-tool hooks. The tool already ran, so non-blocking errors are logged
+    // and we keep going. A blocking-hook failure surfaces to the model as a
+    // hook block — the tool result is replaced with the block message.
     const filePath = typeof args.path === "string" ? args.path : undefined;
     try {
       const postResults = await runHooks("post-tool", cwd, {
@@ -579,6 +599,9 @@ export class CodingAgent {
         await runHooks("on-edit", cwd, { toolName: name, filePath });
       }
     } catch (err: any) {
+      if (err.message?.startsWith("Blocking hook failed:")) {
+        return `Hook blocked this action (post-tool): ${err.message}`;
+      }
       this.options.onToolResult?.("hook", `Post-tool hook error: ${err.message}`);
     }
 
@@ -963,8 +986,7 @@ export class CodingAgent {
           try { args = JSON.parse(tc.arguments); } catch {
             // Try to repair common local-model JSON issues (trailing comma, missing brace)
             try {
-              const repaired = tc.arguments.replace(/,\s*([}\]])/g, "$1").replace(/([^}\]])$/, "$1}");
-              args = JSON.parse(repaired);
+              args = JSON.parse(repairToolArgs(tc.arguments));
             } catch {
               parseError = `Malformed tool arguments — could not parse JSON: ${tc.arguments.slice(0, 200)}`;
             }
@@ -1009,8 +1031,7 @@ export class CodingAgent {
             args = JSON.parse(toolCall.arguments);
           } catch {
             try {
-              const repaired = toolCall.arguments.replace(/,\s*([}\]])/g, "$1").replace(/([^}\]])$/, "$1}");
-              args = JSON.parse(repaired);
+              args = JSON.parse(repairToolArgs(toolCall.arguments));
             } catch {
               parseError = `Malformed tool arguments — could not parse JSON: ${toolCall.arguments.slice(0, 200)}`;
             }
@@ -1258,10 +1279,14 @@ export class CodingAgent {
         continue;
       }
       if (m.role === "user" && Array.isArray(m.content)) {
-        const toolResults = (m.content as any[]).filter((b) => b.type === "tool_result");
-        if (toolResults.length > 0 && !toolResults.every((tr) => validToolUseIds.has(tr.tool_use_id))) {
-          continue;
-        }
+        // Drop only the orphan tool_result blocks; keep sibling results from the
+        // same parallel batch so the model can see the work that did complete.
+        const filtered = (m.content as any[]).filter((b) =>
+          b.type !== "tool_result" || validToolUseIds.has(b.tool_use_id),
+        );
+        if (filtered.length === 0) continue;
+        cleaned.push({ ...m, content: filtered });
+        continue;
       }
       cleaned.push(m);
     }
@@ -1910,30 +1935,38 @@ export class CodingAgent {
   /**
    * Refresh OAuth tokens that are within 30s of expiry — saves the cold-start 401.
    * Routed by current baseUrl so each provider only checks its own credential.
+   * Concurrent calls share the same in-flight Promise to avoid double-refresh
+   * (which would invalidate the rotated refresh token on the second attempt).
    */
+  private refreshInFlight: Promise<void> | null = null;
   private async maybeRefreshTokenProactively(): Promise<void> {
+    if (this.refreshInFlight) return this.refreshInFlight;
     const SKEW_MS = 30_000;
     const now = Date.now();
-    try {
-      if (this.currentBaseUrl.includes("githubcopilot.com")) {
-        const cred = getCredential("copilot");
-        if (cred?.oauthExpires && cred.oauthExpires - now < SKEW_MS) {
-          await this.tryRefreshCopilotToken();
+    const work = (async () => {
+      try {
+        if (this.currentBaseUrl.includes("githubcopilot.com")) {
+          const cred = getCredential("copilot");
+          if (cred?.oauthExpires && cred.oauthExpires - now < SKEW_MS) {
+            await this.tryRefreshCopilotToken();
+          }
+        } else if (this.providerType === "anthropic") {
+          const cred = getCredential("anthropic");
+          if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+            await this.tryRefreshAnthropicToken();
+          }
+        } else {
+          const cred = getCredential("openai");
+          if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+            await this.tryRefreshOpenAIToken();
+          }
         }
-      } else if (this.providerType === "anthropic") {
-        const cred = getCredential("anthropic");
-        if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
-          await this.tryRefreshAnthropicToken();
-        }
-      } else {
-        const cred = getCredential("openai");
-        if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
-          await this.tryRefreshOpenAIToken();
-        }
+      } catch {
+        // Reactive refresh on 401 still kicks in if this fails.
       }
-    } catch {
-      // Reactive refresh on 401 still kicks in if this fails.
-    }
+    })();
+    this.refreshInFlight = work.finally(() => { this.refreshInFlight = null; });
+    return this.refreshInFlight;
   }
 
   /**

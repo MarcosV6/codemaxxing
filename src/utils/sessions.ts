@@ -52,6 +52,7 @@ function getDb(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id);
   `);
 
   // Migrate: add cost columns if missing (for existing DBs)
@@ -106,19 +107,23 @@ export function saveMessage(sessionId: string, message: ChatCompletionMessagePar
     : null;
   const toolCallId = "tool_call_id" in message ? (message as any).tool_call_id : null;
 
-  db.prepare(`
-    INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(sessionId, message.role, content, toolCalls, toolCallId);
+  // Insert + count + metadata update must be atomic so concurrent writers
+  // don't leave message_count stale relative to the row count.
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(sessionId, message.role, content, toolCalls, toolCallId);
 
-  // Update session metadata
-  const stats = db.prepare(`
-    SELECT COUNT(*) as count FROM messages WHERE session_id = ?
-  `).get(sessionId) as { count: number };
+    const stats = db.prepare(`
+      SELECT COUNT(*) as count FROM messages WHERE session_id = ?
+    `).get(sessionId) as { count: number };
 
-  db.prepare(`
-    UPDATE sessions SET updated_at = datetime('now'), message_count = ? WHERE id = ?
-  `).run(stats.count, sessionId);
+    db.prepare(`
+      UPDATE sessions SET updated_at = datetime('now'), message_count = ? WHERE id = ?
+    `).run(stats.count, sessionId);
+  });
+  tx();
 }
 
 /**

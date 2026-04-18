@@ -354,8 +354,10 @@ function App() {
   const [streaming, setStreaming] = useState(false);
   const [spinnerMsg, setSpinnerMsg] = useState("");
   const [lastActivityAt, setLastActivityAt] = useState(Date.now());
+  const lastActivityAtRef = useRef(Date.now());
   const [agentStage, setAgentStage] = useState("idle");
   const [lastToolName, setLastToolName] = useState<string | null>(null);
+  const lastToolNameRef = useRef<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState(0);
   const activeRequestIdRef = useRef(0);
   const [agent, setAgent] = useState<CodingAgent | null>(null);
@@ -415,6 +417,11 @@ function App() {
   } | null>(null);
   const askUserResolveRef = useRef<((answer: string) => void) | null>(null);
 
+  // Keep refs in sync so the heartbeat interval below can read current values
+  // without re-arming itself on every token.
+  useEffect(() => { lastActivityAtRef.current = lastActivityAt; }, [lastActivityAt]);
+  useEffect(() => { lastToolNameRef.current = lastToolName; }, [lastToolName]);
+
   useEffect(() => {
     if (!loading || !agent) return;
     const requestIdAtStart = activeRequestId;
@@ -425,15 +432,15 @@ function App() {
     // it's still working so they can decide whether to wait or Ctrl+C.
     const interval = setInterval(() => {
       if (warned) return;
-      const idleMs = Date.now() - lastActivityAt;
+      const idleMs = Date.now() - lastActivityAtRef.current;
       if (idleMs > 120000 && requestIdAtStart === activeRequestIdRef.current) {
         warned = true;
-        const toolSuffix = lastToolName ? ` (${lastToolName})` : "";
+        const toolSuffix = lastToolNameRef.current ? ` (${lastToolNameRef.current})` : "";
         addMsg("info", `still waiting on the model… ${Math.round(idleMs / 1000)}s since last activity${toolSuffix}. Press Ctrl+C twice to cancel.`);
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [loading, agent, lastActivityAt, lastToolName, activeRequestId]);
+  }, [loading, agent, activeRequestId]);
 
   // ── Ollama Management State ──
   const [ollamaDeleteConfirm, setOllamaDeleteConfirm] = useState<{ model: string; size: number } | null>(null);
@@ -1262,7 +1269,7 @@ function App() {
       return;
     }
     if (trimmed === "/cd" || trimmed.startsWith("/cd ")) {
-      const raw = trimmed.replace("/cd", "").trim();
+      const raw = trimmed.slice(3).trim();
       if (!raw) {
         // Open interactive folder picker rooted at current cwd
         const start = process.cwd();

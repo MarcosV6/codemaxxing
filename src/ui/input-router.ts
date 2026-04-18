@@ -1080,7 +1080,7 @@ function handleApprovalPrompts(inputChar: string, _key: Key, ctx: InputRouterCon
     r("yes");
     return true;
   }
-  if (inputChar === "n" || inputChar === "N") {
+  if (inputChar === "n" || inputChar === "N" || _key.escape) {
     const r = ctx.approval.resolve;
     ctx.setApproval(null);
     ctx.addMsg("info", "✗ Denied");
@@ -1089,10 +1089,11 @@ function handleApprovalPrompts(inputChar: string, _key: Key, ctx: InputRouterCon
   }
   if (inputChar === "a" || inputChar === "A") {
     const r = ctx.approval.resolve;
+    const toolName = ctx.approval.tool;
     ctx.setApproval(null);
     ctx.setLoading(true);
     ctx.setSpinnerMsg("Executing...");
-    ctx.addMsg("info", `✔ Always allow ${ctx.approval.tool} for this session`);
+    ctx.addMsg("info", `✔ Always allow ${toolName} for this session`);
     r("always");
     return true;
   }
