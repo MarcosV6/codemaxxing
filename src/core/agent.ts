@@ -15,7 +15,7 @@ import { buildProjectContext, getSystemPrompt, loadProjectRules } from "./contex
 import { isGitRepo, autoCommit } from "../utils/git.js";
 import { buildSkillPrompts, getActiveSkillCount } from "../bridge/skills.js";
 import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loadMessages } from "../utils/sessions.js";
-import { loadMCPConfig, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "../bridge/mcp.js";
+import { loadMCPConfig, loadMCPConfigWithSources, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "../bridge/mcp.js";
 import { refreshAnthropicOAuthToken } from "../utils/anthropic-oauth.js";
 import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
 import { getCredential, saveCredential, exchangeCopilotToken } from "../utils/auth.js";
@@ -31,6 +31,19 @@ function sanitizeSurrogates(text: string): string {
 }
 
 // ── Helper: Build tool result message (with image support) ──
+// Cap at 200KB to protect the context window — a runaway grep or a file-read
+// of an unintentionally-huge file can otherwise blow past the provider's limit
+// and force a hard failure mid-turn.
+const TOOL_RESULT_MAX_BYTES = 200_000;
+
+function truncateToolResult(result: string): string {
+  if (Buffer.byteLength(result, "utf-8") <= TOOL_RESULT_MAX_BYTES) return result;
+  // Keep head and tail — the middle is usually the part you can drop safely.
+  const head = result.slice(0, Math.floor(TOOL_RESULT_MAX_BYTES * 0.75));
+  const tail = result.slice(result.length - Math.floor(TOOL_RESULT_MAX_BYTES * 0.2));
+  return `${head}\n\n[... ${result.length - head.length - tail.length} chars truncated — tool output exceeded ${TOOL_RESULT_MAX_BYTES} bytes. Narrow the query or read in smaller chunks ...]\n\n${tail}`;
+}
+
 function buildToolResultMessage(
   toolCallId: string,
   toolName: string,
@@ -52,7 +65,7 @@ function buildToolResultMessage(
       }
     } catch { /* fall through to plain text */ }
   }
-  return { role: "tool", tool_call_id: toolCallId, content: result };
+  return { role: "tool", tool_call_id: toolCallId, content: truncateToolResult(result) };
 }
 
 // ── Helper: Create Anthropic client with proper auth ──
@@ -204,23 +217,8 @@ export function getModelCost(model: string): { input: number; output: number } {
   return { input: 0, output: 0 };
 }
 
-/**
- * Best-effort repair of malformed tool-call JSON from local models.
- * Strips trailing commas and adds a closing brace ONLY when the trimmed
- * string opens with `{` or `[` and is missing its terminator.
- */
-function repairToolArgs(raw: string): string {
-  const stripped = raw.replace(/,(\s*[}\]])/g, "$1");
-  const trimmed = stripped.trimEnd();
-  if (!trimmed) return trimmed;
-  const opensObj = trimmed.startsWith("{");
-  const opensArr = trimmed.startsWith("[");
-  if (!opensObj && !opensArr) return trimmed;
-  const lastChar = trimmed[trimmed.length - 1];
-  const needsClose = opensObj ? lastChar !== "}" : lastChar !== "]";
-  if (!needsClose) return trimmed;
-  return trimmed + (opensObj ? "}" : "]");
-}
+import { repairToolArgs } from "../utils/repair-tool-args.js";
+export { repairToolArgs };
 
 export interface WorkflowToolTraceEntry {
   name: string;
@@ -348,6 +346,10 @@ export interface AgentOptions {
   onArchitectPlan?: (plan: string) => void;
   onLintResult?: (file: string, errors: string) => void;
   onMCPStatus?: (server: string, status: string) => void;
+  // Prompt for user consent before spawning an MCP server declared in a
+  // project-scoped config (e.g. repo-local `.mcp.json`). Resolving to `true`
+  // approves + caches consent; `false` (or no callback) skips the server.
+  onMCPApproval?: (server: string, cfg: { command: string; args?: string[]; env?: Record<string, string> }) => Promise<boolean>;
   contextCompressionThreshold?: number;
 }
 
@@ -496,7 +498,17 @@ export class CodingAgent {
     // Connect to MCP servers
     const mcpConfig = loadMCPConfig(this.cwd);
     if (Object.keys(mcpConfig.mcpServers).length > 0) {
-      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus);
+      const sourced = loadMCPConfigWithSources(this.cwd);
+      const untrusted = new Set<string>(
+        Object.entries(sourced.servers).filter(([, v]) => !v.trusted).map(([k]) => k),
+      );
+      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus, {
+        cwd: this.cwd,
+        untrusted,
+        approve: this.options.onMCPApproval
+          ? (name, cfg) => this.options.onMCPApproval!(name, { command: cfg.command, args: cfg.args, env: cfg.env })
+          : undefined,
+      });
       if (this.mcpServers.length > 0) {
         const mcpTools = getAllMCPTools(this.mcpServers);
         this.tools = [...FILE_TOOLS, ...mcpTools];
@@ -2438,7 +2450,17 @@ export class CodingAgent {
     await this.disconnectMCP();
     const mcpConfig = loadMCPConfig(this.cwd);
     if (Object.keys(mcpConfig.mcpServers).length > 0) {
-      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus);
+      const sourced = loadMCPConfigWithSources(this.cwd);
+      const untrusted = new Set<string>(
+        Object.entries(sourced.servers).filter(([, v]) => !v.trusted).map(([k]) => k),
+      );
+      this.mcpServers = await connectToServers(mcpConfig, this.options.onMCPStatus, {
+        cwd: this.cwd,
+        untrusted,
+        approve: this.options.onMCPApproval
+          ? (name, cfg) => this.options.onMCPApproval!(name, { command: cfg.command, args: cfg.args, env: cfg.env })
+          : undefined,
+      });
       if (this.mcpServers.length > 0) {
         const mcpTools = getAllMCPTools(this.mcpServers);
         this.tools = [...FILE_TOOLS, ...mcpTools];

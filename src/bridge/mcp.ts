@@ -8,6 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { createHash } from "crypto";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 // ── Types ──
@@ -33,6 +34,7 @@ export interface ConnectedServer {
 
 const GLOBAL_CONFIG_DIR = join(homedir(), ".codemaxxing");
 const GLOBAL_CONFIG_PATH = join(GLOBAL_CONFIG_DIR, "mcp.json");
+const MCP_APPROVALS_PATH = join(GLOBAL_CONFIG_DIR, "mcp-approvals.json");
 
 function getProjectConfigPaths(cwd: string): string[] {
   return [
@@ -40,6 +42,82 @@ function getProjectConfigPaths(cwd: string): string[] {
     join(cwd, ".cursor", "mcp.json"),
     join(cwd, "opencode.json"),
   ];
+}
+
+// ── Approval cache for project-scoped MCP configs ─────────────────────────
+// A `.mcp.json` checked into a repo can point at an arbitrary binary — the
+// first time we see one we make the user confirm. Approvals are keyed by a
+// hash of the server definition, so editing the command invalidates consent.
+
+interface MCPApprovals {
+  version: 1;
+  approvals: Record<string, { cwd: string; serverName: string; hash: string; approvedAt: string }>;
+}
+
+function hashServerConfig(cwd: string, serverName: string, cfg: MCPServerConfig): string {
+  const shape = JSON.stringify({
+    cwd,
+    serverName,
+    command: cfg.command,
+    args: cfg.args ?? [],
+    env: cfg.env ?? {},
+  });
+  return createHash("sha256").update(shape).digest("hex").slice(0, 32);
+}
+
+function loadApprovals(): MCPApprovals {
+  if (!existsSync(MCP_APPROVALS_PATH)) return { version: 1, approvals: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(MCP_APPROVALS_PATH, "utf-8"));
+    if (parsed?.version === 1 && parsed.approvals && typeof parsed.approvals === "object") {
+      return parsed as MCPApprovals;
+    }
+  } catch { /* fall through */ }
+  return { version: 1, approvals: {} };
+}
+
+function saveApprovals(a: MCPApprovals): void {
+  if (!existsSync(GLOBAL_CONFIG_DIR)) mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true });
+  writeFileSync(MCP_APPROVALS_PATH, JSON.stringify(a, null, 2), "utf-8");
+}
+
+export function isServerApproved(cwd: string, serverName: string, cfg: MCPServerConfig): boolean {
+  const hash = hashServerConfig(cwd, serverName, cfg);
+  return !!loadApprovals().approvals[hash];
+}
+
+export function approveServer(cwd: string, serverName: string, cfg: MCPServerConfig): void {
+  const hash = hashServerConfig(cwd, serverName, cfg);
+  const a = loadApprovals();
+  a.approvals[hash] = { cwd, serverName, hash, approvedAt: new Date().toISOString() };
+  saveApprovals(a);
+}
+
+/** Strip the "source" info from loadMCPConfig merge — tells the caller which
+ *  servers came from a project `.mcp.json` (untrusted) vs global config
+ *  (user-installed, trusted). */
+export function loadMCPConfigWithSources(cwd: string): {
+  servers: Record<string, { config: MCPServerConfig; trusted: boolean }>;
+} {
+  const result: Record<string, { config: MCPServerConfig; trusted: boolean }> = {};
+
+  const globalConfig = loadConfigFile(GLOBAL_CONFIG_PATH);
+  if (globalConfig) {
+    for (const [name, cfg] of Object.entries(globalConfig.mcpServers)) {
+      result[name] = { config: cfg, trusted: true };
+    }
+  }
+
+  for (const configPath of getProjectConfigPaths(cwd)) {
+    const cfg = loadConfigFile(configPath);
+    if (cfg) {
+      for (const [name, serverCfg] of Object.entries(cfg.mcpServers)) {
+        result[name] = { config: serverCfg, trusted: false };
+      }
+    }
+  }
+
+  return { servers: result };
 }
 
 // ── Config loading ──
@@ -85,11 +163,40 @@ const connectedServers: ConnectedServer[] = [];
 export async function connectToServers(
   config: MCPConfig,
   onStatus?: (name: string, status: string) => void,
+  opts?: {
+    cwd?: string;
+    // Called for untrusted (project-scoped) servers that haven't been approved
+    // yet. Should return true to approve+cache+connect, false to skip. If
+    // omitted, untrusted servers are skipped with a warning.
+    approve?: (name: string, cfg: MCPServerConfig) => Promise<boolean> | boolean;
+    // Map of which servers came from project configs. If omitted, everything
+    // is treated as trusted (preserves old behaviour for callers that have
+    // already done their own gating).
+    untrusted?: Set<string>;
+  },
 ): Promise<ConnectedServer[]> {
   const entries = Object.entries(config.mcpServers);
   if (entries.length === 0) return [];
 
+  const cwd = opts?.cwd ?? process.cwd();
+  const untrusted = opts?.untrusted ?? new Set<string>();
+
   for (const [name, serverConfig] of entries) {
+    // Gate project-scoped servers on explicit user approval — a malicious
+    // `.mcp.json` checked into a repo could otherwise spawn arbitrary
+    // subprocesses with our env.
+    if (untrusted.has(name) && !isServerApproved(cwd, name, serverConfig)) {
+      let approved = false;
+      if (opts?.approve) {
+        try { approved = await opts.approve(name, serverConfig); } catch { approved = false; }
+      }
+      if (!approved) {
+        onStatus?.(name, `skipped (project config not approved — run "/mcp approve ${name}" to trust)`);
+        continue;
+      }
+      approveServer(cwd, name, serverConfig);
+    }
+
     try {
       onStatus?.(name, "connecting");
 

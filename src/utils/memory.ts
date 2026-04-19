@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { openSecureDatabase } from "./db-security.js";
 
 const CONFIG_DIR = join(homedir(), ".codemaxxing");
 const MEMORY_DB_PATH = join(CONFIG_DIR, "memory.db");
@@ -15,7 +16,7 @@ function getDb(): Database.Database {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
 
-  memDb = new Database(MEMORY_DB_PATH);
+  memDb = openSecureDatabase(MEMORY_DB_PATH, "memory");
   memDb.pragma("journal_mode = WAL");
 
   memDb.exec(`

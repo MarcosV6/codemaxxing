@@ -8,6 +8,8 @@
  * Standard API keys use api.openai.com/v1/responses; Codex OAuth tokens use this.
  */
 
+import { repairToolArgs } from "./repair-tool-args.js";
+
 export interface ResponsesAPIOptions {
   baseUrl: string;
   apiKey: string;
@@ -235,15 +237,29 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
 
       const eventType = event.type;
 
-      // Surface mid-stream errors instead of silently completing with empty content
+      // Hard errors → throw. But `response.incomplete` is a soft signal — the
+      // provider ran out of budget (max_output_tokens, context, rate-limited
+      // mid-stream). We want to keep whatever content/tool calls we managed to
+      // collect, mark it, and let the caller's loop continue rather than
+      // discarding a potentially useful partial response.
       if (
         eventType === "error" ||
         eventType === "response.failed" ||
-        eventType === "response.error" ||
-        eventType === "response.incomplete"
+        eventType === "response.error"
       ) {
         const detail = event.error?.message ?? event.message ?? event.response?.error?.message ?? JSON.stringify(event);
         throw new Error(`Responses API stream error: ${detail}`);
+      }
+      if (eventType === "response.incomplete") {
+        const reason = event.response?.incomplete_details?.reason ?? event.reason ?? "unknown";
+        // Append a visible marker to the content so the orchestrator can see
+        // this wasn't a clean end. Don't throw.
+        contentText += contentText
+          ? `\n\n[response incomplete: ${reason}]`
+          : `[response incomplete: ${reason}]`;
+        // Fall through — stream will end shortly with response.completed or
+        // the connection will close.
+        continue;
       }
 
       // Text content delta
@@ -299,7 +315,10 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
             : partial.argumentsBuffer;
 
           try {
-            const args = JSON.parse(rawArgs || "{}");
+            // Run through repairToolArgs first — Codex has been observed to
+            // truncate the final closing brace when it hits max_output_tokens,
+            // and local-model proxies sometimes strip trailing commas.
+            const args = JSON.parse(repairToolArgs(rawArgs || "{}") || "{}");
             if (!finalizedToolCallIds.has(partial.id)) {
               toolCalls.push({
                 id: partial.id,
@@ -325,7 +344,7 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
           if (key) {
             const partial = ensurePartialToolCall(partialToolCalls, key, item);
             try {
-              const args = JSON.parse(item.arguments);
+              const args = JSON.parse(repairToolArgs(item.arguments) || "{}");
               if (!finalizedToolCallIds.has(partial.id)) {
                 toolCalls.push({
                   id: partial.id,

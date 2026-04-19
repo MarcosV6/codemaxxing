@@ -6,6 +6,7 @@ import { randomUUID } from "crypto";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { CodingAgent, type AgentOptions } from "./core/agent.js";
 import { getSession, listSessions, type SessionInfo } from "./utils/sessions.js";
+import { openSecureDatabase } from "./utils/db-security.js";
 
 const CONFIG_DIR = join(homedir(), ".codemaxxing");
 const AGENTS_DB_PATH = join(CONFIG_DIR, "background-agents.db");
@@ -22,7 +23,7 @@ function getAgentsDb(): Database.Database {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
 
-  agentsDb = new Database(AGENTS_DB_PATH);
+  agentsDb = openSecureDatabase(AGENTS_DB_PATH, "background-agents");
   agentsDb.pragma("journal_mode = WAL");
 
   agentsDb.exec(`

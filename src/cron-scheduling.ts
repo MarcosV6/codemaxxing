@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { randomUUID } from "crypto";
 import nodeCron, { type ScheduledTask } from "node-cron";
 import type { AgentOptions } from "./core/agent.js";
+import { openSecureDatabase } from "./utils/db-security.js";
 import {
   createBackgroundAgent,
   startBackgroundAgent,
@@ -22,7 +23,7 @@ function getCronDb(): Database.Database {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
 
-  cronDb = new Database(CRON_DB_PATH);
+  cronDb = openSecureDatabase(CRON_DB_PATH, "cron");
   cronDb.pragma("journal_mode = WAL");
 
   cronDb.exec(`

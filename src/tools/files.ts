@@ -1,11 +1,20 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, globSync as fsGlobSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, globSync as fsGlobSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join, relative, dirname, resolve, extname } from "path";
 import { loadIgnorePatterns } from "../utils/ignore.js";
 
+function isInsideRoot(resolved: string, root: string): boolean {
+  if (resolved === root) return true;
+  if (resolved.startsWith(root + "/")) return true;
+  if (process.platform === "win32" && resolved.startsWith(root + "\\")) return true;
+  return false;
+}
+
 /**
  * Resolve a user-provided path against cwd and ensure it doesn't escape the project root.
- * Returns the resolved absolute path, or null if the path escapes cwd.
+ * Returns the resolved absolute path, or null if the path escapes cwd — either
+ * through `..` traversal or by pointing at a symlink whose real target lives
+ * outside the root.
  */
 function safePath(cwd: string, userPath: string | undefined | null): string | null {
   if (!userPath || typeof userPath !== "string") return null;
@@ -17,12 +26,26 @@ function safePath(cwd: string, userPath: string | undefined | null): string | nu
         : userPath;
   const resolved = resolve(cwd, expandedPath);
   const root = resolve(cwd);
-  if (!resolved.startsWith(root + "/") && resolved !== root) {
-    // Windows: also check backslash separator
-    if (process.platform === "win32" && resolved.startsWith(root + "\\")) {
-      return resolved;
+  if (!isInsideRoot(resolved, root)) return null;
+
+  // Realpath check: if the target (or any ancestor that exists) is a symlink
+  // pointing outside the root, reject. We walk up until we find an existing
+  // path so this also works for writes that create new files.
+  try {
+    let probe = resolved;
+    while (probe && !existsSync(probe)) {
+      const parent = dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
     }
-    return null;
+    if (existsSync(probe)) {
+      const realProbe = realpathSync(probe);
+      const realRoot = realpathSync(root);
+      if (!isInsideRoot(realProbe, realRoot)) return null;
+    }
+  } catch {
+    // realpath can fail on permission issues or broken symlinks — in those
+    // cases fall back to the lexical check we already did above.
   }
   return resolved;
 }
@@ -1105,6 +1128,31 @@ function listDir(
   return entries;
 }
 
+/**
+ * Detect regex shapes that commonly trigger catastrophic backtracking. This is
+ * a heuristic — it won't catch every hostile pattern, but it stops the
+ * textbook cases (`(a+)+`, `(a|a)*`, `(.*)*`) from hanging the agent.
+ * Returns a human description of the hazard, or null if the pattern looks OK.
+ */
+function detectReDoSHazard(pattern: string): string | null {
+  // Nested quantifier on a group: (...)+ (...)* where the group itself ends
+  // with an unbounded quantifier.
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    return "nested quantifier on a repeated group";
+  }
+  // (a|a)* / (x|x)+ — alternation over simple literals followed by unbounded
+  // quantifier. Captures the classic `(a|a)*` shape.
+  if (/\([^()]*\|[^()]*\)[+*]/.test(pattern)) {
+    return "alternation under an unbounded quantifier";
+  }
+  // .* or .+ followed by another .* / .+ — two unbounded dots race for the
+  // same text.
+  if (/\.[+*].*\.[+*]/.test(pattern)) {
+    return "multiple unbounded dot-quantifiers";
+  }
+  return null;
+}
+
 function searchInFiles(
   dirPath: string,
   pattern: string,
@@ -1117,6 +1165,13 @@ function searchInFiles(
   }
   if (pattern.length > 500) {
     return "Error: search pattern too long (max 500 chars)";
+  }
+  // ReDoS preflight — reject patterns with classic catastrophic-backtracking
+  // shapes (nested quantifiers, alternations over quantified groups) before
+  // we hand them to the engine and block the event loop.
+  const redosHazard = detectReDoSHazard(pattern);
+  if (redosHazard) {
+    return `Error: regex rejected (potential ReDoS): ${redosHazard}. Anchor the pattern or remove nested quantifiers.`;
   }
   let regex: RegExp;
   try {

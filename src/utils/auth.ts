@@ -12,7 +12,7 @@
  * Credentials stored in ~/.codemaxxing/auth.json with 0o600 permissions.
  */
 
-import { readFileSync, writeFileSync, existsSync, chmodSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, chmodSync, mkdirSync, renameSync, unlinkSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
@@ -143,12 +143,42 @@ function saveAuthStore(store: AuthStore): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
-  writeFileSync(AUTH_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
+  // Atomic write: write to tmp with mode 0600, chmod, then rename. If we crash
+  // mid-write the original auth.json stays intact instead of being truncated.
+  const tmp = `${AUTH_FILE}.tmp-${process.pid}-${Date.now()}`;
   try {
-    chmodSync(AUTH_FILE, 0o600);
-  } catch {
-    // Windows doesn't support chmod — ignore
+    writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
+    try { chmodSync(tmp, 0o600); } catch { /* Windows */ }
+    renameSync(tmp, AUTH_FILE);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* best-effort */ }
+    throw err;
   }
+  try { chmodSync(AUTH_FILE, 0o600); } catch { /* Windows */ }
+}
+
+/**
+ * Strip sensitive substrings (API keys, refresh tokens, access tokens) from a
+ * message before showing it to the user or logging it. Used to scrub provider
+ * error responses that often echo the request payload verbatim.
+ */
+export function scrubSecrets(msg: string): string {
+  if (!msg) return msg;
+  let out = msg;
+  try {
+    const store = loadAuthStore();
+    for (const c of store.credentials) {
+      if (c.apiKey && c.apiKey.length >= 8) out = out.split(c.apiKey).join("[REDACTED]");
+      if (c.refreshToken && c.refreshToken.length >= 8) out = out.split(c.refreshToken).join("[REDACTED]");
+    }
+  } catch { /* ignore — scrubbing is best-effort */ }
+  // Also scrub common bearer-token shapes in case the caller has a fresh token
+  // that hasn't been persisted yet.
+  out = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]{16,}/g, "Bearer [REDACTED]");
+  out = out.replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-[REDACTED]");
+  out = out.replace(/ghp_[A-Za-z0-9]{20,}/g, "ghp_[REDACTED]");
+  out = out.replace(/gho_[A-Za-z0-9]{20,}/g, "gho_[REDACTED]");
+  return out;
 }
 
 export function getCredentials(): AuthCredential[] {

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { openSecureDatabase } from "./db-security.js";
 
 const CONFIG_DIR = join(homedir(), ".codemaxxing");
 const DB_PATH = join(CONFIG_DIR, "sessions.db");
@@ -19,7 +20,7 @@ function getDb(): Database.Database {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
 
-  db = new Database(DB_PATH);
+  db = openSecureDatabase(DB_PATH, "sessions");
 
   // Enable WAL mode for better concurrent performance
   db.pragma("journal_mode = WAL");

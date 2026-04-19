@@ -32,7 +32,7 @@ import { loadHistory, addToHistory, resetHistoryCursor } from "./utils/input-his
 import { checkForUpdate } from "./utils/update-check.js";
 import { assessModelReliability, formatModelReliabilityLine } from "./utils/provider-health.js";
 import type { GroupedModels, ModelEntry, ProviderPickerEntry } from "./ui/pickers.js";
-import { getCredential } from "./utils/auth.js";
+import { getCredential, scrubSecrets } from "./utils/auth.js";
 import type { WizardScreen } from "./ui/wizard-types.js";
 import { Banner, ConnectionInfo } from "./ui/banner.js";
 import { StatusBar } from "./ui/status-bar.js";
@@ -134,6 +134,7 @@ const SLASH_COMMANDS = [
   { cmd: "/memory search", desc: "search memories" },
   { cmd: "/memory forget", desc: "delete a memory by ID" },
   { cmd: "/memory stats", desc: "show memory statistics" },
+  { cmd: "/version", desc: "show codemaxxing version" },
   { cmd: "/quit", desc: "exit" },
 ];
 
@@ -549,7 +550,11 @@ function App() {
   }, []);
 
   function addMsg(type: ChatMessage["type"], text: string) {
-    setMessages((prev) => [...prev, { id: nextMsgId(), type, text }]);
+    // Scrub persisted API keys / tokens out of any message before it renders.
+    // Provider error bodies frequently echo the request Authorization header
+    // verbatim, and we'd rather not leak that to the user's scrollback.
+    const safe = type === "error" || type === "info" ? scrubSecrets(text) : text;
+    setMessages((prev) => [...prev, { id: nextMsgId(), type, text: safe }]);
   }
 
   // Compute matching commands for suggestions
@@ -848,6 +853,23 @@ function App() {
         return;
       }
       if (mode === "suggest" || mode === "auto-edit" || mode === "full-auto") {
+        if (mode === "full-auto") {
+          // Full-auto runs arbitrary shell commands the model chooses — in an
+          // untrusted repo this is a foot-gun. Require the user to type the
+          // exact phrase so a fat-finger on autocomplete can't trip it.
+          addMsg("info",
+            "⚠️  Full-auto disables ALL prompts, including shell commands and file writes.\n" +
+            "Only use this in a trusted, sandboxed environment (container, VM, scratch dir).\n" +
+            "To confirm, type exactly:  I understand"
+          );
+          const answer = await new Promise<string>((resolve) => {
+            askUserResolveRef.current = resolve;
+          });
+          if (answer.trim() !== "I understand") {
+            addMsg("info", "Full-auto not enabled (phrase did not match). Approval mode unchanged.");
+            return;
+          }
+        }
         agent.setApprovalMode(mode);
         const labels: Record<string, string> = {
           "suggest": "🔒 Suggest — all dangerous tools require approval",
@@ -1066,68 +1088,38 @@ function App() {
       return;
     }
     if (trimmed === "/help") {
-      addMsg("info", [
-        "Commands:",
-        "  /help      — show this",
-        "  /connect   — retry LLM connection",
-        "  /login     — authentication setup (run codemaxxing login in terminal)",
-        "  /models    — switch model",
-        "  /provider  — manage saved provider profiles",
-        "  /map       — show repository map",
-        "  /sessions  — list past sessions",
-        "  /session delete — delete a session",
-        "  /resume    — resume a past session",
-        "  /reset     — clear conversation",
-        "  /cd <path> — change workspace directory",
-        "  /compact   — compress conversation context",
-        "  /cost      — show token usage and estimated cost",
-        "  /read-only <file> — add file as read-only context",
-        "  /checkpoint [label] — save current state",
-        "  /checkpoints — list saved checkpoints",
-        "  /restore <id> — restore to a checkpoint",
-        "  /diff      — show git changes",
-        "  /undo      — revert last codemaxxing commit",
-        "  /commit    — commit all changes",
-        "  /push      — push to remote",
-        "  /git on       — enable auto-commits",
-        "  /git off      — disable auto-commits",
-        "  /test      — run project tests",
-        "  /test on   — enable auto-test after file changes",
-        "  /test off  — disable auto-test",
-        "  /agent        — background agent management (list, start, pause, delete)",
-        "  /schedule     — cron job scheduling (add, list, remove)",
-        "  /orchestrate  — multi-agent collaboration orchestration",
-        "  /skills       — manage skill packs",
-        "  /architect — toggle architect mode (plan then execute)",
-        "  /think     — set reasoning effort (off/low/medium/high/max)",
-        "              — or inline: 'think', 'think hard', 'ultrathink'",
-        "  /lint      — show auto-lint status & detected linter",
-        "  /lint on   — enable auto-lint",
-        "  /lint off  — disable auto-lint",
-        "  /mcp       — show MCP servers & status",
-        "  /mcp tools — list all MCP tools",
-        "  /mcp add   — add MCP server to global config",
-        "  /mcp remove — remove MCP server",
-        "  /mcp reconnect — reconnect all MCP servers",
-        "  /ollama    — Ollama status, models & GPU usage",
-        "  /ollama list — list installed models with sizes",
-        "  /ollama start — start Ollama server",
-        "  /ollama stop — stop Ollama server (frees GPU RAM)",
-        "  /ollama pull <model> — download a model",
-        "  /ollama delete <model> — delete a model from disk",
-        "  /init      — create CODEMAXXING.md project rules template",
-        "  /export [path] — export conversation to markdown file",
-        "  /approve [mode] — set approval mode (suggest/auto-edit/full-auto)",
-        "  /image <path> [question] — send image for analysis",
-        "  /doctor    — run diagnostics",
-        "  /copy      — copy last response to clipboard",
-        "  /hooks     — show configured lifecycle hooks",
-        "  /memory    — view persistent memories",
-        "  /memory search <query> — search memories",
-        "  /memory forget <id> — delete a memory",
-        "  /memory stats — memory statistics",
-        "  /quit      — exit",
-      ].join("\n"));
+      // Rendered from SLASH_COMMANDS so adding a command in one place keeps
+      // /help and autocomplete in sync. Longest command name determines
+      // column width.
+      const longest = SLASH_COMMANDS.reduce((n, c) => Math.max(n, c.cmd.length), 0);
+      const lines = ["Commands:"];
+      for (const c of SLASH_COMMANDS) {
+        lines.push(`  ${c.cmd.padEnd(longest + 2)}— ${c.desc}`);
+      }
+      addMsg("info", lines.join("\n"));
+      return;
+    }
+    if (trimmed === "/version") {
+      try {
+        const pkg = await import("../package.json", { with: { type: "json" } } as any).catch(async () => {
+          const fs = await import("fs");
+          const url = await import("url");
+          const path = await import("path");
+          const here = path.dirname(url.fileURLToPath(import.meta.url));
+          const candidates = [
+            path.join(here, "..", "package.json"),
+            path.join(here, "..", "..", "package.json"),
+          ];
+          for (const p of candidates) {
+            try { return { default: JSON.parse(fs.readFileSync(p, "utf-8")) }; } catch { /* try next */ }
+          }
+          return { default: { version: "unknown" } };
+        });
+        const version = (pkg as any).default?.version ?? (pkg as any).version ?? "unknown";
+        addMsg("info", `codemaxxing v${version}`);
+      } catch (err: any) {
+        addMsg("info", `codemaxxing (version lookup failed: ${err.message})`);
+      }
       return;
     }
     const config = loadConfig();
@@ -1986,6 +1978,21 @@ function App() {
       )}
     </Box>
   );
+}
+
+// The interactive Ink UI requires a real TTY (cursor control, raw input). If
+// someone pipes output (`codemaxxing | grep`) or runs under a non-TTY CI
+// runner, Ink silently renders nothing and the user thinks we hung. Bail with
+// a hint pointing at the non-interactive `exec` subcommand instead.
+if (!process.stdout.isTTY || !process.stdin.isTTY) {
+  const why = !process.stdout.isTTY ? "stdout is not a TTY (is output being piped?)" : "stdin is not a TTY";
+  process.stderr.write(
+    `codemaxxing: interactive mode requires a terminal (${why}).\n` +
+    `For non-interactive use, run:\n` +
+    `  codemaxxing exec "<your prompt>"\n` +
+    `See \`codemaxxing exec --help\` for options.\n`
+  );
+  process.exit(1);
 }
 
 // Clear the terminal once on startup before Ink takes over.
