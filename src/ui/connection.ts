@@ -4,7 +4,8 @@ import { isOllamaRunning } from "../utils/ollama.js";
 import { isGitRepo, getBranch, getStatus } from "../utils/git.js";
 import { getCredential } from "../utils/auth.js";
 import { assessModelReliability, formatModelReliabilityLine } from "../utils/provider-health.js";
-import type { ConnectionContext } from "./connection-types.js";
+import { shouldSuppressAssistantToolTurnText } from "../utils/tool-preambles.js";
+import type { ChatMessage, ConnectionContext } from "./connection-types.js";
 
 const OPENING_STREAM_MESSAGES = [
   "Locking onto the stream...",
@@ -21,9 +22,10 @@ const OPENING_STREAM_MESSAGES = [
 
 function describeActiveConnection(baseUrl: string, model: string): string {
   const url = baseUrl.toLowerCase();
-  if (url.includes("localhost:1234")) return `${model} via LM Studio`;
-  if (url.includes("localhost:11434")) return `${model} via Ollama`;
-  if (url.includes("localhost:8000")) return `${model} via vLLM`;
+  if (url.includes("localhost:1234") || url.includes("127.0.0.1:1234")) return `${model} via LM Studio`;
+  if (url.includes("localhost:11434") || url.includes("127.0.0.1:11434")) return `${model} via Ollama`;
+  if (url.includes("localhost:8080") || url.includes("127.0.0.1:8080")) return `${model} via LocalAI`;
+  if (/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(url)) return `${model} via vLLM (local)`;
   if (url.includes("chatgpt.com")) return `${model} via OpenAI OAuth`;
   if (url.includes("api.openai.com")) return `${model} via OpenAI API`;
   if (url.includes("api.anthropic.com")) return `${model} via Anthropic`;
@@ -40,9 +42,10 @@ async function buildAvailabilityLines(activeBaseUrl: string, activeModel: string
   const detected = await detectLocalProvider();
   if (detected) {
     const baseUrl = detected.baseUrl.toLowerCase();
-    if (baseUrl.includes("localhost:1234")) localReady.push("LM Studio");
-    else if (baseUrl.includes("localhost:11434")) localReady.push("Ollama");
-    else if (baseUrl.includes("localhost:8000")) localReady.push("vLLM");
+    if (baseUrl.includes("localhost:1234") || baseUrl.includes("127.0.0.1:1234")) localReady.push("LM Studio");
+    else if (baseUrl.includes("localhost:11434") || baseUrl.includes("127.0.0.1:11434")) localReady.push("Ollama");
+    else if (baseUrl.includes("localhost:8080") || baseUrl.includes("127.0.0.1:8080")) localReady.push("LocalAI");
+    else if (/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(baseUrl)) localReady.push(`vLLM (${baseUrl.replace(/^https?:\/\//, "").replace(/\/v1$/, "")})`);
     else localReady.push("Local LLM");
   } else if (await isOllamaRunning()) {
     localReady.push("Ollama (no model loaded)");
@@ -60,6 +63,33 @@ async function buildAvailabilityLines(activeBaseUrl: string, activeModel: string
     `Local Ready: ${localReady.length > 0 ? localReady.join(", ") : "none"}`,
     `Cloud Ready: ${cloudReady.length > 0 ? cloudReady.join(", ") : "none"}`,
   ];
+}
+
+function finalizeLastResponse(messages: ChatMessage[]): ChatMessage[] {
+  if (messages.length === 0) return messages;
+  const lastIdx = messages.length - 1;
+  const last = messages[lastIdx];
+  if (last.type !== "response" || !last.streaming) return messages;
+  return [...messages.slice(0, lastIdx), { ...last, streaming: false }];
+}
+
+function pruneLowSignalToolPreamble(messages: ChatMessage[]): ChatMessage[] {
+  if (messages.length === 0) return messages;
+  const lastIdx = messages.length - 1;
+  const last = messages[lastIdx];
+  if (last.type !== "response") return messages;
+
+  const recentTexts = messages
+    .slice(0, lastIdx)
+    .filter((msg) => msg.type === "response")
+    .slice(-4)
+    .map((msg) => msg.text);
+
+  if (!shouldSuppressAssistantToolTurnText(last.text, recentTexts)) {
+    return finalizeLastResponse(messages);
+  }
+
+  return messages.slice(0, lastIdx);
 }
 
 /**
@@ -208,7 +238,7 @@ export async function connectToProvider(
         const lastIdx = prev.length - 1;
         const last = prev[lastIdx];
 
-        if (last && last.type === "response" && (last as any)._streaming) {
+        if (last && last.type === "response" && last.streaming) {
           return [
             ...prev.slice(0, lastIdx),
             { ...last, text: last.text + token },
@@ -216,7 +246,7 @@ export async function connectToProvider(
         }
 
         // First token of a new response
-        return [...prev, { id: ctx.nextMsgId(), type: "response" as const, text: token, _streaming: true } as any];
+        return [...prev, { id: ctx.nextMsgId(), type: "response" as const, text: token, streaming: true }];
       });
     },
     onToolCall: (name, args) => {
@@ -274,9 +304,11 @@ export async function connectToProvider(
         ctx.setAgentStage(stage);
       }
       if (stage === "processing tool calls") {
+        ctx.setMessages((prev) => pruneLowSignalToolPreamble(prev));
         ctx.setSpinnerMsg("Processing tool calls...");
       }
       if (stage === "response completed") {
+        ctx.setMessages((prev) => finalizeLastResponse(prev));
         ctx.setAgentStage("idle");
         ctx.setLastToolName(null);
       }

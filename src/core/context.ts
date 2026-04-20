@@ -139,6 +139,11 @@ Tasks are only progress indicators, not proof that work is complete.
 - Use write_file only when creating a new file or when the changes affect most of the file.
 - When in doubt about scope, prefer edit_file — it is safer and easier to review.
 
+## Tool-Calling Behavior
+- Do not narrate before every tool call. If the next action is obvious, call the tool directly.
+- Do not repeat the same status update across tool turns.
+- Only give a pre-tool note when it adds new information, and keep it to one short sentence.
+
 ## Repository Map
 The project context below includes a map of the codebase structure. Use this map to understand what files, functions, classes, and types exist where. Use read_file to see full implementations when needed.
 

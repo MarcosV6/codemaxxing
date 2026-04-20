@@ -624,20 +624,29 @@ export async function executeTool(
         const replaceAll = Boolean(args.replaceAll);
         const content = readFileSync(filePath, "utf-8");
         if (!oldText) return "Error: oldText cannot be empty.";
+        if (oldText === newText) return "Error: oldText and newText are identical — nothing to do.";
         if (!content.includes(oldText)) {
           return `Error: Could not find exact text in ${rawPath}`;
         }
 
         const matchCount = content.split(oldText).length - 1;
+        if (!replaceAll && matchCount > 1) {
+          return `Error: oldText matches ${matchCount} locations in ${rawPath}. Either include more surrounding context so the match is unique, or pass replaceAll=true to update every occurrence.`;
+        }
+
+        // Avoid String.prototype.replace() here: replacement strings interpret
+        // `$&`, `$1`, `$$`, etc., which corrupts literal shell vars / regex text.
+        const parts = content.split(oldText);
         const nextContent = replaceAll
-          ? content.split(oldText).join(newText)
-          : content.replace(oldText, newText);
+          ? parts.join(newText)
+          : parts[0] + newText + parts.slice(1).join(oldText);
 
         writeFileSync(filePath, nextContent, "utf-8");
         const diffStr = generateDiff(content, nextContent, rawPath);
         const addedLines = newText.split("\n").length;
         const removedLines = oldText.split("\n").length;
-        const summary = `✅ Edited ${rawPath} (${replaceAll ? matchCount : 1} replacement${replaceAll ? (matchCount === 1 ? "" : "s") : ""})`;
+        const replacements = replaceAll ? matchCount : 1;
+        const summary = `✅ Edited ${rawPath} (${replacements} replacement${replacements === 1 ? "" : "s"})`;
         return `${summary}\n<<<DIFF>>>${rawPath}\n+${addedLines} -${removedLines}\n${diffStr}<<<END_DIFF>>>`;
       } catch (e: any) {
         return `Error editing file: ${e instanceof Error ? e.message : String(e)}`;

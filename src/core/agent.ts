@@ -21,6 +21,7 @@ import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
 import { getCredential, saveCredential, exchangeCopilotToken } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
 import { detectModelContextWindow, getStaticContextWindow } from "../utils/model-context.js";
+import { shouldSuppressAssistantToolTurnText } from "../utils/tool-preambles.js";
 import { isAutoLearnSkillsEnabled, loadConfig, type ProviderConfig } from "../config.js";
 
 // ── Helper: Sanitize unpaired Unicode surrogates (copied from Pi/OpenClaw) ──
@@ -765,6 +766,34 @@ export class CodingAgent {
     return true;
   }
 
+  private getRecentAssistantToolTurnTexts(limit: number = 6): string[] {
+    const recent: string[] = [];
+
+    for (let i = this.messages.length - 1; i >= 0 && recent.length < limit; i--) {
+      const msg = this.messages[i] as any;
+      if (
+        msg.role === "assistant" &&
+        Array.isArray(msg.tool_calls) &&
+        typeof msg.content === "string" &&
+        msg.content.trim()
+      ) {
+        recent.push(msg.content);
+      }
+    }
+
+    return recent;
+  }
+
+  private getAssistantContentForHistory(contentText: string, hasToolCalls: boolean): string | null {
+    const trimmed = contentText.trim();
+    if (!trimmed) return null;
+    if (!hasToolCalls) return trimmed;
+
+    return shouldSuppressAssistantToolTurnText(trimmed, this.getRecentAssistantToolTurnTexts())
+      ? null
+      : trimmed;
+  }
+
   private finalizeTurnText(contentText: string, iterations: number): string {
     let finalText = contentText;
 
@@ -928,7 +957,10 @@ export class CodingAgent {
       }
 
       // Build the assistant message for history
-      const assistantMessage: any = { role: "assistant", content: contentText || null };
+      const assistantMessage: any = {
+        role: "assistant",
+        content: this.getAssistantContentForHistory(contentText, toolCalls.size > 0),
+      };
       if (toolCalls.size > 0) {
         assistantMessage.tool_calls = Array.from(toolCalls.values()).map((tc) => ({
           id: tc.id,
@@ -1075,7 +1107,10 @@ export class CodingAgent {
                   const oldText = String(args.oldText);
                   const newText = String(args.newText);
                   const replaceAll = Boolean(args.replaceAll);
-                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                  // Avoid String.prototype.replace(): `$&`, `$1`, `$$`, etc.
+                  // are special in replacement strings and corrupt literal edits.
+                  const parts = existing.split(oldText);
+                  const next = replaceAll ? parts.join(newText) : parts[0] + newText + parts.slice(1).join(oldText);
                   diff = generateDiff(existing, next, String(args.path));
                 }
               }
@@ -1420,7 +1455,10 @@ export class CodingAgent {
       }
 
       // Build OpenAI-format assistant message for session storage
-      const assistantMessage: any = { role: "assistant", content: contentText || null };
+      const assistantMessage: any = {
+        role: "assistant",
+        content: this.getAssistantContentForHistory(contentText, toolCalls.length > 0),
+      };
       if (toolCalls.length > 0) {
         assistantMessage.tool_calls = toolCalls.map((tc) => ({
           id: tc.id,
@@ -1494,7 +1532,10 @@ export class CodingAgent {
                   const oldText = String(args.oldText);
                   const newText = String(args.newText);
                   const replaceAll = Boolean(args.replaceAll);
-                  const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                  // Avoid String.prototype.replace(): `$&`, `$1`, `$$`, etc.
+                  // are special in replacement strings and corrupt literal edits.
+                  const parts = existing.split(oldText);
+                  const next = replaceAll ? parts.join(newText) : parts[0] + newText + parts.slice(1).join(oldText);
                   diff = generateDiff(existing, next, String(args.path));
                 }
               }
@@ -1624,7 +1665,10 @@ export class CodingAgent {
         updateSessionCost(this.sessionId, this.totalPromptTokens, this.totalCompletionTokens, this.totalCost);
 
         // Build and save assistant message
-        const assistantMessage: ChatCompletionMessageParam = { role: "assistant", content: contentText || null };
+        const assistantMessage: ChatCompletionMessageParam = {
+          role: "assistant",
+          content: this.getAssistantContentForHistory(contentText, toolCalls.length > 0),
+        };
         if (toolCalls.length > 0) {
           (assistantMessage as any).tool_calls = toolCalls.map((tc) => ({
             id: tc.id,
@@ -1703,7 +1747,10 @@ export class CodingAgent {
                     const oldText = String(args.oldText);
                     const newText = String(args.newText);
                     const replaceAll = Boolean(args.replaceAll);
-                    const next = replaceAll ? existing.split(oldText).join(newText) : existing.replace(oldText, newText);
+                    // Avoid String.prototype.replace(): `$&`, `$1`, `$$`, etc.
+                    // are special in replacement strings and corrupt literal edits.
+                    const parts = existing.split(oldText);
+                    const next = replaceAll ? parts.join(newText) : parts[0] + newText + parts.slice(1).join(oldText);
                     diff = generateDiff(existing, next, String(args.path));
                   }
                 }

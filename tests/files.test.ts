@@ -31,13 +31,30 @@ describe("edit_file", () => {
     expect(result).toContain("2 replacement");
   });
 
-  it("replaces only first occurrence by default", async () => {
+  it("rejects ambiguous matches so callers must disambiguate", async () => {
     writeFileSync(join(TMP, "test.ts"), "const x = 1;\nconst x = 1;\n");
-    await executeTool("edit_file", { path: "test.ts", oldText: "const x = 1;", newText: "const x = 2;" }, TMP);
+    const result = await executeTool(
+      "edit_file",
+      { path: "test.ts", oldText: "const x = 1;", newText: "const x = 2;" },
+      TMP,
+    );
+    expect(result).toMatch(/Error.*matches 2 locations/i);
     const { readFileSync } = await import("fs");
     const content = readFileSync(join(TMP, "test.ts"), "utf-8");
-    const matches = (content.match(/const x = 2;/g) || []).length;
-    expect(matches).toBe(1);
+    expect(content).toBe("const x = 1;\nconst x = 1;\n");
+  });
+
+  it("handles newText containing $ metacharacters safely", async () => {
+    writeFileSync(join(TMP, "test.ts"), "const path = PLACEHOLDER;\n");
+    const result = await executeTool(
+      "edit_file",
+      { path: "test.ts", oldText: "PLACEHOLDER", newText: "process.env.$PATH ?? '$1'" },
+      TMP,
+    );
+    expect(result).toContain("✅");
+    const { readFileSync } = await import("fs");
+    const content = readFileSync(join(TMP, "test.ts"), "utf-8");
+    expect(content).toBe("const path = process.env.$PATH ?? '$1';\n");
   });
 });
 

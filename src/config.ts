@@ -258,12 +258,65 @@ export type DetectionResult =
   | { status: "no-models"; serverName: string; baseUrl: string }
   | { status: "no-server" };
 
-export async function detectLocalProviderDetailed(): Promise<DetectionResult> {
-  const endpoints = [
+function isLikelyLocalUrl(rawUrl: string): boolean {
+  try {
+    const { hostname } = new URL(rawUrl);
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0") return true;
+    if (hostname.endsWith(".local")) return true;
+    if (/^10\./.test(hostname)) return true;
+    if (/^192\.168\./.test(hostname)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Local endpoints to probe, in priority order.
+ *
+ * vLLM doesn't have a fixed port, so we probe the common defaults and also
+ * honor env overrides for custom OpenAI-compatible local servers.
+ */
+export function getLocalEndpoints(): Array<{ name: string; url: string }> {
+  const endpoints: Array<{ name: string; url: string }> = [];
+
+  const envUrl =
+    process.env.CODEMAXXING_LOCAL_URL ||
+    process.env.VLLM_URL;
+  if (envUrl) {
+    endpoints.push({ name: "Local (env)", url: envUrl.replace(/\/$/, "") });
+  }
+  if (process.env.OPENAI_BASE_URL && isLikelyLocalUrl(process.env.OPENAI_BASE_URL)) {
+    endpoints.push({ name: "Local (env)", url: process.env.OPENAI_BASE_URL.replace(/\/$/, "") });
+  }
+
+  if (process.env.VLLM_HOST || process.env.VLLM_PORT) {
+    const host = process.env.VLLM_HOST || "localhost";
+    const port = process.env.VLLM_PORT || "8000";
+    endpoints.push({ name: "vLLM", url: `http://${host}:${port}/v1` });
+  }
+
+  endpoints.push(
     { name: "LM Studio", url: "http://localhost:1234/v1" },
     { name: "Ollama", url: "http://localhost:11434/v1" },
     { name: "vLLM", url: "http://localhost:8000/v1" },
-  ];
+    { name: "vLLM", url: "http://localhost:8001/v1" },
+    { name: "vLLM", url: "http://localhost:8002/v1" },
+    { name: "LocalAI", url: "http://localhost:8080/v1" },
+    { name: "vLLM", url: "http://localhost:5000/v1" },
+  );
+
+  const seen = new Set<string>();
+  return endpoints.filter((endpoint) => {
+    if (seen.has(endpoint.url)) return false;
+    seen.add(endpoint.url);
+    return true;
+  });
+}
+
+export async function detectLocalProviderDetailed(): Promise<DetectionResult> {
+  const endpoints = getLocalEndpoints();
 
   let serverFound: { name: string; url: string } | null = null;
 
@@ -305,11 +358,7 @@ export async function detectLocalProviderDetailed(): Promise<DetectionResult> {
 }
 
 export async function detectLocalProvider(): Promise<ProviderConfig | null> {
-  const endpoints = [
-    { name: "LM Studio", url: "http://localhost:1234/v1" },
-    { name: "Ollama", url: "http://localhost:11434/v1" },
-    { name: "vLLM", url: "http://localhost:8000/v1" },
-  ];
+  const endpoints = getLocalEndpoints();
 
   for (const endpoint of endpoints) {
     try {

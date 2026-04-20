@@ -11,7 +11,7 @@ import {
 } from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
 import type { CodingAgent } from "./core/agent.js";
-import { loadConfig, saveConfig, listModels, getCopilotHeaders } from "./config.js";
+import { loadConfig, saveConfig, listModels, getCopilotHeaders, getLocalEndpoints } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
@@ -320,6 +320,173 @@ function getToolIcon(toolText: string): string {
   return "\u2699\uFE0F";
 }
 
+interface ChatMessageRowProps {
+  msg: ChatMessage;
+  prevType: ChatMessage["type"] | null;
+  modelName: string;
+  colors: Theme["colors"];
+  termWidth: number;
+}
+
+const ChatMessageRow = React.memo(function ChatMessageRow({
+  msg,
+  prevType,
+  modelName,
+  colors,
+  termWidth,
+}: ChatMessageRowProps) {
+  const needsSep = msg.type === "user" && prevType !== null && prevType !== "user";
+
+  switch (msg.type) {
+    case "user":
+      return (
+        <Box flexDirection="column" marginTop={needsSep ? 1 : 0}>
+          {needsSep && <Text color={colors.muted}>{"  "}{"\u2500".repeat(Math.max(0, Math.min(termWidth - 6, 50)))}</Text>}
+          <Box marginTop={0}>
+            <Text color={colors.userInput} bold>{"  \u276f "}</Text>
+            <Box flexDirection="column" flexShrink={1}>
+              {msg.text.split("\n").map((line, i) => (
+                <Text key={i} color={colors.userInput} wrap="wrap">{line}</Text>
+              ))}
+            </Box>
+          </Box>
+        </Box>
+      );
+    case "response":
+      return (
+        <Box flexDirection="column" marginLeft={2} marginBottom={1} marginTop={0}>
+          <Box>
+            <Text color={colors.response} bold>{"\u25cf "}</Text>
+            <Text color={colors.muted} dimColor>{modelName || "assistant"}</Text>
+          </Box>
+          <Box marginLeft={2}>
+            <MarkdownText text={msg.text} colors={colors} />
+          </Box>
+        </Box>
+      );
+    case "tool": {
+      const toolIcon = getToolIcon(msg.text);
+      return (
+        <Box marginLeft={2}>
+          <Text color={colors.tool}>{`  ${toolIcon} `}</Text>
+          <Text bold color={colors.tool}>{msg.text}</Text>
+        </Box>
+      );
+    }
+    case "tool-result": {
+      const maxLen = 200;
+      const display = msg.text.length > maxLen ? msg.text.slice(0, maxLen) + "\u2026" : msg.text;
+      return (
+        <Box marginLeft={2}>
+          <Text color={colors.toolResult}>{"    \u2514\u2500 "}{display}</Text>
+        </Box>
+      );
+    }
+    case "diff": {
+      const diffLines = msg.text.split("\n");
+      const filePath = diffLines[0] || "";
+      const stats = diffLines[1] || "";
+      const addCount = stats.match(/\+(\d+)/)?.[1] || "0";
+      const removeCount = stats.match(/-(\d+)/)?.[1] || "0";
+      const codeLines = diffLines.slice(2).filter((line) => !line.startsWith("---") && !line.startsWith("+++"));
+      const maxLines = 30;
+      const isNew = removeCount === "0";
+      return (
+        <Box flexDirection="column" marginLeft={4}>
+          <Box>
+            <Text color={colors.primary} bold>{isNew ? "+" : "\u2666"} {isNew ? "Write" : "Update"}({filePath})</Text>
+            <Text color={colors.muted}>{" "}</Text>
+            <Text color="#4ADE80" bold>+{addCount}</Text>
+            <Text color={colors.muted}>{" "}</Text>
+            <Text color="#F87171" bold>-{removeCount}</Text>
+          </Box>
+          {codeLines.slice(0, maxLines).map((line, i) => {
+            if (line.startsWith("@@")) {
+              return (
+                <Box key={i}>
+                  <Text color={colors.muted}>{" \u2500\u2500 "}{line}</Text>
+                </Box>
+              );
+            }
+            const isAdd = line.startsWith("+");
+            const isRemove = line.startsWith("-");
+            const lineContent = (isAdd || isRemove) ? line.slice(1) : line.startsWith(" ") ? line.slice(1) : line;
+            const lineColor = isAdd ? "#4ADE80" : isRemove ? "#F87171" : colors.muted;
+            const marker = isAdd ? "+" : isRemove ? "-" : " ";
+            return (
+              <Box key={i}>
+                <Text color={lineColor}>{" "}{marker} {lineContent}</Text>
+              </Box>
+            );
+          })}
+          {codeLines.length > maxLines && (
+            <Box>
+              <Text color={colors.muted}>{"   ... "}{codeLines.length - maxLines} more lines</Text>
+            </Box>
+          )}
+        </Box>
+      );
+    }
+    case "error":
+      return (
+        <Box marginLeft={2}>
+          <Text color={colors.error} bold>{"  \u2718 "}</Text>
+          <Text color={colors.error}>{msg.text}</Text>
+        </Box>
+      );
+    case "info":
+      return (
+        <Box marginLeft={2}>
+          <Text color={colors.muted}>{"  \u25cb "}{msg.text}</Text>
+        </Box>
+      );
+    default:
+      return <Text>{msg.text}</Text>;
+  }
+}, (prev, next) =>
+  prev.msg === next.msg &&
+  prev.prevType === next.prevType &&
+  prev.modelName === next.modelName &&
+  prev.colors === next.colors &&
+  prev.termWidth === next.termWidth,
+);
+
+interface ChatTranscriptProps {
+  messages: ChatMessage[];
+  modelName: string;
+  colors: Theme["colors"];
+  termWidth: number;
+}
+
+// Keep the scrollback out of keystroke-driven rerenders. Long sessions get
+// expensive fast once Markdown output starts stacking up.
+const ChatTranscript = React.memo(function ChatTranscript({
+  messages,
+  modelName,
+  colors,
+  termWidth,
+}: ChatTranscriptProps) {
+  return (
+    <>
+      {messages.map((msg, idx) => (
+        <ChatMessageRow
+          key={msg.id}
+          msg={msg}
+          prevType={idx > 0 ? messages[idx - 1]?.type ?? null : null}
+          modelName={modelName}
+          colors={colors}
+          termWidth={termWidth}
+        />
+      ))}
+    </>
+  );
+}, (prev, next) =>
+  prev.messages === next.messages &&
+  prev.modelName === next.modelName &&
+  prev.colors === next.colors &&
+  prev.termWidth === next.termWidth,
+);
+
 let msgId = 0;
 function nextMsgId(): number { return msgId++; }
 
@@ -582,22 +749,17 @@ function App() {
     const providerEntries: ProviderPickerEntry[] = [];
 
     let localFound = false;
-    const localEndpoints = [
-      { name: "LM Studio", port: 1234 },
-      { name: "Ollama", port: 11434 },
-      { name: "vLLM", port: 8000 },
-      { name: "LocalAI", port: 8080 },
-    ];
+    let localLabel = "Local LLM";
 
-    for (const endpoint of localEndpoints) {
+    for (const endpoint of getLocalEndpoints()) {
       if (localFound) break;
       try {
-        const url = `http://localhost:${endpoint.port}/v1`;
-        const models = await listModels(url, "local");
+        const models = await listModels(endpoint.url, "local");
         if (models.length > 0) {
-          groups["Local LLM"] = models.map(m => ({
+          localLabel = endpoint.name === "Local (env)" ? `Local LLM (${endpoint.url})` : endpoint.name;
+          groups[localLabel] = models.map(m => ({
             name: m,
-            baseUrl: url,
+            baseUrl: endpoint.url,
             apiKey: "local",
             providerType: "openai" as const,
           }));
@@ -610,7 +772,8 @@ function App() {
       try {
         const ollamaModels = await listInstalledModelsDetailed();
         if (ollamaModels.length > 0) {
-          groups["Local LLM"] = ollamaModels.map(m => ({
+          localLabel = "Ollama";
+          groups[localLabel] = ollamaModels.map(m => ({
             name: m.name,
             baseUrl: "http://localhost:11434/v1",
             apiKey: "ollama",
@@ -622,7 +785,7 @@ function App() {
     }
 
     if (localFound) {
-      providerEntries.push({ name: "Local LLM", description: "No auth needed — auto-detected", authed: true });
+      providerEntries.push({ name: localLabel, description: "No auth needed — auto-detected", authed: true });
     }
 
     const anthropicCred = getCredential("anthropic");
@@ -1664,7 +1827,7 @@ function App() {
   return (
     <Box flexDirection="column">
       {/* ═══ BANNER BOX ═══ */}
-      <Banner version={VERSION} colors={theme.colors} />
+      <Banner version={VERSION} colors={theme.colors} width={termWidth} />
 
       {/* ═══ CONNECTION INFO BOX ═══ */}
       {connectionInfo.length > 0 && (
@@ -1672,121 +1835,12 @@ function App() {
       )}
 
       {/* ═══ CHAT MESSAGES ═══ */}
-      {messages.map((msg, idx) => {
-        // Insert separator before user messages (except the very first one)
-        const prevMsg = idx > 0 ? messages[idx - 1] : null;
-        const needsSep = msg.type === "user" && prevMsg && prevMsg.type !== "user";
-
-        switch (msg.type) {
-          case "user":
-            return (
-              <Box key={msg.id} flexDirection="column" marginTop={needsSep ? 1 : 0}>
-                {needsSep && <Text color={theme.colors.muted}>{"  "}{"\u2500".repeat(Math.max(0, Math.min(termWidth - 6, 50)))}</Text>}
-                <Box marginTop={0}>
-                  <Text color={theme.colors.userInput} bold>{"  \u276f "}</Text>
-                  <Box flexDirection="column" flexShrink={1}>
-                    {msg.text.split("\n").map((line, i) => (
-                      <Text key={i} color={theme.colors.userInput} wrap="wrap">{line}</Text>
-                    ))}
-                  </Box>
-                </Box>
-              </Box>
-            );
-          case "response":
-            return (
-              <Box key={msg.id} flexDirection="column" marginLeft={2} marginBottom={1} marginTop={0}>
-                <Box>
-                  <Text color={theme.colors.response} bold>{"\u25cf "}</Text>
-                  <Text color={theme.colors.muted} dimColor>{modelName || "assistant"}</Text>
-                </Box>
-                <Box marginLeft={2}>
-                  <MarkdownText text={msg.text} colors={theme.colors} />
-                </Box>
-              </Box>
-            );
-          case "tool": {
-            const toolIcon = getToolIcon(msg.text);
-            return (
-              <Box key={msg.id} marginLeft={2}>
-                <Text color={theme.colors.tool}>{`  ${toolIcon} `}</Text>
-                <Text bold color={theme.colors.tool}>{msg.text}</Text>
-              </Box>
-            );
-          }
-          case "tool-result": {
-            // Truncate very long tool results
-            const maxLen = 200;
-            const display = msg.text.length > maxLen ? msg.text.slice(0, maxLen) + "\u2026" : msg.text;
-            return (
-              <Box key={msg.id} marginLeft={2}>
-                <Text color={theme.colors.toolResult}>{"    \u2514\u2500 "}{display}</Text>
-              </Box>
-            );
-          }
-          case "diff": {
-            // Parse diff content: first line is file path, second is +N -N stats, rest is unified diff
-            const diffLines = msg.text.split("\n");
-            const filePath = diffLines[0] || "";
-            const stats = diffLines[1] || "";
-            const addCount = stats.match(/\+(\d+)/)?.[1] || "0";
-            const removeCount = stats.match(/-(\d+)/)?.[1] || "0";
-            // Skip the --- a/ and +++ b/ header lines from unified diff
-            const codeLines = diffLines.slice(2).filter(l => !l.startsWith("---") && !l.startsWith("+++"));
-            const maxLines = 30;
-            const isNew = removeCount === "0";
-            return (
-              <Box key={msg.id} flexDirection="column" marginLeft={4}>
-                <Box>
-                  <Text color={theme.colors.primary} bold>{isNew ? "+" : "\u2666"} {isNew ? "Write" : "Update"}({filePath})</Text>
-                  <Text color={theme.colors.muted}>{" "}</Text>
-                  <Text color="#4ADE80" bold>+{addCount}</Text>
-                  <Text color={theme.colors.muted}>{" "}</Text>
-                  <Text color="#F87171" bold>-{removeCount}</Text>
-                </Box>
-                {codeLines.slice(0, maxLines).map((line, i) => {
-                  if (line.startsWith("@@")) {
-                    return (
-                      <Box key={i}>
-                        <Text color={theme.colors.muted}>{" \u2500\u2500 "}{line}</Text>
-                      </Box>
-                    );
-                  }
-                  const isAdd = line.startsWith("+");
-                  const isRemove = line.startsWith("-");
-                  const lineContent = (isAdd || isRemove) ? line.slice(1) : line.startsWith(" ") ? line.slice(1) : line;
-                  const lineColor = isAdd ? "#4ADE80" : isRemove ? "#F87171" : theme.colors.muted;
-                  const marker = isAdd ? "+" : isRemove ? "-" : " ";
-                  return (
-                    <Box key={i}>
-                      <Text color={lineColor}>{" "}{marker} {lineContent}</Text>
-                    </Box>
-                  );
-                })}
-                {codeLines.length > maxLines && (
-                  <Box>
-                    <Text color={theme.colors.muted}>{"   ... "}{codeLines.length - maxLines} more lines</Text>
-                  </Box>
-                )}
-              </Box>
-            );
-          }
-          case "error":
-            return (
-              <Box key={msg.id} marginLeft={2}>
-                <Text color={theme.colors.error} bold>{"  \u2718 "}</Text>
-                <Text color={theme.colors.error}>{msg.text}</Text>
-              </Box>
-            );
-          case "info":
-            return (
-              <Box key={msg.id} marginLeft={2}>
-                <Text color={theme.colors.muted}>{"  \u25cb "}{msg.text}</Text>
-              </Box>
-            );
-          default:
-            return <Text key={msg.id}>{msg.text}</Text>;
-        }
-      })}
+      <ChatTranscript
+        messages={messages}
+        modelName={modelName}
+        colors={theme.colors}
+        termWidth={termWidth}
+      />
 
       {/* ═══ TASK PROGRESS ═══ */}
       {agentTasks.length > 0 && (

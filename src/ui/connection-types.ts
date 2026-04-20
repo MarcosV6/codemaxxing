@@ -7,6 +7,7 @@ export interface ChatMessage {
   id: number;
   type: "user" | "response" | "tool" | "tool-result" | "diff" | "error" | "info";
   text: string;
+  streaming?: boolean;
 }
 
 // ── Connection context ──

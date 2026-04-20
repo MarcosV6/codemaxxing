@@ -62,7 +62,10 @@ function GradientLine({ text, color1, color2, bold: isBold }: { text: string; co
 interface BannerProps {
   version: string;
   colors: Theme["colors"];
+  width?: number;
 }
+
+const LOGO_WIDTH = 64;
 
 export function prettyCwd(cwd: string = process.cwd()): string {
   const home = os.homedir();
@@ -71,20 +74,22 @@ export function prettyCwd(cwd: string = process.cwd()): string {
   return cwd;
 }
 
-export function Banner({ version, colors }: BannerProps) {
+export function Banner({ version, colors, width = 80 }: BannerProps) {
   // Theme primary → secondary gradient. GradientLine itself handles non-hex
   // theme colors by rendering a flat color, so we just pass them through.
   const c1 = colors.primary;
   const c2 = colors.secondary;
   const cwd = prettyCwd();
+  const showLogo = width >= LOGO_WIDTH + 4;
+  const separatorWidth = Math.max(12, Math.min(58, Math.max(0, width - 4)));
 
   return (
     <Box flexDirection="column" paddingX={1} marginBottom={0}>
       <Text> </Text>
-      {LOGO_LINES.map((line, i) => (
+      {showLogo && LOGO_LINES.map((line, i) => (
         <Text key={`c${i}`}>{"  "}<GradientLine text={line} color1={c1} color2={c2} bold /></Text>
       ))}
-      <Text> </Text>
+      {showLogo && <Text> </Text>}
       <Text>
         {"  "}
         <Text color={colors.muted}>{"v" + version}</Text>
@@ -100,7 +105,7 @@ export function Banner({ version, colors }: BannerProps) {
         <Text color={colors.muted}>{"\u25b8 "}</Text>
         <Text color={colors.muted}>{cwd}</Text>
       </Text>
-      <Text color={colors.muted}>{"  "}{"\u2500".repeat(58)}</Text>
+      <Text color={colors.muted}>{"  "}{"\u2500".repeat(separatorWidth)}</Text>
       <Text>
         {"  "}
         <Text dimColor>{"Type "}</Text>
