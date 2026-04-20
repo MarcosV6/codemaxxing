@@ -1,6 +1,6 @@
 {
   "name": "codemaxxing",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Open-source terminal coding agent. Connect any LLM. Max your code.",
   "main": "dist/index.js",
   "bin": {
@@ -9,8 +9,8 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "prepare": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
+    "prepare": "npm run build",
     "dev": "tsx src/index.tsx",
     "start": "node dist/index.js",
     "test": "vitest run"

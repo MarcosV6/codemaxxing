@@ -10,16 +10,15 @@
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
-**🆕 v1.5.0:** major design overhaul with a cleaner terminal UI, theme persistence, richer status and task tracking, markdown rendering, smarter context-window detection, Windows PowerShell typing fixes, and a more polished release flow.
+**🆕 v1.5.3:** cleaner auth and provider flows, better terminal/UI behavior, safer tool and file handling, stronger packaging hygiene, and a smoother fresh-install path.
 
-### What's new in v1.5.0
+### What's new in v1.5.3
 
-- redesigned terminal UI with stronger first-run presentation
-- theme persistence and better UI polish across sessions
-- live task progress and richer markdown-style output rendering
-- smarter model context-window detection from provider APIs
-- Windows PowerShell fast-typing fix plus security/reliability cleanup
-- new release QA plan and better packaging readiness
+- cleaner login and provider connection flow, including better OAuth handling
+- terminal UI polish and resize/reactivity fixes
+- safer tool preambles, tool-arg repair, and file/db hardening
+- MCP, sessions, context, and connection-flow improvements
+- fresh npm packaging cleanup so deleted build artifacts do not leak into releases
 
 ## Why?
 
@@ -27,9 +26,18 @@ Every coding agent locks you into their API. Codemaxxing doesn't. Run it with LM
 
 ## Install
 
+**Requirements:**
+- Node.js **18+**
+- npm
+
 **If you have Node.js:**
 ```bash
-npm install -g codemaxxing
+npm install -g codemaxxing@latest
+```
+
+Then verify:
+```bash
+codemaxxing --version
 ```
 
 **If you don't have Node.js:**
@@ -59,7 +67,7 @@ curl -fsSL -o $env:TEMP\install-codemaxxing.bat https://raw.githubusercontent.co
 npm update -g codemaxxing
 ```
 
-If that doesn't get the latest version, use the exact reinstall path:
+If that does not get the latest version, use the exact reinstall path:
 ```bash
 npm install -g codemaxxing@latest
 ```
@@ -68,6 +76,8 @@ Then verify:
 ```bash
 codemaxxing --version
 ```
+
+If you are testing on a brand-new laptop, prefer the exact reinstall path above over `npm update -g`.
 
 ## Quick Start
 
