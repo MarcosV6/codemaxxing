@@ -512,7 +512,34 @@ function loadCwdEntries(dir: string): string[] {
 function App() {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const termWidth = stdout?.columns ?? 80;
+  // Track terminal width reactively. Ink's useStdout() snapshots columns at
+  // mount, so we listen for the stdout "resize" event (SIGWINCH) and re-render.
+  //
+  // Two subtleties:
+  // 1. Ink erases its previous render by cursor-moving up N lines based on the
+  //    OLD wrap width. After a resize the wrapping is different, so the erase
+  //    misses lines and we see stacked banner fragments. Hard-clearing the
+  //    screen (\x1b[2J + \x1b[H) forces Ink to start fresh at the new size.
+  // 2. Dragging the window fires "resize" dozens of times. Debounce so we only
+  //    clear+redraw once the drag settles.
+  const [termWidth, setTermWidth] = useState(stdout?.columns ?? 80);
+  useEffect(() => {
+    if (!stdout) return;
+    let pending: NodeJS.Timeout | null = null;
+    const onResize = () => {
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(() => {
+        try { stdout.write("\x1b[2J\x1b[H"); } catch { /* pipe closed */ }
+        setTermWidth(stdout.columns ?? 80);
+        pending = null;
+      }, 80);
+    };
+    stdout.on("resize", onResize);
+    return () => {
+      if (pending) clearTimeout(pending);
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
 
   const [input, setInput] = useState("");
   const [pastedChunks, setPastedChunks] = useState<Array<{ id: number; lines: number; content: string }>>([]);
