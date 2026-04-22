@@ -7,7 +7,6 @@ import type {
   ChatCompletionTool,
   ChatCompletionChunk,
 } from "openai/resources/chat/completions";
-import { getCopilotHeaders } from "../config.js";
 import { FILE_TOOLS, executeTool, generateDiff, getExistingContent } from "../tools/files.js";
 import { detectLinter, runLinter } from "../utils/lint.js";
 import { detectTestRunner, runTests, type TestRunnerInfo } from "../utils/test-runner.js";
@@ -18,7 +17,7 @@ import { createSession, saveMessage, updateTokenEstimate, updateSessionCost, loa
 import { loadMCPConfig, loadMCPConfigWithSources, connectToServers, disconnectAll, getAllMCPTools, parseMCPToolName, callMCPTool, getConnectedServers, type ConnectedServer } from "../bridge/mcp.js";
 import { refreshAnthropicOAuthToken } from "../utils/anthropic-oauth.js";
 import { refreshOpenAICodexToken } from "../utils/openai-oauth.js";
-import { getCredential, saveCredential, exchangeCopilotToken } from "../utils/auth.js";
+import { getCredential, saveCredential } from "../utils/auth.js";
 import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../utils/responses-api.js";
 import { detectModelContextWindow, getStaticContextWindow } from "../utils/model-context.js";
 import { shouldSuppressAssistantToolTurnText } from "../utils/tool-preambles.js";
@@ -422,13 +421,9 @@ export class CodingAgent {
   constructor(private options: AgentOptions) {
     this.providerType = options.provider.type || "openai";
     this.currentBaseUrl = options.provider.baseUrl || "https://api.openai.com/v1";
-    const defaultHeaders = this.currentBaseUrl.includes("api.githubcopilot.com")
-      ? getCopilotHeaders()
-      : undefined;
     this.client = new OpenAI({
       baseURL: this.currentBaseUrl,
       apiKey: options.provider.apiKey,
-      defaultHeaders,
     });
     if (this.providerType === "anthropic") {
       this.anthropicClient = createAnthropicClient(options.provider.apiKey);
@@ -648,7 +643,7 @@ export class CodingAgent {
       // Route to the correct backend — skip chat() since message is already pushed
       if (this.providerType === "anthropic" && this.anthropicClient) {
         result = await this.chatAnthropic(userMessage);
-      } else if (this.providerType === "openai" && shouldUseResponsesAPI(this.model)) {
+      } else if (this.providerType === "openai" && shouldUseResponsesAPI(this.model, this.currentBaseUrl)) {
         result = await this.chatOpenAIResponses(userMessage);
       } else {
         result = await this.chatOpenAICompletions();
@@ -721,7 +716,7 @@ export class CodingAgent {
     }
 
     // Route to Responses API for models that need it (GPT-5.x, Codex, etc)
-    if (this.providerType === "openai" && shouldUseResponsesAPI(this.model)) {
+    if (this.providerType === "openai" && shouldUseResponsesAPI(this.model, this.currentBaseUrl)) {
       return this.chatOpenAIResponses(userMessage);
     }
 
@@ -857,21 +852,12 @@ export class CodingAgent {
         }
         // Try refreshing expired OAuth token
         if (err.status === 401) {
-          // Copilot tokens expire every ~30 min — try re-exchanging first
-          if (this.currentBaseUrl.includes("githubcopilot.com")) {
-            const refreshed = await this.tryRefreshCopilotToken();
-            if (refreshed) {
-              iterations--;
-              continue;
-            }
-            throw new Error("Copilot token expired and could not be refreshed. Run /login to re-authenticate.");
-          }
-          const refreshed = await this.tryRefreshOpenAIToken();
+          const refreshed = await this.tryRefreshCurrentProviderToken();
           if (refreshed) {
             iterations--;
             continue;
           }
-          throw new Error("OpenAI OAuth token expired and could not be refreshed. Run /login to re-authenticate.");
+          throw new Error(this.getUnauthorizedMessage());
         }
         throw err;
       }
@@ -1838,21 +1824,13 @@ export class CodingAgent {
           (err.message && (err.message.includes("401") || err.message.includes("token_expired") || err.message.includes("token is expired")));
 
         if (is401) {
-          if (this.currentBaseUrl.includes("githubcopilot.com")) {
-            const refreshed = await this.tryRefreshCopilotToken();
-            if (refreshed) {
-              iterations--;
-              continue;
-            }
-            throw new Error("Copilot token expired and could not be refreshed. Run /login to re-authenticate.");
-          }
-          const refreshed = await this.tryRefreshOpenAIToken();
+          const refreshed = await this.tryRefreshCurrentProviderToken();
           if (refreshed) {
             // Token refreshed — retry this iteration
             iterations--;
             continue;
           }
-          throw new Error("OpenAI OAuth token expired and could not be refreshed. Run /login to re-authenticate.");
+          throw new Error(this.getUnauthorizedMessage());
         }
         throw err;
       }
@@ -1979,9 +1957,6 @@ export class CodingAgent {
       this.client = new OpenAI({
         baseURL: nextBaseUrl,
         apiKey: apiKey ?? this.options.provider.apiKey,
-        defaultHeaders: nextBaseUrl.includes("api.githubcopilot.com")
-          ? getCopilotHeaders()
-          : undefined,
       });
     }
     // Re-seed and re-detect for the new model. Static guess updates synchronously
@@ -1997,6 +1972,43 @@ export class CodingAgent {
    * Concurrent calls share the same in-flight Promise to avoid double-refresh
    * (which would invalidate the rotated refresh token on the second attempt).
    */
+  private getCurrentProviderId(): "anthropic" | "openai" | "qwen" | "openrouter" | "gemini" | "local" | "custom" {
+    const url = this.currentBaseUrl.toLowerCase();
+    if (url.includes("chatgpt.com") || url.includes("api.openai.com")) return "openai";
+    if (url.includes("openrouter.ai")) return "openrouter";
+    if (url.includes("dashscope") || url.includes("aliyuncs.com")) return "qwen";
+    if (url.includes("generativelanguage.googleapis.com")) return "gemini";
+    if (url.includes("api.anthropic.com") || url.includes("api.us.anthropic.com") || this.providerType === "anthropic") return "anthropic";
+    if (url.includes("localhost") || url.includes("127.0.0.1") || url.includes("0.0.0.0") || url.includes("ollama") || url.includes("lmstudio")) return "local";
+    return "custom";
+  }
+
+  private getUnauthorizedMessage(): string {
+    switch (this.getCurrentProviderId()) {
+      case "openai":
+        return "OpenAI OAuth token expired and could not be refreshed. Run /login to re-authenticate.";
+      case "qwen":
+        return "Qwen API key was rejected. Update it with /login qwen or /login api-key qwen.";
+      case "openrouter":
+        return "OpenRouter credential was rejected. Run /login openrouter again, or switch to an API key.";
+      case "gemini":
+        return "Gemini API key was rejected. Update it with /login gemini.";
+      default:
+        return "Provider authentication failed. Re-run /login for this provider and try again.";
+    }
+  }
+
+  private async tryRefreshCurrentProviderToken(): Promise<boolean> {
+    switch (this.getCurrentProviderId()) {
+      case "openai":
+        return this.tryRefreshOpenAIToken();
+      case "anthropic":
+        return this.tryRefreshAnthropicToken();
+      default:
+        return false;
+    }
+  }
+
   private refreshInFlight: Promise<void> | null = null;
   private async maybeRefreshTokenProactively(): Promise<void> {
     if (this.refreshInFlight) return this.refreshInFlight;
@@ -2004,20 +2016,20 @@ export class CodingAgent {
     const now = Date.now();
     const work = (async () => {
       try {
-        if (this.currentBaseUrl.includes("githubcopilot.com")) {
-          const cred = getCredential("copilot");
-          if (cred?.oauthExpires && cred.oauthExpires - now < SKEW_MS) {
-            await this.tryRefreshCopilotToken();
+        switch (this.getCurrentProviderId()) {
+          case "anthropic": {
+            const cred = getCredential("anthropic");
+            if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+              await this.tryRefreshAnthropicToken();
+            }
+            break;
           }
-        } else if (this.providerType === "anthropic") {
-          const cred = getCredential("anthropic");
-          if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
-            await this.tryRefreshAnthropicToken();
-          }
-        } else {
-          const cred = getCredential("openai");
-          if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
-            await this.tryRefreshOpenAIToken();
+          case "openai": {
+            const cred = getCredential("openai");
+            if (cred?.oauthExpires && cred?.refreshToken && cred.oauthExpires - now < SKEW_MS) {
+              await this.tryRefreshOpenAIToken();
+            }
+            break;
           }
         }
       } catch {
@@ -2053,32 +2065,6 @@ export class CodingAgent {
   }
 
   /**
-   * Attempt to refresh an expired Copilot API token.
-   * The short-lived Copilot token (~30 min) is re-exchanged from the
-   * stored GitHub OAuth token (refreshToken).
-   */
-  private async tryRefreshCopilotToken(): Promise<boolean> {
-    const cred = getCredential("copilot");
-    if (!cred?.refreshToken) return false;
-
-    try {
-      const copilotToken = await exchangeCopilotToken(cred.refreshToken);
-      cred.apiKey = copilotToken.token;
-      cred.oauthExpires = copilotToken.expiresAt;
-      saveCredential(cred);
-      this.currentApiKey = copilotToken.token;
-      this.client = new OpenAI({
-        baseURL: this.currentBaseUrl,
-        apiKey: copilotToken.token,
-        defaultHeaders: getCopilotHeaders(),
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Attempt to refresh an expired OpenAI OAuth token.
    * Returns true if refresh succeeded and client was rebuilt.
    */
@@ -2096,9 +2082,6 @@ export class CodingAgent {
       this.client = new OpenAI({
         baseURL: this.currentBaseUrl,
         apiKey: refreshed.access,
-        defaultHeaders: this.currentBaseUrl.includes("api.githubcopilot.com")
-          ? getCopilotHeaders()
-          : undefined,
       });
       return true;
     } catch {

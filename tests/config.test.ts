@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { detectProviderType, getActiveProviderProfileKey, listProviderProfiles } from "../src/config.js";
+import {
+  detectProviderType,
+  getActiveProviderProfileKey,
+  getModelListFallback,
+  listProviderProfiles,
+  normalizeListedModels,
+} from "../src/config.js";
 
 describe("detectProviderType", () => {
   it("uses anthropic transport only for native Anthropic API", () => {
@@ -50,5 +56,23 @@ describe("provider profile helpers", () => {
     const profiles = listProviderProfiles(config);
     expect(profiles.find((p) => p.key === "openrouter")?.active).toBe(true);
     expect(profiles.find((p) => p.key === "local")?.active).toBe(false);
+  });
+});
+
+describe("remote model list helpers", () => {
+  it("filters out obvious non-chat models by id", () => {
+    expect(normalizeListedModels("https://example.com/v1", {
+      data: [
+        { id: "gpt-4.1" },
+        { id: "text-embedding-3-large" },
+        { id: "rerank-v1" },
+        { id: "gpt-4o-mini" },
+      ],
+    })).toEqual(["gpt-4.1", "gpt-4o-mini"]);
+  });
+
+  it("provides a Qwen fallback list for DashScope-compatible endpoints", () => {
+    expect(getModelListFallback("https://dashscope.aliyuncs.com/compatible-mode/v1")).toContain("qwen3-coder-plus");
+    expect(getModelListFallback("https://api.openai.com/v1")).toEqual([]);
   });
 });

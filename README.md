@@ -10,9 +10,9 @@
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
-**🆕 v1.5.3:** cleaner auth and provider flows, better terminal/UI behavior, safer tool and file handling, stronger packaging hygiene, and a smoother fresh-install path.
+**🆕 v1.5.7:** cleaner auth and provider flows, better terminal/UI behavior, safer tool and file handling, stronger packaging hygiene, and a smoother fresh-install path.
 
-### What's new in v1.5.3
+### What's new in v1.5.7
 
 - cleaner login and provider connection flow, including better OAuth handling
 - terminal UI polish and resize/reactivity fixes
@@ -165,8 +165,7 @@ Interactive setup walks you through it. Or use `/login` inside the TUI.
 | **OpenRouter** | OAuth (browser login) or API key — one login, 200+ models |
 | **Anthropic** | Link your Claude subscription (via Claude Code) or API key |
 | **OpenAI** | Import from Codex CLI or API key |
-| **Qwen** | Import from Qwen CLI or API key |
-| **GitHub Copilot** | Device flow (browser) |
+| **Qwen** | API key |
 | **Google Gemini** | API key |
 | **Any provider** | API key + custom base URL |
 
@@ -179,20 +178,23 @@ codemaxxing auth openrouter    # Direct OpenRouter OAuth
 
 Credentials stored securely in `~/.codemaxxing/auth.json` (owner-only permissions).
 
+> **Security note:** prefer `codemaxxing login` or `codemaxxing auth api-key <provider>` so your key is entered interactively. Avoid passing API keys on the command line, since shell history and process lists can expose them.
+
 ---
 
 ## Advanced Setup
-
-**With a remote provider (OpenAI, OpenRouter, etc.):**
-
-```bash
-codemaxxing --base-url https://api.openai.com/v1 --api-key sk-... --model gpt-5
-```
 
 **With a saved provider profile:**
 
 ```bash
 codemaxxing --provider openrouter
+```
+
+**With an interactive API-key setup:**
+
+```bash
+codemaxxing auth api-key openai
+codemaxxing --provider openai
 ```
 
 **Auto-detected local servers:** LM Studio (`:1234`), Ollama (`:11434`), vLLM (`:8000`)
@@ -302,7 +304,7 @@ Switch models mid-session with an interactive picker:
 `/theme` to browse: cyberpunk-neon, dracula, gruvbox, nord, catppuccin, tokyo-night, one-dark, rose-pine, synthwave, blood-moon, mono, solarized, hacker, acid
 
 ### 🔐 Authentication
-One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex/Qwen CLI import, GitHub Copilot device flow, or manual API keys.
+One command to connect any LLM provider. OpenRouter OAuth, Anthropic subscription linking, Codex CLI import, or manual API keys.
 
 ### 📋 Smart Paste
 Multi-line and large pastes become attached paste blocks above the input instead of dumping raw text into the prompt row. Short normal typing stays inline. This was specifically hardened for bracketed-paste terminal weirdness.
@@ -355,7 +357,6 @@ echo "fix tests" | codemaxxing exec  # Pipe from stdin
 ```
 -m, --model <model>       Model name to use
 -p, --provider <name>     Provider profile from config
--k, --api-key <key>       API key for the provider
 -u, --base-url <url>      Base URL for the provider API
 -h, --help                Show help
 ```
@@ -381,13 +382,13 @@ Settings are stored in `~/.codemaxxing/settings.json`:
     "openrouter": {
       "name": "OpenRouter",
       "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKey": "sk-or-...",
+      "apiKey": "stored-via-login",
       "model": "anthropic/claude-sonnet-4-6"
     },
     "openai": {
       "name": "OpenAI",
       "baseUrl": "https://api.openai.com/v1",
-      "apiKey": "sk-...",
+      "apiKey": "stored-via-login",
       "model": "gpt-5"
     }
   },

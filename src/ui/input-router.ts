@@ -1,7 +1,7 @@
 import type { Key } from "ink";
 import * as fsSync from "fs";
 import * as pathLib from "path";
-import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, importQwenToken, copilotDeviceFlow, saveApiKey } from "../utils/auth.js";
+import { PROVIDERS, getCredentials, openRouterOAuth, anthropicSetupToken, importCodexToken, saveApiKey } from "../utils/auth.js";
 import { loginOpenAICodexOAuth } from "../utils/openai-oauth.js";
 import { loginAnthropicOAuth } from "../utils/anthropic-oauth.js";
 import { listInstalledSkills, installSkill, removeSkill, getRegistrySkills, getActiveSkills } from "../utils/skills.js";
@@ -321,25 +321,6 @@ function handleLoginMethodPicker(inputChar: string, key: Key, ctx: InputRouterCo
           ctx.addMsg("error", `OAuth failed: ${err.message}\n  Fallback: set your key via CLI:  codemaxxing auth api-key openai <your-key>\n  Or set OPENAI_API_KEY env var and restart.\n  Get key at: platform.openai.com/api-keys`);
           ctx.setLoading(false);
         });
-    } else if (method === "cached-token" && providerId === "qwen") {
-      const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
-      if (imported) {
-        ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
-        void reconnectAfterAuth();
-      } else {
-        ctx.addMsg("info", "No Qwen CLI token found.\n  Set DASHSCOPE_API_KEY env var, or create ~/.dashscope/api_key, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>\n  Get key at: https://dashscope.console.aliyun.com/apiKey");
-      }
-    } else if (method === "device-flow") {
-      ctx.addMsg("info", "Starting GitHub Copilot device flow...");
-      ctx.setLoading(true);
-      ctx.setSpinnerMsg("Waiting for GitHub authorization...");
-      copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-        .then(async () => {
-          ctx.addMsg("info", `✅ GitHub Copilot authenticated!`);
-          ctx.setLoading(false);
-          await reconnectAfterAuth();
-        })
-        .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
     } else if (method === "api-key") {
       const provider = PROVIDERS.find((p) => p.id === providerId);
       ctx.addMsg("info", `Enter your API key via CLI:\n  codemaxxing auth api-key ${providerId} <your-key>\n  Get key at: ${provider?.consoleUrl ?? "your provider's dashboard"}`);
@@ -379,32 +360,14 @@ function handleLoginPicker(_inputChar: string, key: Key, ctx: InputRouterContext
         openRouterOAuth((msg: string) => ctx.addMsg("info", msg))
           .then(async () => { ctx.addMsg("info", `✅ OpenRouter authenticated!`); ctx.setLoading(false); ctx.connectToProvider?.(true); })
           .catch((err: any) => { ctx.addMsg("error", `OAuth failed: ${err.message}`); ctx.setLoading(false); });
-      } else if (methods[0] === "device-flow") {
-        ctx.setLoginMethodPicker(null);
-        ctx.addMsg("info", "Starting GitHub Copilot device flow...");
-        ctx.setLoading(true);
-        ctx.setSpinnerMsg("Waiting for GitHub authorization...");
-        copilotDeviceFlow((msg: string) => ctx.addMsg("info", msg))
-          .then(async () => { ctx.addMsg("info", `✅ GitHub Copilot authenticated!`); ctx.setLoading(false); ctx.connectToProvider?.(true); })
-          .catch((err: any) => { ctx.addMsg("error", `Copilot auth failed: ${err.message}`); ctx.setLoading(false); });
       } else if (methods[0] === "cached-token") {
         ctx.setLoginMethodPicker(null);
-        if (selected.id === "qwen") {
-          const imported = importQwenToken((msg: string) => ctx.addMsg("info", msg));
-          if (imported) {
-            ctx.addMsg("info", `✅ Imported Qwen credentials! (${imported.label})`);
-            ctx.connectToProvider?.(true);
-          } else {
-            ctx.addMsg("info", "No Qwen CLI token found.\n  Install DashScope CLI, run setup, then try /login again.\n  Or use: codemaxxing auth api-key qwen <your-key>");
-          }
+        const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
+        if (imported) {
+          ctx.addMsg("info", `✅ Imported credentials! (${imported.label})`);
+          ctx.connectToProvider?.(true);
         } else {
-          const imported = importCodexToken((msg: string) => ctx.addMsg("info", msg));
-          if (imported) {
-            ctx.addMsg("info", `✅ Imported credentials! (${imported.label})`);
-            ctx.connectToProvider?.(true);
-          } else {
-            ctx.addMsg("info", "No cached credentials found. Use API key instead.");
-          }
+          ctx.addMsg("info", "No cached credentials found. Use API key instead.");
         }
       } else if (methods[0] === "api-key") {
         ctx.setLoginMethodPicker(null);

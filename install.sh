@@ -78,7 +78,8 @@ if command -v codemaxxing &> /dev/null; then
     echo "  2. Run: codemaxxing"
     echo ""
     echo "Or connect to a remote provider:"
-    echo "  codemaxxing --base-url https://api.openai.com/v1 --api-key sk-... --model gpt-4o"
+    echo "  codemaxxing login"
+    echo "  # or: codemaxxing auth api-key openai"
     echo ""
 else
     echo -e "${RED}Installation may have failed. Try: npm install -g codemaxxing${RESET}"

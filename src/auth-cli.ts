@@ -10,9 +10,8 @@
  *   codemaxxing auth openrouter    — Start OpenRouter OAuth
  *   codemaxxing auth anthropic     — Get Anthropic via Claude Code
  *   codemaxxing auth openai        — Import Codex CLI credentials
- *   codemaxxing auth qwen          — Import Qwen CLI credentials
- *   codemaxxing auth copilot       — GitHub Copilot device flow
- *   codemaxxing auth api-key <name> <key> — Save API key directly
+ *   codemaxxing auth qwen          — Save Qwen API key
+ *   codemaxxing auth api-key <name> — Save API key interactively
  */
 
 import {
@@ -22,8 +21,6 @@ import {
   openRouterOAuth,
   anthropicSetupToken,
   importCodexToken,
-  importQwenToken,
-  copilotDeviceFlow,
   saveApiKey,
   detectAvailableAuth,
 } from "./utils/auth.js";
@@ -94,17 +91,9 @@ export async function main() {
             console.log(`\n✅ Saved API key for ${provider.name}`);
           }
         } else if (providerId === "qwen") {
-          const imported = importQwenToken((msg) => console.log(`  ${msg}`));
-          if (imported) {
-            console.log(`\n✅ Imported Qwen credentials! (${imported.label})`);
-          } else {
-            const apiKey = await ask("Enter your Qwen/DashScope API key: ");
-            const cred = saveApiKey(providerId, apiKey);
-            console.log(`\n✅ Saved API key for ${provider.name}`);
-          }
-        } else if (providerId === "copilot") {
-          const cred = await copilotDeviceFlow((msg) => console.log(`  ${msg}`));
-          console.log(`\n✅ GitHub Copilot authenticated!`);
+          const apiKey = await ask("Enter your Qwen/DashScope API key: ");
+          const cred = saveApiKey(providerId, apiKey);
+          console.log(`\n✅ Saved API key for ${provider.name}`);
         } else if (providerId === "custom") {
           const baseUrl = await ask("Enter the base URL: ");
           const apiKey = await ask("Enter your API key: ");
@@ -211,38 +200,49 @@ export async function main() {
     }
 
     case "qwen": {
-      console.log("Checking for Qwen CLI credentials...\n");
-      const imported = importQwenToken((msg) => console.log(`  ${msg}`));
-      if (imported) {
-        console.log(`\n✅ Imported Qwen credentials!`);
-      } else {
-        console.log("\n❌ No Qwen CLI credentials found.");
-        console.log("Make sure Qwen CLI is installed and you've logged in.");
-      }
-      break;
-    }
-
-    case "copilot": {
-      console.log("Starting GitHub Copilot device flow...\n");
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> =>
+        new Promise((resolve) => rl.question(q, resolve));
       try {
-        const cred = await copilotDeviceFlow((msg) => console.log(`  ${msg}`));
-        console.log(`\n✅ GitHub Copilot authenticated!`);
-      } catch (err: any) {
-        console.error(`\n❌ ${err.message}`);
-        process.exit(1);
+        const apiKey = await ask("Enter your Qwen/DashScope API key: ");
+        const cred = saveApiKey("qwen", apiKey);
+        console.log(`\n✅ Saved API key for ${cred.provider}`);
+      } finally {
+        rl.close();
       }
       break;
     }
 
     case "api-key": {
       const providerId = process.argv[3];
-      const apiKey = process.argv[4];
-      if (!providerId || !apiKey) {
-        console.log("Usage: codemaxxing auth api-key <provider-id> <api-key>");
+      const apiKeyArg = process.argv[4];
+      if (!providerId) {
+        console.log("Usage: codemaxxing auth api-key <provider-id>");
         process.exit(1);
       }
-      const cred = saveApiKey(providerId, apiKey);
-      console.log(`\n✅ Saved API key for ${cred.provider}`);
+
+      if (apiKeyArg) {
+        console.log("⚠️  Passing API keys directly on the command line is discouraged.");
+        console.log("   Prefer: codemaxxing auth api-key <provider-id>\n");
+      }
+
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> =>
+        new Promise((resolve) => rl.question(q, resolve));
+
+      try {
+        const apiKey = apiKeyArg ?? await ask(`Enter your ${providerId} API key: `);
+        if (!apiKey.trim()) {
+          console.log("❌ API key cannot be empty.");
+          process.exit(1);
+        }
+        const cred = saveApiKey(providerId, apiKey.trim());
+        console.log(`\n✅ Saved API key for ${cred.provider}`);
+      } finally {
+        rl.close();
+      }
       break;
     }
 
@@ -259,9 +259,8 @@ Commands:
   codemaxxing auth openrouter    Start OpenRouter OAuth flow
   codemaxxing auth anthropic     Get Anthropic via Claude Code CLI
   codemaxxing auth openai        Import Codex CLI credentials
-  codemaxxing auth qwen          Import Qwen CLI credentials
-  codemaxxing auth copilot       GitHub Copilot device flow
-  codemaxxing auth api-key <id> <key>  Save API key directly
+  codemaxxing auth qwen          Save Qwen API key
+  codemaxxing auth api-key <id>  Save API key interactively
   codemaxxing auth help          Show this help
 
 Examples:

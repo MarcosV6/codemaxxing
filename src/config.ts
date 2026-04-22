@@ -3,13 +3,65 @@ import { homedir } from "os";
 import { join } from "path";
 import { getCredential } from "./utils/auth.js";
 
-export function getCopilotHeaders(): Record<string, string> {
-  return {
-    "Editor-Version": "vscode/1.99.3",
-    "Editor-Plugin-Version": "copilot-chat/0.26.7",
-    "Copilot-Integration-Id": "vscode-chat",
-    "User-Agent": "GitHubCopilotChat/0.26.7",
-  };
+const NON_CHAT_MODEL_ID_PATTERNS = [
+  /(^|[-_/])embed(ding|dings)?($|[-_/])/i,
+  /(^|[-_/])rerank(er)?($|[-_/])/i,
+  /(^|[-_/])moderation($|[-_/])/i,
+  /(^|[-_/])whisper($|[-_/])/i,
+  /(^|[-_/])tts($|[-_/])/i,
+  /(^|[-_/])transcri(be|ption)($|[-_/])/i,
+  /(^|[-_/])speech($|[-_/])/i,
+  /(^|[-_/])image(s)?($|[-_/])/i,
+  /(^|[-_/])search($|[-_/])/i,
+];
+
+export const QWEN_FALLBACK_MODELS = [
+  "qwen3-coder-plus",
+  "qwen-coder-plus",
+  "qwen3.6-plus",
+  "qwen3.5-plus",
+  "qwen-plus",
+  "qwen3.6-flash",
+  "qwen3.5-flash",
+  "qwen-flash",
+  "qwen-turbo",
+  "qwen-max",
+];
+
+function isLikelyChatModel(_baseUrl: string, model: Record<string, unknown>): boolean {
+  const id = typeof model.id === "string" ? model.id.trim() : "";
+  if (!id) return false;
+  if (NON_CHAT_MODEL_ID_PATTERNS.some((pattern) => pattern.test(id))) return false;
+  return true;
+}
+
+export function getModelListFallback(baseUrl: string): string[] {
+  if (/dashscope(?:-us|-intl)?\.aliyuncs\.com\/compatible-mode\/v1/i.test(baseUrl)) {
+    return [...QWEN_FALLBACK_MODELS];
+  }
+  return [];
+}
+
+export function normalizeListedModels(baseUrl: string, payload: unknown): string[] {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+  const rawModels = body?.data;
+  if (!Array.isArray(rawModels)) return [];
+
+  const seen = new Set<string>();
+  const results: string[] = [];
+
+  for (const rawModel of rawModels) {
+    if (!rawModel || typeof rawModel !== "object") continue;
+    const model = rawModel as Record<string, unknown>;
+    if (!isLikelyChatModel(baseUrl, model)) continue;
+
+    const id = typeof model.id === "string" ? model.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    results.push(id);
+  }
+
+  return results;
 }
 
 export interface ProviderConfig {
@@ -115,9 +167,12 @@ Usage:
 Options:
   -m, --model <model>       Model name to use
   -p, --provider <name>     Provider profile from config (e.g. local, openrouter)
-  -k, --api-key <key>       API key for the provider
   -u, --base-url <url>      Base URL for the provider API
   -h, --help                Show this help
+
+Security note:
+  Prefer 'codemaxxing login' or 'codemaxxing auth api-key <provider>'
+  instead of passing API keys on the command line.
 
 Exec options (headless/CI mode):
   --auto-approve            Skip tool approval prompts
@@ -127,7 +182,7 @@ Exec options (headless/CI mode):
 
 Examples:
   codemaxxing                                    # Auto-detect local LLM
-  codemaxxing -m gpt-4o -u https://api.openai.com/v1 -k sk-...
+  codemaxxing login                              # Interactive auth setup
   codemaxxing -p openrouter                      # Use saved provider profile
   codemaxxing -m qwen3.5-35b                     # Override model only
   codemaxxing exec "fix the failing tests"       # Headless mode
@@ -413,11 +468,12 @@ export async function listModels(
     clearTimeout(timeout);
 
     if (res.ok) {
-      const data = (await res.json()) as { data?: Array<{ id: string }> };
-      return (data.data ?? []).map(m => m.id);
+      const data = await res.json();
+      const models = normalizeListedModels(baseUrl, data);
+      if (models.length > 0) return models;
     }
   } catch { /* ignore */ }
-  return [];
+  return getModelListFallback(baseUrl);
 }
 
 /**

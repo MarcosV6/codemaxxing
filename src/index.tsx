@@ -11,7 +11,7 @@ import {
 } from "./utils/paste.js";
 import { setupPasteInterceptor } from "./ui/paste-interceptor.js";
 import type { CodingAgent } from "./core/agent.js";
-import { loadConfig, saveConfig, listModels, getCopilotHeaders, getLocalEndpoints } from "./config.js";
+import { loadConfig, saveConfig, listModels, getLocalEndpoints } from "./config.js";
 import { listSessions, getSession, loadMessages, deleteSession } from "./utils/sessions.js";
 import { tryHandleGitCommand } from "./commands/git.js";
 import { tryHandleOllamaCommand } from "./commands/ollama.js";
@@ -862,30 +862,18 @@ function App() {
 
     const qwenCred = getCredential("qwen");
     if (qwenCred) {
-      groups["Qwen"] = ["qwen-max", "qwen-plus", "qwen-turbo"].map(m => ({
-        name: m,
-        baseUrl: qwenCred.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        apiKey: qwenCred.apiKey,
-        providerType: "openai" as const,
-      }));
+      const qwenBaseUrl = qwenCred.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1";
+      const qwenModels = await listModels(qwenBaseUrl, qwenCred.apiKey);
+      if (qwenModels.length > 0) {
+        groups["Qwen"] = qwenModels.map(m => ({
+          name: m,
+          baseUrl: qwenBaseUrl,
+          apiKey: qwenCred.apiKey,
+          providerType: "openai" as const,
+        }));
+      }
     }
-    providerEntries.push({ name: "Qwen", description: "Qwen 3.5, Qwen Coder — use your Qwen CLI login or API key", authed: !!qwenCred });
-
-    const copilotCred = getCredential("copilot");
-    if (copilotCred) {
-      const copilotModels = await listModels(
-        copilotCred.baseUrl || "https://api.githubcopilot.com",
-        copilotCred.apiKey,
-        getCopilotHeaders(),
-      );
-      groups["GitHub Copilot"] = copilotModels.map(m => ({
-        name: m,
-        baseUrl: copilotCred.baseUrl || "https://api.githubcopilot.com",
-        apiKey: copilotCred.apiKey,
-        providerType: "openai" as const,
-      }));
-    }
-    providerEntries.push({ name: "GitHub Copilot", description: "Use your GitHub Copilot subscription", authed: !!copilotCred });
+    providerEntries.push({ name: "Qwen", description: "Qwen 3.5, Qwen Coder — use your DashScope API key", authed: !!qwenCred });
 
     if (providerEntries.length > 0) {
       setModelPickerGroups(groups);
@@ -1208,7 +1196,6 @@ function App() {
       if (getCredential("anthropic")) creds.push("Anthropic");
       if (getCredential("openrouter")) creds.push("OpenRouter");
       if (getCredential("qwen")) creds.push("Qwen");
-      if (getCredential("copilot")) creds.push("Copilot");
       lines.push(`  Credentials: ${creds.length > 0 ? creds.join(", ") : "none"}`);
       addMsg("info", lines.join("\n"));
       return;

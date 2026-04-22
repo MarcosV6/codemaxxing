@@ -5,8 +5,7 @@
  * - OpenRouter OAuth PKCE (browser login, no API key needed)
  * - Anthropic setup-token (via Claude Code CLI)
  * - OpenAI/ChatGPT (via Codex CLI cached token)
- * - Qwen (via Qwen CLI cached credentials)
- * - GitHub Copilot (device flow)
+ * - Qwen (via API key)
  * - Manual API key entry (any provider)
  *
  * Credentials stored in ~/.codemaxxing/auth.json with 0o600 permissions.
@@ -83,10 +82,10 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: "qwen",
     name: "Qwen",
-    methods: ["cached-token", "api-key"],
+    methods: ["api-key"],
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     consoleUrl: "https://dashscope.console.aliyun.com/apiKey",
-    description: "Qwen 3.5, Qwen Coder — use your Qwen CLI login or API key",
+    description: "Qwen 3.5, Qwen Coder — use your DashScope API key",
   },
   {
     id: "gemini",
@@ -95,13 +94,6 @@ export const PROVIDERS: ProviderDef[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
     consoleUrl: "https://aistudio.google.com/apikey",
     description: "Gemini 2.5, Gemini Flash",
-  },
-  {
-    id: "copilot",
-    name: "GitHub Copilot",
-    methods: ["device-flow"],
-    baseUrl: "https://api.githubcopilot.com",
-    description: "Use your GitHub Copilot subscription",
   },
   {
     id: "local",
@@ -227,81 +219,135 @@ export async function openRouterOAuth(onStatus?: (msg: string) => void): Promise
     let handled = false; // Guard against duplicate callbacks
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
+    const renderBridgePage = () => `
+      <html>
+        <body style="font-family: monospace; background: #1a1a2e; color: #0ff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+          <div style="text-align: center; max-width: 40rem; padding: 2rem;">
+            <h1>Waiting for OpenRouter…</h1>
+            <p id="status">Finishing authorization…</p>
+          </div>
+          <script>
+            (() => {
+              const params = new URLSearchParams(window.location.search);
+              const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+              const code = params.get("code") || hash.get("code");
+              const error = params.get("error") || hash.get("error");
+              const errorDescription = params.get("error_description") || hash.get("error_description");
+              if (code || error) {
+                const next = new URL("/callback/complete", window.location.origin);
+                if (code) next.searchParams.set("code", code);
+                if (error) next.searchParams.set("error", error);
+                if (errorDescription) next.searchParams.set("error_description", errorDescription);
+                window.location.replace(next.toString());
+                return;
+              }
+              document.getElementById("status").textContent = "No authorization code was visible yet. If this page does not continue automatically, try the login again.";
+            })();
+          </script>
+        </body>
+      </html>
+    `;
+
+    const finishAuth = async (code: string | null, error: string | null, errorDescription: string | null, res: ServerResponse) => {
+      if (handled) {
+        res.writeHead(409, { "Content-Type": "text/html" });
+        res.end("<h1>Authorization already handled</h1><p>You can close this tab.</p>");
+        return;
+      }
+
+      if (error) {
+        handled = true;
+        const message = errorDescription || error;
+        res.writeHead(400, { "Content-Type": "text/html" });
+        res.end(`<h1>Error</h1><p>${message}</p>`);
+        if (timeoutId) clearTimeout(timeoutId);
+        server.close();
+        reject(new Error(message));
+        return;
+      }
+
+      if (!code) {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(renderBridgePage());
+        return;
+      }
+
+      handled = true;
+      onStatus?.("Exchanging code for API key...");
+
+      try {
+        const exchangeRes = await fetch("https://openrouter.ai/api/v1/auth/keys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code,
+            code_verifier: verifier,
+            code_challenge_method: "S256",
+          }),
+        });
+
+        if (!exchangeRes.ok) {
+          const errText = await exchangeRes.text();
+          if (exchangeRes.status === 409) {
+            throw new Error(`OpenRouter returned 409 (Conflict) — this usually means the auth code was already used. Please try /login again.`);
+          }
+          throw new Error(`Exchange failed (${exchangeRes.status}): ${errText}`);
+        }
+
+        const data = (await exchangeRes.json()) as { key: string };
+
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(`
+          <html>
+            <body style="font-family: monospace; background: #1a1a2e; color: #0ff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+              <div style="text-align: center;">
+                <h1>💪 Authenticated!</h1>
+                <p>You can close this tab and return to Codemaxxing.</p>
+              </div>
+            </body>
+          </html>
+        `);
+
+        if (timeoutId) clearTimeout(timeoutId);
+        server.close();
+
+        const cred: AuthCredential = {
+          provider: "openrouter",
+          method: "oauth",
+          apiKey: data.key,
+          baseUrl: "https://openrouter.ai/api/v1",
+          label: "OpenRouter (OAuth)",
+          createdAt: new Date().toISOString(),
+        };
+
+        saveCredential(cred);
+        resolve(cred);
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "text/html" });
+        res.end(`<h1>Error</h1><p>${err.message}</p>`);
+        if (timeoutId) clearTimeout(timeoutId);
+        server.close();
+        reject(err);
+      }
+    };
+
     // Start local callback server
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? "/", `http://localhost`);
+      const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
-      if (url.pathname === "/callback" && !handled) {
-        handled = true;
-        const code = url.searchParams.get("code");
-
-        if (!code) {
-          res.writeHead(400, { "Content-Type": "text/html" });
-          res.end("<h1>Error: No code received</h1><p>Please try again.</p>");
-          if (timeoutId) clearTimeout(timeoutId);
-          server.close();
-          reject(new Error("No authorization code received"));
-          return;
-        }
-
-        // Exchange code for API key
-        onStatus?.("Exchanging code for API key...");
-
-        try {
-          const exchangeRes = await fetch("https://openrouter.ai/api/v1/auth/keys", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              code,
-              code_verifier: verifier,
-              code_challenge_method: "S256",
-            }),
-          });
-
-          if (!exchangeRes.ok) {
-            const errText = await exchangeRes.text();
-            if (exchangeRes.status === 409) {
-              throw new Error(`OpenRouter returned 409 (Conflict) — this usually means the auth code was already used. Please try /login again.`);
-            }
-            throw new Error(`Exchange failed (${exchangeRes.status}): ${errText}`);
-          }
-
-          const data = (await exchangeRes.json()) as { key: string };
-
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(`
-            <html>
-              <body style="font-family: monospace; background: #1a1a2e; color: #0ff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
-                <div style="text-align: center;">
-                  <h1>💪 Authenticated!</h1>
-                  <p>You can close this tab and return to Codemaxxing.</p>
-                </div>
-              </body>
-            </html>
-          `);
-
-          if (timeoutId) clearTimeout(timeoutId);
-          server.close();
-
-          const cred: AuthCredential = {
-            provider: "openrouter",
-            method: "oauth",
-            apiKey: data.key,
-            baseUrl: "https://openrouter.ai/api/v1",
-            label: "OpenRouter (OAuth)",
-            createdAt: new Date().toISOString(),
-          };
-
-          saveCredential(cred);
-          resolve(cred);
-        } catch (err: any) {
-          res.writeHead(500, { "Content-Type": "text/html" });
-          res.end(`<h1>Error</h1><p>${err.message}</p>`);
-          if (timeoutId) clearTimeout(timeoutId);
-          server.close();
-          reject(err);
-        }
+      if (pathname === "/callback" || pathname === "/callback/complete") {
+        await finishAuth(
+          url.searchParams.get("code"),
+          url.searchParams.get("error"),
+          url.searchParams.get("error_description"),
+          res,
+        );
+        return;
       }
+
+      res.writeHead(404, { "Content-Type": "text/html" });
+      res.end("<h1>Not found</h1>");
     });
 
     // Handle server errors (port conflict, etc.) instead of crashing
@@ -492,227 +538,6 @@ export function importCodexToken(onStatus?: (msg: string) => void): AuthCredenti
   return cred;
 }
 
-// ── Qwen CLI Cached Credentials ──
-
-export function detectQwenToken(): string | null {
-  // Environment variable takes priority
-  if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY;
-
-  // DashScope CLI stores the API key as plain text
-  const dashscopeKey = join(homedir(), ".dashscope", "api_key");
-  if (existsSync(dashscopeKey)) {
-    try {
-      const key = readFileSync(dashscopeKey, "utf-8").trim();
-      if (key) return key;
-    } catch { /* ignore */ }
-  }
-
-  // DashScope credentials file (INI-style: api_key=sk-...)
-  const dashscopeCreds = join(homedir(), ".dashscope", "credentials");
-  if (existsSync(dashscopeCreds)) {
-    try {
-      const content = readFileSync(dashscopeCreds, "utf-8");
-      const match = content.match(/api_key\s*=\s*(.+)/);
-      if (match?.[1]?.trim()) return match[1].trim();
-    } catch { /* ignore */ }
-  }
-
-  // Newer Qwen CLI config
-  const qwenConfig = join(homedir(), ".qwen", "config.json");
-  if (existsSync(qwenConfig)) {
-    try {
-      const data = JSON.parse(readFileSync(qwenConfig, "utf-8"));
-      if (data.api_key) return data.api_key;
-      if (data.access_token) return data.access_token;
-    } catch { /* ignore */ }
-  }
-
-  // Legacy path
-  const qwenAuth = join(homedir(), ".qwen", "oauth_creds.json");
-  if (existsSync(qwenAuth)) {
-    try {
-      const data = JSON.parse(readFileSync(qwenAuth, "utf-8"));
-      if (data.access_token) return data.access_token;
-      if (data.token) return data.token;
-      if (data.api_key) return data.api_key;
-    } catch { /* ignore */ }
-  }
-
-  return null;
-}
-
-export function importQwenToken(onStatus?: (msg: string) => void): AuthCredential | null {
-  const token = detectQwenToken();
-  if (!token) return null;
-
-  onStatus?.("Found existing Qwen CLI credentials — importing...");
-
-  const cred: AuthCredential = {
-    provider: "qwen",
-    method: "cached-token",
-    apiKey: token,
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    label: "Qwen (from Qwen CLI)",
-    createdAt: new Date().toISOString(),
-  };
-
-  saveCredential(cred);
-  return cred;
-}
-
-// ── GitHub Copilot Device Flow ──
-
-/**
- * Exchange a GitHub OAuth token for a short-lived Copilot API token.
- * The Copilot API (api.githubcopilot.com) does NOT accept raw GitHub
- * OAuth tokens — you must exchange them via GitHub's internal endpoint.
- * The returned token expires in ~30 minutes.
- */
-export async function exchangeCopilotToken(githubToken: string): Promise<{
-  token: string;
-  expiresAt: number;
-}> {
-  const res = await fetch("https://api.github.com/copilot_internal/v2/token", {
-    headers: {
-      "Authorization": `token ${githubToken}`,
-      "Accept": "application/json",
-      "User-Agent": "codemaxxing/1.0",
-    },
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    if (res.status === 401) {
-      throw new Error("GitHub token is invalid or expired. Run /login to re-authenticate.");
-    }
-    if (res.status === 403) {
-      throw new Error(
-        "Your GitHub account does not have an active Copilot subscription.\n" +
-        "Check: https://github.com/settings/copilot"
-      );
-    }
-    throw new Error(`Copilot token exchange failed (${res.status}): ${errText}`);
-  }
-
-  const data = (await res.json()) as {
-    token: string;
-    expires_at: number; // Unix timestamp
-  };
-
-  return {
-    token: data.token,
-    expiresAt: data.expires_at * 1000, // Convert to ms
-  };
-}
-
-export async function copilotDeviceFlow(onStatus?: (msg: string) => void): Promise<AuthCredential> {
-  // Step 1: Request device code
-  onStatus?.("Starting GitHub Copilot device flow...");
-
-  const deviceRes = await fetch("https://github.com/login/device/code", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: "Iv1.b507a08c87ecfe98", // GitHub Copilot's public client_id
-    }),
-  });
-
-  if (!deviceRes.ok) {
-    throw new Error(`Device code request failed: ${deviceRes.status}`);
-  }
-
-  const deviceData = (await deviceRes.json()) as {
-    device_code: string;
-    user_code: string;
-    verification_uri: string;
-    expires_in: number;
-    interval: number;
-  };
-
-  onStatus?.(`\nGo to: ${deviceData.verification_uri}`);
-  onStatus?.(`Enter code: ${deviceData.user_code}\n`);
-
-  // Try to open browser
-  try {
-    const opener = process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-      ? "cmd"
-      : "xdg-open";
-    const openerArgs = process.platform === "win32"
-      ? ["/c", "start", "", deviceData.verification_uri]
-      : [deviceData.verification_uri];
-    execFile(opener, openerArgs, () => {});
-  } catch { /* ignore */ }
-
-  // Step 2: Poll for GitHub OAuth token
-  let pollInterval = (deviceData.interval || 5) * 1000;
-  const expiresAt = Date.now() + deviceData.expires_in * 1000;
-
-  onStatus?.("Waiting for authorization...");
-
-  while (Date.now() < expiresAt) {
-    await new Promise((r) => setTimeout(r, pollInterval));
-
-    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: JSON.stringify({
-        client_id: "Iv1.b507a08c87ecfe98",
-        device_code: deviceData.device_code,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      }),
-    });
-
-    const tokenData = (await tokenRes.json()) as {
-      access_token?: string;
-      error?: string;
-    };
-
-    if (tokenData.access_token) {
-      // Step 3: Exchange GitHub OAuth token for short-lived Copilot API token
-      onStatus?.("Exchanging GitHub token for Copilot API access...");
-      const copilotToken = await exchangeCopilotToken(tokenData.access_token);
-
-      const cred: AuthCredential = {
-        provider: "copilot",
-        method: "oauth",
-        apiKey: copilotToken.token, // Short-lived Copilot API token
-        baseUrl: "https://api.githubcopilot.com",
-        label: "GitHub Copilot",
-        // Store the GitHub OAuth token as refreshToken so we can
-        // re-exchange it when the Copilot token expires (~30 min).
-        refreshToken: tokenData.access_token,
-        oauthExpires: copilotToken.expiresAt,
-        createdAt: new Date().toISOString(),
-      };
-
-      saveCredential(cred);
-      return cred;
-    }
-
-    if (tokenData.error === "authorization_pending") {
-      continue;
-    }
-
-    if (tokenData.error === "slow_down") {
-      // RFC 8628 §3.5: MUST increase interval by 5s for all subsequent polls
-      pollInterval += 5000;
-      continue;
-    }
-
-    throw new Error(`Authorization failed: ${tokenData.error}`);
-  }
-
-  throw new Error("Device flow timed out");
-}
-
 // ── Manual API Key ──
 
 export function saveApiKey(
@@ -764,14 +589,6 @@ export function detectAvailableAuth(): Array<{ provider: string; method: string;
       provider: "openai",
       method: "cached-token",
       description: "Codex CLI credentials found — can import your ChatGPT subscription",
-    });
-  }
-
-  if (detectQwenToken()) {
-    available.push({
-      provider: "qwen",
-      method: "cached-token",
-      description: "Qwen CLI credentials found — can import your Qwen access",
     });
   }
 

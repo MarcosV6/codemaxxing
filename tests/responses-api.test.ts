@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatWithResponsesAPI } from "../src/utils/responses-api.js";
+import { chatWithResponsesAPI, shouldUseResponsesAPI } from "../src/utils/responses-api.js";
 
 function sseResponse(events: unknown[]): Response {
   const payload = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
@@ -81,5 +81,18 @@ describe("chatWithResponsesAPI", () => {
     ]);
     expect(result.promptTokens).toBe(12);
     expect(result.completionTokens).toBe(7);
+  });
+});
+
+describe("shouldUseResponsesAPI", () => {
+  it("uses Responses API for GPT-5 style models on real OpenAI endpoints", () => {
+    expect(shouldUseResponsesAPI("gpt-5.4", "https://api.openai.com/v1")).toBe(true);
+    expect(shouldUseResponsesAPI("gpt-4.1", "https://chatgpt.com/backend-api")).toBe(true);
+  });
+
+  it("does not force Responses API for OpenAI-compatible third-party endpoints", () => {
+    expect(shouldUseResponsesAPI("gpt-4.1", "https://openrouter.ai/api/v1")).toBe(false);
+    expect(shouldUseResponsesAPI("gpt-5.4", "https://dashscope.aliyuncs.com/compatible-mode/v1")).toBe(false);
+    expect(shouldUseResponsesAPI("gpt-5.4", "https://example.com/v1")).toBe(false);
   });
 });

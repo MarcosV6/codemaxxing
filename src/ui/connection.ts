@@ -31,7 +31,6 @@ function describeActiveConnection(baseUrl: string, model: string): string {
   if (url.includes("api.anthropic.com")) return `${model} via Anthropic`;
   if (url.includes("openrouter.ai")) return `${model} via OpenRouter`;
   if (url.includes("dashscope.aliyuncs.com")) return `${model} via Qwen`;
-  if (url.includes("githubcopilot.com")) return `${model} via GitHub Copilot`;
   return `${model} via ${baseUrl}`;
 }
 
@@ -55,7 +54,6 @@ async function buildAvailabilityLines(activeBaseUrl: string, activeModel: string
   if (getCredential("anthropic")) cloudReady.push("Anthropic");
   if (getCredential("openrouter")) cloudReady.push("OpenRouter");
   if (getCredential("qwen")) cloudReady.push("Qwen");
-  if (getCredential("copilot")) cloudReady.push("GitHub Copilot");
 
   return [
     `Active: ${describeActiveConnection(activeBaseUrl, activeModel)}`,
@@ -117,7 +115,6 @@ export async function refreshConnectionBanner(
       if (getCredential("anthropic")) cloudReady.push("Anthropic");
       if (getCredential("openrouter")) cloudReady.push("OpenRouter");
       if (getCredential("qwen")) cloudReady.push("Qwen");
-      if (getCredential("copilot")) cloudReady.push("GitHub Copilot");
       info.push(`Cloud Ready: ${cloudReady.length > 0 ? cloudReady.join(", ") : "none"}`);
     }
   } else {
@@ -169,7 +166,6 @@ export async function connectToProvider(
           getCredential("anthropic") ? "Anthropic" : null,
           getCredential("openrouter") ? "OpenRouter" : null,
           getCredential("qwen") ? "Qwen" : null,
-          getCredential("copilot") ? "GitHub Copilot" : null,
         ].filter(Boolean).join(", ") || "none"}`,
         `⚠ ${detection.serverName} is running but has no models. Use /ollama pull to download one.`
       ];
@@ -178,8 +174,7 @@ export async function connectToProvider(
       return;
     } else {
       const hasAnyCreds = !!getCredential("anthropic") || !!getCredential("openai") || 
-                          !!getCredential("openrouter") || !!getCredential("qwen") || 
-                          !!getCredential("copilot");
+                          !!getCredential("openrouter") || !!getCredential("qwen");
       info = [
         "Active: not connected",
         "Local Ready: none",
@@ -188,7 +183,6 @@ export async function connectToProvider(
           getCredential("anthropic") ? "Anthropic" : null,
           getCredential("openrouter") ? "OpenRouter" : null,
           getCredential("qwen") ? "Qwen" : null,
-          getCredential("copilot") ? "GitHub Copilot" : null,
         ].filter(Boolean).join(", ") || "none"}`,
       ];
       ctx.setConnectionInfo(info);

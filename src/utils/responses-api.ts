@@ -384,8 +384,20 @@ export async function chatWithResponsesAPI(options: ResponsesAPIOptions): Promis
 /**
  * Determine if a model should use the Responses API
  */
-export function shouldUseResponsesAPI(model: string): boolean {
+export function shouldUseResponsesAPI(model: string, baseUrl?: string): boolean {
   const lower = model.toLowerCase();
+  const url = (baseUrl || "").toLowerCase();
+
+  // Only route to Responses API for actual OpenAI / ChatGPT endpoints.
+  // Other OpenAI-compatible providers like Copilot, OpenRouter, Qwen, LM Studio,
+  // and Ollama may expose /models + /chat/completions but not a compatible
+  // /responses implementation.
+  const supportsResponsesApi =
+    url.includes("chatgpt.com/backend-api") ||
+    url.includes("api.openai.com");
+
+  if (!supportsResponsesApi) return false;
+
   // GPT-5.x and Codex models need Responses API for OAuth tokens
   if (lower.startsWith("gpt-5")) return true;
   if (lower.includes("codex")) return true;
