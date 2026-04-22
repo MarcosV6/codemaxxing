@@ -582,6 +582,7 @@ function App() {
   const [ctrlCPressed, setCtrlCPressed] = useState(false);
   const [cmdIndex, setCmdIndex] = useState(0);
   const [inputKey, setInputKey] = useState(0);
+  const [statusBarRevision, setStatusBarRevision] = useState(0);
   const [sessionPicker, setSessionPicker] = useState<Array<{ id: string; display: string }> | null>(null);
   const [sessionPickerIndex, setSessionPickerIndex] = useState(0);
   const [themePicker, setThemePicker] = useState(false);
@@ -616,6 +617,22 @@ function App() {
   // without re-arming itself on every token.
   useEffect(() => { lastActivityAtRef.current = lastActivityAt; }, [lastActivityAt]);
   useEffect(() => { lastToolNameRef.current = lastToolName; }, [lastToolName]);
+
+  // The status bar reads from agent/session state that barely changes while the
+  // user is typing, but some of those getters get expensive once the session is
+  // large. Refresh it only when conversation state changes or on a light pulse
+  // during active generation, instead of on every keystroke.
+  useEffect(() => {
+    setStatusBarRevision((prev) => prev + 1);
+  }, [agent, modelName, cwdDisplay, sessionDisabledSkills, messages.length, loading, streaming]);
+
+  useEffect(() => {
+    if (!agent || (!loading && !streaming)) return;
+    const interval = setInterval(() => {
+      setStatusBarRevision((prev) => prev + 1);
+    }, 250);
+    return () => clearInterval(interval);
+  }, [agent, loading, streaming]);
 
   useEffect(() => {
     if (!loading || !agent) return;
@@ -1987,10 +2004,6 @@ function App() {
       )}
 
       {/* ═══ COMMAND SUGGESTIONS ═══ */}
-      {showSuggestions && (
-        <CommandSuggestions cmdMatches={cmdMatches} cmdIndex={cmdIndex} colors={theme.colors} />
-      )}
-
       {/* ═══ INPUT AREA ═══ */}
       <Box flexDirection="column" marginTop={0}>
         <Box
@@ -2040,9 +2053,19 @@ function App() {
         </Box>
       </Box>
 
+      {showSuggestions && (
+        <CommandSuggestions cmdMatches={cmdMatches} cmdIndex={cmdIndex} colors={theme.colors} />
+      )}
+
       {/* ═══ STATUS BAR ═══ */}
       {agent && (
-        <StatusBar agent={agent} modelName={modelName} sessionDisabledSkills={sessionDisabledSkills} cwd={cwdDisplay} />
+        <StatusBar
+          agent={agent}
+          modelName={modelName}
+          sessionDisabledSkills={sessionDisabledSkills}
+          cwd={cwdDisplay}
+          revision={statusBarRevision}
+        />
       )}
     </Box>
   );

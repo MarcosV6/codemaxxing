@@ -74,7 +74,7 @@ export function prettyCwd(cwd: string = process.cwd()): string {
   return cwd;
 }
 
-export function Banner({ version, colors, width = 80 }: BannerProps) {
+export const Banner = React.memo(function Banner({ version, colors, width = 80 }: BannerProps) {
   // Theme primary → secondary gradient. GradientLine itself handles non-hex
   // theme colors by rendering a flat color, so we just pass them through.
   const c1 = colors.primary;
@@ -117,14 +117,14 @@ export function Banner({ version, colors, width = 80 }: BannerProps) {
       <Text> </Text>
     </Box>
   );
-}
+}, (prev, next) => prev.version === next.version && prev.colors === next.colors && prev.width === next.width);
 
 interface ConnectionInfoProps {
   connectionInfo: string[];
   colors: Theme["colors"];
 }
 
-export function ConnectionInfo({ connectionInfo, colors }: ConnectionInfoProps) {
+export const ConnectionInfo = React.memo(function ConnectionInfo({ connectionInfo, colors }: ConnectionInfoProps) {
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={1}>
       {connectionInfo.map((line, i) => (
@@ -136,4 +136,4 @@ export function ConnectionInfo({ connectionInfo, colors }: ConnectionInfoProps) 
       ))}
     </Box>
   );
-}
+}, (prev, next) => prev.connectionInfo === next.connectionInfo && prev.colors === next.colors);
