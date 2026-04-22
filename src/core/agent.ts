@@ -30,6 +30,48 @@ function sanitizeSurrogates(text: string): string {
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function extractHtmlErrorSummary(text: string): string | null {
+  if (!/<html|<!doctype html/i.test(text)) return null;
+
+  const pre = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i)?.[1];
+  const title = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const bodyText = decodeHtmlEntities(
+    (pre ?? title ?? text)
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+
+  return bodyText || null;
+}
+
+function formatProviderError(err: unknown, baseUrl: string): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  const htmlSummary = extractHtmlErrorSummary(raw);
+  if (!htmlSummary) {
+    return err instanceof Error ? err : new Error(raw);
+  }
+
+  const statusMatch = raw.match(/\b(4\d\d|5\d\d)\b/);
+  const status = statusMatch?.[1];
+  const isLocal = /(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(baseUrl);
+  const prefix = status ? `Provider error (${status})` : "Provider error";
+  const suffix = isLocal ? " This came from your local model server, not Codemaxxing itself." : "";
+  return new Error(`${prefix}: ${htmlSummary}.${suffix}`.trim());
+}
+
 // ── Helper: Build tool result message (with image support) ──
 // Cap at 200KB to protect the context window — a runaway grep or a file-read
 // of an unintentionally-huge file can otherwise blow past the provider's limit
@@ -626,74 +668,78 @@ export class CodingAgent {
     this.runRecoveryAttempts = 0;
     let result: string;
 
-    // If images are provided, inject them as multimodal content before routing
-    if (images && images.length > 0) {
-      const content: any[] = [];
-      for (const img of images) {
-        content.push({
-          type: "image_url",
-          image_url: { url: `data:${img.mime};base64,${img.base64}` },
-        });
-      }
-      content.push({ type: "text", text: userMessage || "Describe these images." });
-      const userMsg: ChatCompletionMessageParam = { role: "user", content } as any;
-      this.messages.push(userMsg);
-      saveMessage(this.sessionId, userMsg);
-      await this.maybeCompressContext();
-      // Route to the correct backend — skip chat() since message is already pushed
-      if (this.providerType === "anthropic" && this.anthropicClient) {
-        result = await this.chatAnthropic(userMessage);
-      } else if (this.providerType === "openai" && shouldUseResponsesAPI(this.model, this.currentBaseUrl)) {
-        result = await this.chatOpenAIResponses(userMessage);
-      } else {
-        result = await this.chatOpenAICompletions();
-      }
-    } else if (this.architectModel) {
-      result = await this.architectChat(userMessage);
-    } else {
-      result = await this.chat(userMessage);
-    }
-
-    // Memory nudge: every 3 sends, inject a nudge so the agent saves useful knowledge
-    if (this.sendCount - this.lastMemoryNudge >= 3) {
-      this.lastMemoryNudge = this.sendCount;
-      try {
-        const { getMemoryNudgePrompt } = await import("../utils/memory.js");
-        const nudge = getMemoryNudgePrompt();
-        this.messages.push({ role: "system", content: nudge });
-      } catch {
-        // Memory module not available
-      }
-    }
-
-    // Skill learning: evaluate if this workflow should be saved
     try {
-      if (isAutoLearnSkillsEnabled(loadConfig())) {
-        const { shouldLearnSkill, generateSkillFromTrace, saveLearnedSkill } = await import("../utils/skill-learner.js");
-        const fullTrace = { ...this.workflowTrace, userMessage };
-        if (shouldLearnSkill(fullTrace)) {
-          const skill = generateSkillFromTrace(fullTrace);
-          saveLearnedSkill(skill);
-          this.options.onToolResult?.("skill-learner", `Learned new skill: "${skill.name}" from this workflow`);
+      // If images are provided, inject them as multimodal content before routing
+      if (images && images.length > 0) {
+        const content: any[] = [];
+        for (const img of images) {
+          content.push({
+            type: "image_url",
+            image_url: { url: `data:${img.mime};base64,${img.base64}` },
+          });
+        }
+        content.push({ type: "text", text: userMessage || "Describe these images." });
+        const userMsg: ChatCompletionMessageParam = { role: "user", content } as any;
+        this.messages.push(userMsg);
+        saveMessage(this.sessionId, userMsg);
+        await this.maybeCompressContext();
+        // Route to the correct backend — skip chat() since message is already pushed
+        if (this.providerType === "anthropic" && this.anthropicClient) {
+          result = await this.chatAnthropic(userMessage);
+        } else if (this.providerType === "openai" && shouldUseResponsesAPI(this.model, this.currentBaseUrl)) {
+          result = await this.chatOpenAIResponses(userMessage);
+        } else {
+          result = await this.chatOpenAICompletions();
+        }
+      } else if (this.architectModel) {
+        result = await this.architectChat(userMessage);
+      } else {
+        result = await this.chat(userMessage);
+      }
+
+      // Memory nudge: every 3 sends, inject a nudge so the agent saves useful knowledge
+      if (this.sendCount - this.lastMemoryNudge >= 3) {
+        this.lastMemoryNudge = this.sendCount;
+        try {
+          const { getMemoryNudgePrompt } = await import("../utils/memory.js");
+          const nudge = getMemoryNudgePrompt();
+          this.messages.push({ role: "system", content: nudge });
+        } catch {
+          // Memory module not available
         }
       }
-    } catch {
-      // Skill learner not available
+
+      // Skill learning: evaluate if this workflow should be saved
+      try {
+        if (isAutoLearnSkillsEnabled(loadConfig())) {
+          const { shouldLearnSkill, generateSkillFromTrace, saveLearnedSkill } = await import("../utils/skill-learner.js");
+          const fullTrace = { ...this.workflowTrace, userMessage };
+          if (shouldLearnSkill(fullTrace)) {
+            const skill = generateSkillFromTrace(fullTrace);
+            saveLearnedSkill(skill);
+            this.options.onToolResult?.("skill-learner", `Learned new skill: "${skill.name}" from this workflow`);
+          }
+        }
+      } catch {
+        // Skill learner not available
+      }
+
+      return result;
+    } catch (err: unknown) {
+      throw formatProviderError(err, this.currentBaseUrl);
+    } finally {
+      // Reset trace for next send
+      this.workflowTrace = {
+        toolCalls: [],
+        hadError: false,
+        errorRecovered: false,
+        userCorrection: false,
+        totalIterations: 0,
+      };
+      this.currentTurnUserRequest = "";
+      this.runPostconditionReminderIssued = false;
+      this.runRecoveryAttempts = 0;
     }
-
-    // Reset trace for next send
-    this.workflowTrace = {
-      toolCalls: [],
-      hadError: false,
-      errorRecovered: false,
-      userCorrection: false,
-      totalIterations: 0,
-    };
-    this.currentTurnUserRequest = "";
-    this.runPostconditionReminderIssued = false;
-    this.runRecoveryAttempts = 0;
-
-    return result;
   }
 
   /**
