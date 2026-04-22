@@ -10,15 +10,15 @@
 
 Open-source terminal coding agent. Connect **any** LLM — local or remote — and start building. Like Claude Code, but you bring your own model.
 
-**🆕 v1.5.7:** cleaner auth and provider flows, better terminal/UI behavior, safer tool and file handling, stronger packaging hygiene, and a smoother fresh-install path.
+**🆕 v1.5.9:** better auth and provider flows, cleaner packaging/docs, safer API-key guidance, and improved typing responsiveness in long sessions.
 
-### What's new in v1.5.7
+### What's new in v1.5.9
 
-- cleaner login and provider connection flow, including better OAuth handling
-- terminal UI polish and resize/reactivity fixes
-- safer tool preambles, tool-arg repair, and file/db hardening
-- MCP, sessions, context, and connection-flow improvements
-- fresh npm packaging cleanup so deleted build artifacts do not leak into releases
+- removed internal-only Markdown docs from the public repo
+- refreshed the README screenshot and cleaned up setup/auth docs
+- switched API-key setup guidance to interactive-first, with safer CLI messaging
+- reduced typing lag in long sessions by cutting expensive rerenders on input
+- kept the existing terminal/UI, connection-flow, and packaging improvements from recent releases
 
 ## Why?
 
